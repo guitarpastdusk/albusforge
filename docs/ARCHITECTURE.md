@@ -173,19 +173,11 @@ flowchart TB
     CG -->|"run.jobs.run()"| FW
     GW -->|"job plugin"| BG
 
-    subgraph PKG["packages — shared, no service bypasses these"]
-        direction LR
-        SC["schema"]
-        DB["db"]
-        LLM["llm"]
-        Q["queue"]
-        ST["storage"]
-        EV["events"]
-    end
-
-    INT --> PKG
-    JOBS --> ST
-    REG[("registry<br/>data, not code")] --> SC
+    PKG["<b>packages</b> — shared<br/>schema · db · llm · queue · storage · events"]
+    PUB -.-> PKG
+    INT -.->|"no service bypasses these"| PKG
+    JOBS -.-> PKG
+    REG[("registry<br/>data, not code")] --> PKG
 
     classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
     classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
@@ -197,7 +189,7 @@ flowchart TB
     class GW loc
     class IN,MA,CG,FU,CL,MK gen
     class BG,FW phys
-    class SC,DB,LLM,Q,ST,EV comm
+    class PKG comm
     class REG mot
 ```
 
@@ -371,7 +363,7 @@ erDiagram
     BUILDS ||--o{ DEVICES : "provisions"
 
     PARTS ||--o{ PLANS : "pinned by id+version"
-    PARTS ||--o{ COMPAT_MATRIX : "driver triple"
+    PARTS ||--o{ COMPAT_MATRIX : "compat"
 
     BUILDS ||--o| BUILD_SNAPSHOTS : "publish when ready"
     BUILD_SNAPSHOTS ||--|| LISTINGS : "backs"

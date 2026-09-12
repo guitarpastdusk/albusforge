@@ -450,13 +450,17 @@ Fleet, Signals, Ask, Inbox and Usage are all tenant-scoped and all absent from t
 
 ```mermaid
 flowchart TB
+    SAMPLE(["on-device sample"]) --> T0
+    T0 --> LOCAL["local alarm or actuation<br/><b>no network required</b>"]
+    T0 -->|"reported in st.health"| RB
+
     RB(["every rollup bucket"]) --> T1
 
-    T0["<b>Tier 0 · Reflex</b><br/>on-device, in generated firmware<br/>threshold + range rules<br/><i>microseconds · zero cost · works offline</i>"]
+    T0["<b>Tier 0 · Reflex</b><br/>in generated firmware<br/>threshold + range rules<br/><i>microseconds · zero cost · works offline</i>"]
 
-    T1{"<b>Tier 1 · Statistics</b><br/>EWMA level + spread<br/>hour-of-day x day-of-week profile<br/>robust z over MAD<br/>CUSUM sustained drift<br/><i>milliseconds · zero cost</i>"}
+    T1["<b>Tier 1 · Statistics</b><br/>EWMA level + spread · hour-of-day x day-of-week profile<br/>robust z over MAD · CUSUM sustained drift<br/><i>milliseconds · zero cost</i>"]
 
-    T1 -->|"nothing fired<br/><b>~99% of buckets</b>"| STOP(["stop — no model invoked"])
+    T1 -->|"nothing fired · <b>~99% of buckets</b>"| STOP(["stop — no model invoked"])
     T1 -->|"detector fired<br/>+ baseline quality ok"| T2
 
     T2["<b>Tier 2 · Small model</b><br/>claude-haiku-4-5<br/>classify · name · narrate · triage<br/>structured output, cached registry prefix<br/><i>~1 s · ~$0.001 per event</i>"]
@@ -468,7 +472,7 @@ flowchart TB
     T3["<b>Tier 3 · Frontier model</b><br/>claude-opus-5 · tool loop<br/>multi-step query · fusion · root cause<br/><i>seconds · ~$0.02 per question</i>"]
     T3 --> ANS["answer + queries run + chart<br/>+ proposed action, gated on confirm"]
 
-    T1 -.->|"low baseline quality<br/>suppresses narration"| STOP
+    T1 -.-> SUP["low baseline quality<br/>suppresses narration"] -.-> STOP
 
     classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
     classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
@@ -477,12 +481,12 @@ flowchart TB
     classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
     classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
     classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
-    class T0 phys
+    class T0,LOCAL phys
     class T1 mot
     class T2 comm
     class T3 gen
     class ALERT,ANS nrg
-    class STOP loc
+    class STOP,SUP loc
 ```
 
 > **Tier 1 gates tier 2. Tier 2 gates tier 3.** Statistics run constantly and cost nothing; models run on events and questions.
@@ -651,7 +655,7 @@ flowchart TB
     IFACE --> CDB
 
     SITE2 -->|"rollups + alerts only<br/>when local_first"| SITE3
-    SITE2 -.->|"escalate to Tier 3<br/>when online"| C3
+    H2 -.->|"escalates when online"| C3
     SITE1 -->|"mesh: ESP-NOW / BLE"| SITE2
 
     classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c

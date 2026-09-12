@@ -20,6 +20,43 @@ A plain-language question becomes four artifacts:
 3. **Working firmware** — scaffold and drivers are pre-written; only the app layer is generated.
 4. **An optional cloud tier** — dashboard, alerts, and (as pitched) fleet intelligence.
 
+```mermaid
+flowchart LR
+    ASK(["Builder<br/>plain-language ask"]) --> P
+
+    subgraph P["Albus Forge pipeline"]
+        direction TB
+        I["intake"] --> M["matcher"] --> C["codegen"] --> B["bodygen"]
+    end
+
+    REG[("Part Registry<br/>the menu")]
+    REG -.->|"read by every stage"| P
+
+    P --> A1["Parts cart<br/>real components"]
+    P --> A2["Enclosure<br/>STEP + STL"]
+    P --> A3["Firmware<br/>app layer generated"]
+    P --> A4["Cloud tier<br/>dashboard + alerts"]
+
+    A1 --> SUP["supplier carts"]
+    A2 --> PRT["home print or partner"]
+    A3 --> DEV["device"]
+    DEV -->|"telemetry"| A4
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class I,M,C,B gen
+    class REG mot
+    class A1 phys
+    class A2 loc
+    class A3 comm
+    class A4 nrg
+```
+
 ### 1.1 The core invariant
 
 > One data object — the **Part Definition** — threads through every service. No service may hard-code knowledge about a specific part. Everything reads the registry.
@@ -39,13 +76,44 @@ The spec is written to be handed to a coding agent, so the boundary matters more
 
 Six stages. (The deck says five — it folds *Ask* into *Understand* and drops *Deliver*. Cosmetic, but pick one before anything external quotes it. This document uses six.)
 
-```
-Ask            plain language in
-  └─ Understand     intake → Spec template
-      └─ Map parts      matcher → BuildPlan (deterministic solver + LLM rank)
-          └─ Assemble code  codegen → firmware bundle (app layer only)
-              └─ Generate body  bodygen → STEP/STL (printability-gated)
-                  └─ Deliver        carts, print routing, cloud provisioning
+```mermaid
+flowchart TB
+    A0["<b>Ask</b><br/>plain language in"]
+    A1["<b>Understand</b><br/><i>intake</i>"]
+    A2["<b>Map parts</b><br/><i>matcher</i>"]
+    A3["<b>Assemble code</b><br/><i>codegen</i>"]
+    A4["<b>Generate body</b><br/><i>bodygen</i>"]
+    A5["<b>Deliver</b><br/><i>fulfillment + cloudlink</i>"]
+
+    A0 --> A1 --> A2 --> A3 --> A4 --> A5
+
+    A1 -. "Spec" .-> D1[/"specs"/]
+    A2 -. "BuildPlan<br/>pinned part versions" .-> D2[/"plans"/]
+    A3 -. "compiled bundle" .-> D3[/"code_bundles"/]
+    A4 -. "STEP + STL + lint" .-> D4[/"bodies"/]
+    A5 -. "carts, device identity" .-> D5[/"orders + devices"/]
+
+    A1 --> E1(["build.spec.created"])
+    A2 --> E2(["build.plan.solved"])
+    A3 --> E3(["build.code.compiled"])
+    A4 --> E4(["build.body.generated"])
+    A5 --> E5(["order.placed"])
+
+    E1 & E2 & E3 & E4 & E5 --> SSE["gateway SSE<br/>build-progress UI"]
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class A0,A1 gen
+    class A2 mot
+    class A3 comm
+    class A4 phys
+    class A5 nrg
+    class SSE loc
 ```
 
 Each stage is a separate service, communicates over Redis streams, and emits a pipeline event the gateway relays over SSE for the build-progress UI.
@@ -75,6 +143,62 @@ albusforge/
 ├── sdk/                hsx-rt, hsx-sdk, drivers/*, templates/app-esp32s3
 ├── e2e/                golden-build tests
 └── docs/adr/
+```
+
+```mermaid
+flowchart TB
+    NET(["Internet"]) --> LB["Global HTTPS LB<br/>+ Cloud Armor"]
+    LB --> GW
+
+    subgraph PUB["ingress: all"]
+        GW["<b>gateway</b><br/>routes, plugins, SSE"]
+    end
+
+    subgraph INT["ingress: internal — IAM service-to-service"]
+        direction LR
+        IN["intake"]
+        MA["matcher"]
+        CG["codegen<br/><i>min 1, BullMQ consumer</i>"]
+        FU["fulfillment"]
+        CL["cloudlink"]
+        MK["marketplace"]
+    end
+
+    subgraph JOBS["Cloud Run Jobs"]
+        BG["workers/bodygen<br/>Python + CadQuery"]
+        FW["workers/fwbuild<br/>PlatformIO"]
+    end
+
+    GW --> IN & MA & CG & FU & CL & MK
+    CG -->|"run.jobs.run()"| FW
+    GW -->|"job plugin"| BG
+
+    subgraph PKG["packages — shared, no service bypasses these"]
+        direction LR
+        SC["schema"]
+        DB["db"]
+        LLM["llm"]
+        Q["queue"]
+        ST["storage"]
+        EV["events"]
+    end
+
+    INT --> PKG
+    JOBS --> ST
+    REG[("registry<br/>data, not code")] --> SC
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class GW loc
+    class IN,MA,CG,FU,CL,MK gen
+    class BG,FW phys
+    class SC,DB,LLM,Q,ST,EV comm
+    class REG mot
 ```
 
 Structural rules worth stating explicitly:
@@ -139,6 +263,45 @@ Each block has exactly one consumer, which is why the invariant holds:
 | `cloud` | cloudlink | channel typing, dashboard widgets, alert templates |
 | `commerce` | fulfillment | supplier carts, cached cost |
 
+```mermaid
+flowchart LR
+    PD["<b>Part Definition</b><br/>id + version<br/><i>immutable</i>"]
+
+    PD --> EL["electrical"]
+    PD --> ME["mechanical"]
+    PD --> SW["software"]
+    PD --> CLB["cloud"]
+    PD --> CO["commerce"]
+    PD -.-> CP["compliance"]
+    PD -.-> STT["selftest"]
+
+    EL -->|"capability coverage<br/>bus conflicts<br/>voltage + power math"| MATCH["matcher"]
+    ME -->|"packing, cutouts<br/>mounts, env features"| BODY["bodygen"]
+    SW -->|"driver to compose<br/>SDK capability allowed"| CODE["codegen"]
+    CLB -->|"channel typing<br/>widgets, alert templates"| CLOUD["cloudlink"]
+    CO -->|"supplier carts<br/>cached cost"| FUL["fulfillment"]
+    CP -.->|"6th solver constraint<br/>+ enclosure shielding"| MATCH
+    CP -.-> BODY
+    STT -.->|"3rd generated block"| CODE
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class PD mot
+    class EL,MATCH gen
+    class ME,BODY phys
+    class SW,CODE comm
+    class CLB,CLOUD nrg
+    class CO,FUL loc
+    class CP,STT gap
+```
+
+> Solid edges exist today. **Dashed blocks are promised on slides and absent from the schema** — see §4.2.
+
 ### 4.1 The MVP registry — exactly twelve parts
 
 `P-001` BME280 · `P-002` DS18B20 · `P-004` MPU-6050 · `P-005` soil probe · `V-004` HC-SR04 · `V-005` BH1750 · `L-003` HC-SR501 PIR · `C-001` ESP32-S3 · `M-001` SG90 servo · `E-001` 18650 pack · `E-004` TP4056 · `E-005` USB-C supply
@@ -195,6 +358,79 @@ devices(id, build_id, cert_fingerprint, claimed_at)
 channels(device_id, name, schema_id)
 readings(device_id, channel, ts, value)
 alert_rules(id, device_id, channel, rule, notify)
+```
+
+```mermaid
+erDiagram
+    USERS ||--o{ BUILDS : "owns"
+    BUILDS ||--o{ SPECS : "versions"
+    BUILDS ||--o{ PLANS : "versions"
+    BUILDS ||--o{ CODE_BUNDLES : "versions"
+    BUILDS ||--o{ BODIES : "versions"
+    BUILDS ||--o{ ORDERS : "checkout"
+    BUILDS ||--o{ DEVICES : "provisions"
+
+    PARTS ||--o{ PLANS : "pinned by id+version"
+    PARTS ||--o{ COMPAT_MATRIX : "driver triple"
+
+    BUILDS ||--o| BUILD_SNAPSHOTS : "publish when ready"
+    BUILD_SNAPSHOTS ||--|| LISTINGS : "backs"
+    LISTINGS ||--o{ MEDIA : "has"
+    LISTINGS ||--o{ REMIXES : "forked as"
+    LISTINGS ||--o{ REVIEWS : "gated on built"
+    REMIXES ||--|| BUILDS : "creates new"
+
+    DEVICES ||--o{ CHANNELS : "declares"
+    CHANNELS ||--o{ READINGS : "timeseries"
+    DEVICES ||--o{ ALERT_RULES : "watched by"
+
+    PARTS {
+        text id PK
+        text version PK
+        text status "draft active deprecated retired"
+        jsonb definition
+    }
+    PLANS {
+        uuid build_id FK
+        int version
+        jsonb part_versions "immutable pins"
+        jsonb wiring_graph
+        jsonb power_budget
+        jsonb solver_log
+    }
+    BUILD_SNAPSHOTS {
+        uuid id PK
+        jsonb spec
+        jsonb part_versions "rebuildable years later"
+        text body_ref
+        text code_ref
+    }
+    READINGS {
+        uuid device_id FK
+        text channel
+        timestamptz ts
+        double value
+    }
+```
+
+Six schemas, one cluster: `users`, `registry`, `builds`, `orders`, `market`, `cloud`.
+
+A build walks a single status machine, and each transition is the event the SSE stream relays:
+
+```mermaid
+stateDiagram-v2
+    [*] --> asking
+    asking --> specifying : ask_text accepted
+    specifying --> asking : clarify, max 2 rounds
+    specifying --> planning : spec settled
+    planning --> specifying : infeasible, minimal conflict set
+    planning --> coding : plan solved
+    coding --> coding : compile gate retry, max 3
+    coding --> bodying : bundle compiled
+    bodying --> ready : lint passed
+    ready --> ordered : checkout
+    ready --> [*] : publish to marketplace
+    ordered --> [*]
 ```
 
 ### 5.1 Two rules that bind the whole system
@@ -299,11 +535,34 @@ Invariants:
 
 Execution shape on Cloud Run (Jobs are pull-free and must be triggered):
 
-```
-codegen service (min=1, BullMQ consumer)
-  └─ pops job → Cloud Run Admin API run.jobs.run() with env overrides
-      └─ fwbuild Job executes → artifact to GCS → PATCHes result back
-          └─ codegen marks BullMQ job complete / retries (max 3)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GW as gateway
+    participant CG as codegen<br/>(min 1)
+    participant LLM as packages/llm
+    participant FW as fwbuild Job
+    participant GCS as Cloud Storage
+
+    GW->>CG: enqueue build job (BullMQ)
+    CG->>LLM: generate app layer from BuildPlan
+    LLM-->>CG: src/app.cpp
+    CG->>CG: lint — only hsx-sdk headers allowed
+    CG->>GCS: put bundle
+    CG->>FW: run.jobs.run() with env overrides
+    FW->>GCS: pull bundle + warm PlatformIO cache
+
+    alt compile succeeds
+        FW->>GCS: put artifact
+        FW-->>CG: PATCH compile_status = ok
+        CG-->>GW: build.code.compiled
+    else compile fails (max 3 attempts)
+        FW-->>CG: PATCH errors
+        CG->>LLM: regenerate with error text in context
+        Note over CG,LLM: per-build token ceiling enforced here —<br/>3 retries x large context is the main cost risk
+    else still failing after 3
+        CG->>CG: fall back to sdk/templates per-capability
+    end
 ```
 
 `codegen` is the only `min-instances=1` worker. `bodygen` is triggered the same way from a small consumer inside the gateway's job plugin — one always-warm worker, not one per queue.
@@ -517,6 +776,69 @@ Runtime is **Cloud Run services and jobs, no GKE**. Managed GCP wherever it exis
 | CI/CD | GitHub Actions + Workload Identity Federation, **no SA JSON keys** |
 | IaC | Terraform in `infra/`, workspaces `staging` and `prod` |
 
+```mermaid
+flowchart TB
+    NET(["Internet"]) --> LB["Global External HTTPS LB<br/>Cloud Armor + Cloud CDN"]
+
+    subgraph VPC["VPC per environment — one /24 in us-central1"]
+        direction TB
+
+        subgraph RUN["Cloud Run — direct VPC egress, no connector"]
+            direction LR
+            GW["gateway<br/>public, min 1"]
+            SVC["intake · matcher<br/>marketplace · fulfillment<br/>scale to zero"]
+            CGS["codegen<br/>min 1, CPU always on"]
+            CLS["cloudlink"]
+        end
+
+        subgraph RJ["Cloud Run Jobs"]
+            BGJ["bodygen<br/>2 vCPU / 4 GiB"]
+            FWJ["fwbuild<br/>4 vCPU / 8 GiB"]
+            MIG["migrations<br/>pre-deploy only"]
+            SCH["rollup + ranking<br/>Cloud Scheduler"]
+        end
+
+        subgraph DATA["Managed data"]
+            SQL[("Cloud SQL<br/>Postgres 16<br/>private IP, PITR")]
+            RED[("Memorystore 1 GB<br/>noeviction")]
+        end
+
+        EMQ["EMQX on GCE MIG<br/><i>deferred — see CLOUD-PLATFORM.md</i>"]
+    end
+
+    GCS[("Cloud Storage<br/>bundles, STEP/STL, media")]
+    SM["Secret Manager"]
+    AR["Artifact Registry"]
+    OBS["Cloud Trace · Logging<br/>build-funnel dashboard"]
+
+    LB --> GW
+    GW --> SVC & CGS & CLS
+    CGS --> FWJ
+    GW --> BGJ
+    RUN --> SQL & RED & GCS
+    RJ --> SQL & GCS
+    MIG --> SQL
+    RUN --> SM
+    AR -.->|"one image digest,<br/>staging then prod"| RUN
+    RUN --> OBS
+
+    GH["GitHub Actions<br/>Workload Identity Federation"] --> AR
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class GW,SVC,CGS,CLS gen
+    class BGJ,FWJ,MIG,SCH phys
+    class SQL,RED,GCS mot
+    class SM,AR,GH comm
+    class OBS nrg
+    class EMQ gap
+```
+
 **Local dev is untouched:** `docker-compose up` with postgres, redis, minio, emqx. GCP appears only in staging and prod, and every cloud dependency sits behind a `packages/*` adapter, so the dev and prod paths differ in one file rather than many.
 
 ### 12.3 Environments and CI/CD
@@ -634,6 +956,40 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
 | **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. **The milestone the business model actually rests on, and it has no place in the current plan** |
 | **M7 — Marketplace** | snapshots, listings, media upload, pin-preserving remix, reviews, trending sort | media bucket + CDN, presigned PUT, sharp variants in a Cloud Run Job, nightly ranking job on Cloud Scheduler |
+
+```mermaid
+flowchart LR
+    M0["<b>M0</b> Ground<br/>workspace, CI, Terraform"]
+    M1["<b>M1</b> Spine<br/>schema, db, registry"]
+    M2["<b>M2</b> Understand<br/>intake + llm wrapper"]
+    M3["<b>M3</b> Solve<br/>solver, power, explain"]
+    M4["<b>M4</b> Code<br/>SDK, drivers, compile gate"]
+    M5["<b>M5</b> Body<br/>bodygen, lint, QR"]
+    M6["<b>M6</b> Deliver + Cloud<br/>ingest, dashboard, metering"]
+    M65["<b>M6.5</b> Intelligence<br/>baselines, narration, Ask"]
+    M7["<b>M7</b> Marketplace<br/>snapshots, remix, media"]
+
+    SPIKE["<b>Fit spike</b><br/>footprints + parametric box<br/>+ a printer"]
+
+    M0 --> M1 --> M2 --> M3 --> M4 --> M5 --> M6 --> M65 --> M7
+    M0 -.->|"runs in parallel"| SPIKE
+    SPIKE -.->|"answers the riskiest<br/>assumption 4 milestones early"| M5
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class M0,M1 comm
+    class M2,M3 gen
+    class M4 mot
+    class M5 phys
+    class M6,M65 nrg
+    class M7 loc
+    class SPIKE gap
+```
 
 **Definition of done:** `pnpm e2e` proves *question in → cart, STL, compiled firmware and dashboard out* for all three golden builds — running **against staging**, not just local compose.
 

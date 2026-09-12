@@ -32,12 +32,25 @@ This is the whole "ready before packet one" claim, and it is cheap to honour —
 
 Every quantitative claim shown to a user — a mean, a delta, a percentage, a count, a correlation — is produced by **executing a typed query against the store.** The model's job is to choose the query and to phrase the result.
 
-```
-        ┌──────────┐  typed query   ┌────────────┐  rows   ┌──────────┐
-  ask ─►│  model   │───────────────►│ query      │────────►│  model   │─► answer
-        │ (choose) │                │ executor   │         │(narrate) │
-        └──────────┘                │ deterministic        └──────────┘
-                                    └────────────┘
+```mermaid
+flowchart LR
+    Q(["user question"]) --> M1["<b>model</b><br/>chooses the query"]
+    M1 -->|"typed tool call<br/>strict schema"| EX["<b>query executor</b><br/>deterministic SQL<br/>tenant_id bound server-side"]
+    EX -->|"rows"| M2["<b>model</b><br/>narrates the result"]
+    M2 --> A(["answer + the query it ran<br/>+ a chart"])
+
+    EX -.->|"every number<br/>originates here"| A
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class M1,M2 comm
+    class EX mot
+    class A nrg
 ```
 
 The advertised answers are quantitative — *"Motor 7's RMS is up 34% vs baseline, pattern matches bearing wear."* A model handed a token-dumped time series will produce a number of that shape whether or not it is true. **34% must come from SQL.**
@@ -140,20 +153,45 @@ Command acknowledgement rides the next envelope's `st.ack: ["c_8821"]`. Commands
 
 ### 4.1 Three front doors, one normalizer
 
+```mermaid
+flowchart LR
+    D1["WiFi ESP32"] -->|"HTTPS POST"| ING
+    D2["LTE-M notecard<br/>cellular, off-grid"] -->|"HTTPS POST"| ING
+    D3["Local hub<br/>Pi 5"] -->|"HTTPS batch"| ING
+    D4["MQTT device<br/><i>M8+</i>"] -.->|"MQTT/TLS 8883"| BRK["EMQX<br/><i>deferred</i>"]
+    BRK -.-> PS["Pub/Sub<br/>push subscription"] -.-> ING
+
+    subgraph ING["cloudlink · POST /ingest/v1 · Cloud Run internal"]
+        direction TB
+        S1["1 · authenticate device token"]
+        S2["2 · parse + validate envelope v1"]
+        S3["3 · resolve channels from registry"]
+        S4["4 · dedupe on dev + seq"]
+        S5["5 · normalize"]
+        S1 --> S2 --> S3 --> S4 --> S5
+    end
+
+    S5 --> HOT[("hot<br/>Redis + device_state")]
+    S5 --> WARM[("warm<br/>readings")]
+    S5 --> EV(["reading.ingested"])
+    S5 --> MET[("usage_records")]
+    ING -->|"202 + next_s + cmd[]"| D1
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class D1,D2,D3 gen
+    class S1,S2,S3,S4,S5 loc
+    class HOT,WARM mot
+    class EV,MET nrg
+    class D4,BRK,PS gap
 ```
-                                    ┌──────────────────────────────────────┐
-  WiFi ESP32 ──HTTPS POST──────────►│                                      │
-                                    │  cloudlink  (Cloud Run, internal)    │
-  LTE-M notecard ──HTTPS POST──────►│  POST /ingest/v1                     │
-                                    │                                      │
-  Local hub ──HTTPS batch POST─────►│   1. authenticate device token       │
-                                    │   2. parse + validate envelope       │
-  [M6+] MQTT/TLS ─► EMQX ─► Pub/Sub │   3. resolve channels from registry  │
-              push subscription ───►│   4. dedupe on (dev, seq)            │
-                                    │   5. write hot + warm                │
-                                    │   6. emit reading.ingested           │
-                                    └──────────────────────────────────────┘
-```
+
+> **Every path converges on one `normalize()` producing one internal `Reading` event.** Transport-specific code lives only in the front-door handler — the same containment rule `packages/db` applies to timeseries and `packages/llm` applies to providers.
 
 Every path converges on one `normalize()` function producing one internal `Reading` event. **Transport-specific code lives only in the front-door handler** — the same containment rule `packages/db` applies to timeseries access and `packages/llm` applies to providers.
 
@@ -163,14 +201,28 @@ This resolves the claim-vs-provision fork in `ARCHITECTURE.md` §8 in favour of 
 
 At checkout, `fulfillment` mints a device identity and hands it to `codegen`, which bakes it into the firmware bundle:
 
-```
-order placed
-  └─ device_id     = generated
-     tenant_id     = h(order)          ← joins a customer's devices automatically
-     device_token  = random 32B; argon2id hash stored, plaintext returned once
-     endpoint      = https://ingest.albusforge.app/ingest/v1
-     channels      = derived from the plan's pinned parts
-  └─ codegen embeds { device_id, device_token, endpoint } into the bundle
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Builder
+    participant GW as gateway
+    participant FU as fulfillment
+    participant CG as codegen
+    participant CL as cloudlink
+    participant DEV as Device
+
+    U->>GW: POST /v1/builds/:id/checkout
+    GW->>FU: place order
+    FU->>FU: device_id = new<br/>tenant_id = h(order)<br/>device_token = random 32B
+    FU->>CL: register device + channels<br/>derived from the plan's pinned parts
+    Note over CL: dashboard, widgets and alert rules<br/>exist before the device is powered on
+    FU->>CG: mint identity into the bundle
+    CG-->>U: firmware with device_id, token, endpoint baked in
+
+    U->>DEV: flash + power on
+    DEV->>CL: POST /ingest/v1 (first envelope)
+    CL-->>DEV: 202, next_s
+    Note over U,DEV: no claim code, no pairing screen, no setup —<br/>the first packet is already authenticated and attributed
 ```
 
 The first packet is already authenticated and already attributed to a tenant. **No claim code, no pairing screen, no setup.** Bearer token in an `Authorization` header; rotation is a downlink command; mTLS remains `[LATER]` and is a per-device cert swap, not an architecture change.
@@ -191,15 +243,45 @@ Cloud Armor rate limits per device token at the edge. Beyond a tenant's plan rat
 
 One design point dominates: an advertised tenant runs 142 sensors at **2.1M readings/day ≈ 63M rows/month**, already past the ~50M threshold where the plan says to revisit partitioned Postgres. **Rollups are therefore not an optimization; they are what keeps the chosen database viable.**
 
+```mermaid
+flowchart LR
+    R(["accepted reading"]) --> HOT & WARM
+
+    subgraph T["four tiers, four retentions"]
+        direction TB
+        HOT[("<b>hot</b><br/>Redis hash + device_state<br/><i>current only</i>")]
+        WARM[("<b>warm</b><br/>readings, daily partitions<br/><i>90 days</i>")]
+        R1M[("<b>rollup</b> readings_1m<br/><i>7 days</i>")]
+        R1H[("<b>rollup</b> readings_1h<br/><i>indefinite</i>")]
+        COLD[("<b>cold</b><br/>GCS Parquet + BigQuery<br/><i>7 years, opt-in</i>")]
+    end
+
+    WARM -->|"Cloud Scheduler<br/>every minute<br/>idempotent on bucket"| R1M
+    R1M -->|"hourly"| R1H
+    R1H -->|"monthly export"| COLD
+
+    HOT --> U1["live dashboard<br/>under 100 ms"]
+    WARM --> U2["drill-down<br/>under 24 h windows"]
+    R1H --> U3["every chart beyond 24 h<br/>every baseline<br/>every model query"]
+    COLD --> U4["retention promise<br/>fleet analytics, export"]
+
+    WARM -. "partition dropped at 90 d" .-> X(["deleted"])
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class HOT loc
+    class WARM mot
+    class R1M,R1H nrg
+    class COLD comm
+    class U1,U2,U3,U4 gen
 ```
-                     write path                        read path
-  reading ──┬──► device_state      (hot, Redis + PG)   live dashboard, <100 ms
-            ├──► readings          (warm, partitioned) drill-down, 90 days
-            └──► [1 min] readings_1m ──► [1 h] readings_1h
-                                         (rollups, kept indefinitely)
-                                              │
-                                              └──► GCS Parquet / BigQuery (cold)
-```
+
+> **Ingest writes hot and warm only.** Rollups are produced by a scheduled job, keeping ingest a single cheap insert that can absorb a burst. At the advertised 63M rows/month, rollups are not an optimization — they are what keeps partitioned Postgres viable.
 
 | Tier | Store | Retention | Serves |
 | --- | --- | --- | --- |
@@ -274,16 +356,62 @@ part.mechanical.environment_flags → contextual copy ("probe reads inside the f
 
 A fridge build lands on a dashboard with a temperature line chart, a humidity line chart, a battery gauge, a health strip and an `out_of_range` alert pre-filled to 0–5 °C **before the device is plugged in**. The user's first action is not setup; it is watching a number arrive.
 
+```mermaid
+flowchart LR
+    PLAN["BuildPlan<br/>pinned part versions"] --> P1 & P2 & P3
+
+    P1["part.cloud<br/>telemetry_schema"] --> C1["channel type, unit<br/>precision, valid range"]
+    P2["part.cloud<br/>default_widgets"] --> C2["which widget<br/>per channel"]
+    P3["part.cloud<br/>alert_templates"] --> C3["rules offered,<br/>pre-filled from schema"]
+    P4["part.mechanical<br/>environment_flags"] --> C4["contextual copy"]
+    PLAN --> P4
+
+    C1 & C2 & C3 & C4 --> DASH["<b>Derived dashboard</b><br/>exists before the device<br/>is plugged in"]
+    OV[("dashboard_overrides")] -.->|"layered on top —<br/>derivation stays<br/>the source of truth"| DASH
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class PLAN mot
+    class P1,P2,P3,P4 gen
+    class C1,C2,C3,C4 loc
+    class DASH nrg
+    class OV comm
+```
+
 The user may then override — rename a channel, change a widget, adjust a threshold. Overrides live in a `dashboard_overrides` row layered on the derived config, so **the derivation stays the source of truth** and a part swap re-derives cleanly instead of stranding a hand-built dashboard.
 
 ### 6.2 The live path reuses SSE
 
 The gateway already streams build progress over SSE (`ARCHITECTURE.md` §5.1). Device telemetry uses the same mechanism and the same client code:
 
-```
-ingest ──► Redis hot write ──► publish reading.ingested ──► gateway SSE fan-out
-                                                             │
-GET /v1/tenants/:id/stream?devices=… ────────────────────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    participant DEV as Device
+    participant CL as cloudlink
+    participant RD as Redis
+    participant GW as gateway
+    participant UI as Browser
+
+    UI->>GW: GET /v1/tenants/:id/stream?devices=...
+    GW->>GW: authorize by role — scope to visible devices
+    GW->>RD: read current state
+    RD-->>GW: latest per channel
+    GW-->>UI: SSE replay — tab is populated instantly
+
+    loop every envelope
+        DEV->>CL: POST /ingest/v1
+        CL->>RD: upsert device_state
+        CL->>GW: publish reading.ingested
+        GW-->>UI: SSE event
+    end
+
+    Note over GW,UI: same SSE mechanism and client code as build progress —<br/>no WebSocket tier, no second realtime stack, no polling
 ```
 
 No WebSocket tier, no second realtime stack, no client-side polling. A browser tab holds one SSE connection scoped to the devices the session's role is allowed to see. On connect the gateway replays current state from Redis, so a fresh tab is populated instantly rather than waiting for the next packet.
@@ -319,6 +447,43 @@ Fleet, Signals, Ask, Inbox and Usage are all tenant-scoped and all absent from t
 | **1 — Statistics** | cloud (or hub), every rollup bucket | ms | zero | baseline fitting, drift and anomaly *detection*, gap and staleness checks |
 | **2 — Small model** | cloud (or hub), **only when tier 1 fires** | ~1 s | ~$0.001/event | classify, name and narrate a detection; triage severity; draft the alert |
 | **3 — Frontier model** | cloud, on demand or escalation | seconds | ~$0.02/question | multi-step querying, cross-sensor fusion, root-cause reasoning, proposed actions |
+
+```mermaid
+flowchart TB
+    RB(["every rollup bucket"]) --> T1
+
+    T0["<b>Tier 0 · Reflex</b><br/>on-device, in generated firmware<br/>threshold + range rules<br/><i>microseconds · zero cost · works offline</i>"]
+
+    T1{"<b>Tier 1 · Statistics</b><br/>EWMA level + spread<br/>hour-of-day x day-of-week profile<br/>robust z over MAD<br/>CUSUM sustained drift<br/><i>milliseconds · zero cost</i>"}
+
+    T1 -->|"nothing fired<br/><b>~99% of buckets</b>"| STOP(["stop — no model invoked"])
+    T1 -->|"detector fired<br/>+ baseline quality ok"| T2
+
+    T2["<b>Tier 2 · Small model</b><br/>claude-haiku-4-5<br/>classify · name · narrate · triage<br/>structured output, cached registry prefix<br/><i>~1 s · ~$0.001 per event</i>"]
+
+    T2 --> ALERT["anomalies row<br/>+ narrative<br/>+ Inbox entry"]
+    T2 -->|"escalate: true"| T3
+    ASK(["user asks a question"]) --> T3
+
+    T3["<b>Tier 3 · Frontier model</b><br/>claude-opus-5 · tool loop<br/>multi-step query · fusion · root cause<br/><i>seconds · ~$0.02 per question</i>"]
+    T3 --> ANS["answer + queries run + chart<br/>+ proposed action, gated on confirm"]
+
+    T1 -.->|"low baseline quality<br/>suppresses narration"| STOP
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class T0 phys
+    class T1 mot
+    class T2 comm
+    class T3 gen
+    class ALERT,ANS nrg
+    class STOP loc
+```
 
 > **Tier 1 gates tier 2. Tier 2 gates tier 3.** Statistics run constantly and cost nothing; models run on events and questions.
 
@@ -384,6 +549,36 @@ A tool-use loop where every tool is a **deterministic, tenant-scoped query**:
 ]
 ```
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Operator
+    participant GW as gateway
+    participant TR as tool runner
+    participant M as claude-opus-5
+    participant EX as query executor
+    participant DB as rollups + baselines
+
+    U->>GW: "Which motors drifted this week?"
+    GW->>TR: start loop, bind tenant_id from session
+    TR->>M: question + registry-derived context<br/>(channels, units, failure signatures)
+
+    M-->>TR: parallel tool_use:<br/>list_devices + compare_to_baseline x4
+    TR->>EX: execute, tenant_id injected server-side
+    EX->>DB: SQL over readings_1h
+    DB-->>EX: rows
+    EX-->>TR: results
+    TR->>M: all tool_results in ONE user message
+
+    M-->>TR: narrative + create_work_order proposal
+    TR->>GW: answer + executed queries + chart
+    GW-->>U: rendered answer, drill-down into Signals
+
+    U->>GW: confirm work order
+    GW->>EX: write + audit_log entry
+    Note over M,EX: the model never names a tenant, so it cannot reach one —<br/>tenant_id is a bound query parameter, not a filter
+```
+
 Loop mechanics:
 
 - **`tenant_id` is injected server-side into every tool call and is never a model-supplied parameter.** The model cannot name a tenant, so it cannot reach one. This is the security boundary of the entire feature, and it must not be a filter applied after the query — it is a bound parameter of the query.
@@ -427,6 +622,55 @@ Tiers 0–2 are defined by *what they do*, not *where they run*. That is what ma
 | **Hub** (Pi 5, `C-004`) | ✓ via nodes | ✓ | ✓ local small model | escalates when online |
 | **Cloud** | — | ✓ | ✓ | ✓ |
 
+```mermaid
+flowchart TB
+    subgraph SITE1["Device · ESP32"]
+        E0["Tier 0 reflex rules"]
+    end
+
+    subgraph SITE2["Hub · Raspberry Pi 5, part C-004"]
+        H0["Tier 0 via mesh nodes"]
+        H1["Tier 1 statistics"]
+        H2["Tier 2 local small model"]
+        HDB[("SQLite / DuckDB<br/>this site's raw readings")]
+        HUI["greenhouse.local<br/>local web app"]
+    end
+
+    subgraph SITE3["Cloud"]
+        C1["Tier 1 statistics"]
+        C2["Tier 2 small model"]
+        C3["Tier 3 frontier model"]
+        CDB[("rollups + baselines")]
+    end
+
+    IFACE["<b>one tool interface</b><br/>query_readings · compare_to_baseline<br/>list_anomalies · correlate"]
+
+    H1 & H2 & HUI --> IFACE
+    C1 & C2 & C3 --> IFACE
+    IFACE --> HDB
+    IFACE --> CDB
+
+    SITE2 -->|"rollups + alerts only<br/>when local_first"| SITE3
+    SITE2 -.->|"escalate to Tier 3<br/>when online"| C3
+    SITE1 -->|"mesh: ESP-NOW / BLE"| SITE2
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class E0,H0 phys
+    class H1,C1 mot
+    class H2,C2 comm
+    class C3 gen
+    class IFACE nrg
+    class HDB,CDB loc
+```
+
+> Cutting the link between the hub and the cloud in this diagram is the demo. Everything inside **Hub** keeps working.
+
 The hub runs the **same tool interface** (§7.4) against a local SQLite/DuckDB store holding that site's readings. A question asked at `greenhouse.local` executes the same `query_readings` contract; only the executor's backing store and the model endpoint differ. A local-first tenant ships rollups and alerts upward and keeps raw readings on site.
 
 > **This is the strongest differentiator in the product and the least specified thing in either source document.** It answers the compliance exposure, the data-trust risk and the offline industrial case simultaneously. It is also a second compile target, a second generator and a mesh transport — see `ARCHITECTURE.md` §11.4. Designing the tool interface as a *contract with three implementations* from the start is what keeps the hub a port rather than a rewrite; retrofitting it after the cloud path hard-codes Postgres is expensive.
@@ -468,6 +712,35 @@ The ranking that follows from §2.2 and §7.1:
 | Rollup job | charts beyond 24 h go stale; idempotent-on-bucket backfill catches up |
 | Gateway SSE | live view stops updating; ingest and storage unaffected; refresh recovers |
 | **Ingest** | **devices buffer to the extent their flash allows, then drop** |
+
+```mermaid
+flowchart TB
+    subgraph SAFE["degrades gracefully — no data lost"]
+        direction TB
+        F3["Tier 3 down"] --> R3["no conversational answers<br/>alerts + charts unaffected"]
+        F2["Tier 2 down"] --> R2["alerts fire with structured evidence,<br/>no narrative — still correct, still actionable"]
+        F1["Tier 1 down"] --> R1["no new anomalies<br/>on-device reflex still fires<br/>backfills next run"]
+        FR["Rollup job down"] --> RR["charts beyond 24 h stale<br/>idempotent backfill catches up"]
+        FS["Gateway SSE down"] --> RS["live view stops updating<br/>ingest + storage unaffected"]
+    end
+
+    subgraph LOSS["the only destructive failure"]
+        FI["<b>Ingest down</b>"] --> RI["devices buffer to NVS ring,<br/>then <b>drop</b>"]
+    end
+
+    FI -.->|"therefore: must not share a<br/>failure domain with anything else"| ARG["stateless, scale-to-zero<br/>HTTPS front door<br/><i>a second argument against<br/>one EMQX instance</i>"]
+
+    classDef gen fill:#8fb8de,stroke:#4a5157,color:#16191c
+    classDef phys fill:#f0a58f,stroke:#4a5157,color:#16191c
+    classDef loc fill:#7fc8c0,stroke:#4a5157,color:#16191c
+    classDef comm fill:#b3a4d9,stroke:#4a5157,color:#16191c
+    classDef mot fill:#e8c56b,stroke:#4a5157,color:#16191c
+    classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
+    classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
+    class R3,R2,R1,RR,RS nrg
+    class FI,RI gap
+    class ARG loc
+```
 
 Ingest is the only path where an outage destroys data. It is therefore the only component that must not share a failure domain with anything else — which is a second argument against routing all telemetry through a single EMQX instance, and for the stateless, scale-to-zero HTTPS front door.
 

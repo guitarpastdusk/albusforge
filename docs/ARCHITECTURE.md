@@ -4,6 +4,11 @@
 
 One question in. Cart, enclosure, firmware, dashboard out.
 
+> **Companion document:** [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) specifies the cloud tier end to end —
+> transport, ingestion, storage tiering, the UI derivation, and the three-tier intelligence layer.
+> The source spec covers that surface in two sentences while the business model rests ~90% of revenue
+> on it, so it is given its own document rather than a subsection. §7.6 and §11.3 below summarize it.
+
 ---
 
 ## 1. System context
@@ -360,6 +365,8 @@ Why: the Pub/Sub bridge lets ingest scale to zero and brings retries, dead-lette
 
 **Two deck requirements this shape doesn't meet:** cellular devices (LTE-M notecard, off-grid solar) never join WiFi or reach an internal broker — they need a **second front door**, a public HTTPS or carrier ingest path. And **pre-provisioned identity** mints credentials at checkout rather than at claim (§8).
 
+> **Resolved in [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 — HTTPS first, MQTT at M8.** Since cellular forces an HTTPS front door regardless, and MQTT's real advantage is downlink that no MVP build needs, the broker is deferred: the EMQX SPOF, the rule-engine bridge and the Pub/Sub plumbing all leave M6, which stops being the heaviest milestone. **The transport is an adapter; the wire envelope is the contract**, so adding MQTT later is a front-door handler, not a rewrite. Downlink until then is piggybacked on the ingest response, which is honest for config, thresholds and OTA triggers and inadequate for real-time actuation — do not promise that before MQTT lands.
+
 ### 7.7 Marketplace
 
 - **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.
@@ -448,6 +455,14 @@ The spec's entire cloud intelligence surface is: dashboard config is the union o
 | Data fusion | A connector story (weather, schedules, ERP) that appears in neither document |
 
 "Work order sent to maintenance" means **outbound integrations and a write path** — a different risk class from read-only alerts.
+
+> **Specified in [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §7.** Two invariants carry it: the pipeline is *derived from the registry, never authored* (a device's channels, units, widgets and alert rules are known before the first packet, because the plan pinned the parts) — and **models propose queries and narrate results; they never compute them.** Every number shown to a user comes from SQL, with the model choosing the query and phrasing the answer. That is the same shape as the matcher: a deterministic core with the model confined to where judgment is genuinely needed, and it makes the layer testable as golden question → expected query → expected rows.
+>
+> Four tiers, split by *where judgment is needed*: **reflex** rules on-device (works offline, zero cost) · **statistics** on every rollup bucket — EWMA, seasonal profile, robust z over MAD, CUSUM drift — which is what actually *detects* anomalies · a **small model** (`claude-haiku-4-5`) invoked **only when a detector fires**, to classify and narrate · a **frontier model** (`claude-opus-5`) on demand for tool-loop querying, fusion and root-cause work.
+>
+> **Tier 1 gates tier 2, and that gating is the decision the unit economics rest on.** A small model run over every window of every sensor costs roughly $1/device/month in tokens — more than the margin on a per-sensor subscription — and produces two dozen paraphrases of "normal" per day. Gated on a detector, the same device makes a handful of model calls per week at well under $0.05/month, and loses nothing: **anomaly detection is statistics, not language.** What a model adds is naming the drift, judging whether it matters, and saying what to do about it.
+>
+> Tiers 0–2 are defined by what they do, not where they run — the same tool interface backs the device, the local hub and the cloud, which is what makes local-first a port rather than a rewrite (§11.4).
 
 Advertised operating targets: 142 sensors · 2.1M readings/day · 99.97% uptime · <2 s ingest latency · 7 yr retention. None appear as SLOs anywhere, the alerting list is failure-oriented rather than SLO-oriented, and 2.1M readings/day alone exceeds the timeseries design point (§5.2).
 
@@ -616,7 +631,8 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M3 — Solve** | solver, power math, rank stub, plan endpoint, infeasibility explanations | none — pure deterministic code, fully unit-testable locally, highest-value tests in the project |
 | **M4 — Code** | `hsx-rt`, `hsx-sdk`, four drivers, codegen, compile gate, code endpoints | `fwbuild` container; Cloud Run Job + `run.jobs.run()` trigger path; Memorystore and BullMQ; GCS artifact bucket and signed URLs; PlatformIO cache |
 | **M5 — Body** | bodygen for box enclosures, lint, QR, body endpoints, fridge golden build passing e2e | CadQuery image (large — budget a day), bodygen Cloud Run Job, STEP/STL to GCS |
-| **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink claim, ingest, dashboard, alerts | the whole ingest path — EMQX MIG, Pub/Sub bridge, push subscription, partitioned readings, maintenance job; email adapter. **Heaviest infra milestone: plan roughly double the infra time of any other** |
+| **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
+| **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. **The milestone the business model actually rests on, and it has no place in the current plan** |
 | **M7 — Marketplace** | snapshots, listings, media upload, pin-preserving remix, reviews, trending sort | media bucket + CDN, presigned PUT, sharp variants in a Cloud Run Job, nightly ranking job on Cloud Scheduler |
 
 **Definition of done:** `pnpm e2e` proves *question in → cart, STL, compiled firmware and dashboard out* for all three golden builds — running **against staging**, not just local compose.
@@ -661,9 +677,9 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | Decision | The fork |
 | --- | --- |
 | **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
-| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later |
+| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) recommends **tenant, from `h(order)`, added in M1** — every cloud surface it specifies is tenant-scoped |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
-| **Device transport** | ESP32 → EMQX MQTT → Pub/Sub, or plain HTTPS POST from ESP32 to Cloud Run — the latter deletes the EMQX SPOF and most of the M6 infra load |
+| ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |
 | **Connector standard** | `hsx-3pin-v1` (invent, adapt every part) vs Qwiic/Grove (I²C-only for data, separate power convention). The solver enforces whichever is chosen |
 
 ### 18.2 Schema shape — cheap now, migrations later
@@ -674,8 +690,8 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | **Transport enum** | `wifi\|ble\|lora\|none` has no cellular; three appendix builds use an LTE-M notecard and one uses local mesh |
 | **Price tiers** | `unit_cost_usd` is a scalar; pricing is quoted at three quantity tiers |
 | **Compliance + longevity blocks** | §9 — and a sixth solver constraint to match |
-| **Metering** | per-sensor subscription is ~90% of revenue and nothing counts ingest, storage or compute per device. Billing can wait; metering can't |
-| **Retention** | 90 days in the GCP plan, 7 years on the platform slide, local-first with minimal retention in the risk slide. **Three answers.** |
+| **Metering** | per-sensor subscription is ~90% of revenue and nothing counts ingest, storage or compute per device. Billing can wait; metering can't. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9 specifies `usage_records` and the no-cliffs degradation rule |
+| ~~**Retention**~~ | **Reconciled by tiering** — 90 days raw, hourly rollups indefinitely (~0.3% of the volume), 7-year cold archive opt-in, local-first as a tenant flag. All three claims are true about different tiers; stating one in isolation is what made them look contradictory. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §5.1 |
 | **Part availability** | no mechanism for stock-out or discontinuation (§17.3) |
 | **Live device state** | everything in Postgres, vs Firestore for live state with realtime listeners and BigQuery for history. The partitioned-`readings` design assumes the Postgres answer |
 | **Inference tiering** | one LLM wrapper and one model, vs a three-tier reflex / SLM-policy / frontier-escalation loop. Nothing in the spec has a place for the runtime tier |

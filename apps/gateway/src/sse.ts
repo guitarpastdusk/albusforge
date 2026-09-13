@@ -4,13 +4,17 @@
  * Event ids are message cursors (chat-store.ts `Cursor`):
  * `<created_at microseconds>.<message uuid>`.
  *
- * - On connect, one `build.updated` with the current status and spec version.
- * - Then every message after `Last-Event-ID` as `message.created`, oldest
- *   first. Without a (valid) Last-Event-ID, every message is replayed; clients
- *   dedupe by message id.
- * - Every poll: new messages, and `build.updated` when (status, spec_version)
- *   changed. A `build.updated` carries the latest cursor sent as its id, so it
- *   never moves a reconnect's position.
+ * Order is fixed: every poll writes `build.updated` (if due) before that
+ * poll's `message.created` events, which are oldest first.
+ *
+ * - The first poll, on connect, always writes `build.updated` with the current
+ *   status and spec version, so it is the first event of every stream.
+ * - Then every message after `Last-Event-ID` as `message.created`. Without a
+ *   (valid) Last-Event-ID, every message is replayed; clients dedupe by id.
+ * - Later polls: `build.updated` when (status, spec_version) changed since the
+ *   last one sent (intermediate states between two polls are not replayed),
+ *   then new messages. A `build.updated` carries the latest cursor sent as its
+ *   id, so it never moves a reconnect's position.
  * - A `: ping` comment every heartbeat; the stream ends after maxMs and the
  *   client reconnects with Last-Event-ID.
  *

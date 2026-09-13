@@ -26,6 +26,8 @@ export interface GatewayConfig {
   intake: IntakeConfig;
   /** Candidate parts include draft parts as well as active ones. */
   registryIncludeDrafts: boolean;
+  /** Builds created without a valid anonymous owner cookie, per instance per sliding hour. */
+  anonBuildsPerHour: number;
 }
 
 const Millis = z.coerce.number().int().min(1).max(600_000);
@@ -39,6 +41,7 @@ const ServerEnv = z.object({
   INTAKE_URL: z.url({ protocol: /^https?$/ }).optional(),
   INTAKE_AUTH: z.enum(["google", "none"]).default("google"),
   REGISTRY_INCLUDE_DRAFTS: z.enum(["true", "false"]).default("false"),
+  ANON_BUILDS_PER_HOUR: z.coerce.number().int().min(1).max(1_000_000).default(60),
 });
 
 /** Added to DB_QUERY_TIMEOUT_MS for the client-side read timeout. */
@@ -69,5 +72,6 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
     },
     intake: { url: e.INTAKE_URL ?? null, auth: e.INTAKE_AUTH },
     registryIncludeDrafts: e.REGISTRY_INCLUDE_DRAFTS === "true",
+    anonBuildsPerHour: e.ANON_BUILDS_PER_HOUR,
   };
 }

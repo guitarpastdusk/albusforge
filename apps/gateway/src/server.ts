@@ -12,6 +12,7 @@ import { configFromEnv } from "./config";
 import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient } from "./intake";
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
+import { RateLimiter } from "./rate-limit";
 
 const SHUTDOWN_GRACE_MS = 8000;
 
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
       store: createChatStore(db),
       turns: createTurnScheduler({ intake, log }),
       includeDrafts: config.registryIncludeDrafts,
+      rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },
     },
   });
 

@@ -49,8 +49,9 @@ SSR server actions call gateway on the visitor's behalf, so web has to relay the
 
 After storing the first message (`POST /v1/builds`) or a new user message, gateway answers the client and then calls intake in the background: `POST {INTAKE_URL}/v1/turns { build_id }`. Intake writes the assistant message, spec versions, build status and `llm_calls` itself. Gateway runs with CPU always allocated, so the call outlives the response.
 
-- Each call has a 50 s timeout; intake's own deadline is 45 s.
-- A failure (non-2xx, timeout, network) logs `intake turn failed` at WARNING and is not retried. The next user message, or a manual retry, starts a new turn, and intake is idempotent. Nothing from a background turn can crash the process.
+- Each attempt has a 50 s timeout; intake's own deadline is 45 s.
+- A network error or a 5xx is retried **once**, after 5 s, and logs `intake turn attempt failed; retrying` at WARNING. A 4xx, a malformed answer or a timeout isn't retried: after a timeout intake may still be running that turn. A turn that still fails logs `intake turn failed` at WARNING. Nothing from a background turn can crash the process.
+- **Recovery.** When `GET /v1/builds/:id` or `GET /v1/builds/:id/messages` finds that the newest message is a user message unanswered for more than 60 s, it starts a background turn and logs `recovering an unanswered turn`. This happens at most once per build per 60 s on each instance, tracked in memory, and never while a turn for that build is running there. So the portal's "Check for a reply" refetch recovers a lost turn without a resend. Intake is idempotent and answers `noop` if the reply was only slow.
 - One turn per build runs at a time per instance. A trigger that arrives mid-turn queues exactly one more run.
 - `INTAKE_AUTH=google` sends a Google ID token for audience `INTAKE_URL`, taken from the metadata server through `google-auth-library`'s `IdTokenClient`, which caches it until shortly before expiry. `INTAKE_AUTH=none` sends no `Authorization` header, for local runs and tests.
 - With `INTAKE_URL` unset, messages are still stored, and each turn logs a WARNING instead of running.
@@ -65,8 +66,8 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
 
 `GET /v1/builds/:id/events` polls Postgres every second; there's no Redis yet.
 
-- On every connect: one `build.updated` `{ status, spec_version }`. It is sent again whenever either changes.
-- `message.created` `{ message }` for each message after `Last-Event-ID`, oldest first. Without a valid `Last-Event-ID` the whole transcript is replayed, so clients dedupe by message id.
+- **The order is fixed.** The first event of every stream is `build.updated` `{ status, spec_version }`, followed by `message.created` `{ message }` for each message after `Last-Event-ID`, oldest first. On each later poll, `build.updated` comes first if status or spec version changed since the last one sent, then that poll's new messages. States that come and go between two polls aren't sent.
+- Without a valid `Last-Event-ID` the whole transcript is replayed, so clients dedupe by message id.
 - **Event ids** are message cursors, `<created_at in integer microseconds since the Unix epoch>.<message uuid>`, ordered like `(created_at, id)`. Treat them as opaque. A `build.updated` repeats the latest cursor sent, so it never moves the resume position.
 - Each poll re-reads a 5 s lookback window and skips messages this connection has already sent. That catches a message whose transaction committed after a later one was delivered. Across a reconnect only messages strictly after the cursor are sent, so a `GET …/messages` after reconnecting stays the source of truth.
 - A `: ping` comment every 15 s and `retry: 3000`. The stream ends after 10 minutes and the client reconnects with `Last-Event-ID`. Shutdown ends every open stream first.
@@ -76,7 +77,7 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
 
 These are held in memory per instance, keyed by the anonymous owner hash: 10 new builds an hour and 30 messages in 10 minutes. Beyond that: `429 RATE_LIMITED` with `Retry-After` and `details.retry_after_s`. They are **defence in depth behind Cloud Armor**. Each instance counts separately and a restart forgets. A replayed `client_message_id` doesn't count.
 
-A request without a cookie always gets a fresh hash, so these limits don't bound cookie-less build creation. Only Cloud Armor's per-IP rule does that until the SSR contract gives gateway a trustworthy client IP.
+A request without a cookie always gets a fresh hash, so the per-owner limits can't bound it. As a spend backstop, build creation **without a valid cookie** is also capped for the whole instance at `ANON_BUILDS_PER_HOUR` (default 60) in a sliding hour. Beyond the cap it answers the same `429 RATE_LIMITED` with `Retry-After`, and logs `anonymous build cap reached on this instance` at WARNING once per window. Visitors who already hold a cookie aren't counted. A per-IP limit waits for the SSR contract to give gateway a trustworthy client IP.
 
 ## Run it
 
@@ -108,6 +109,7 @@ Browsers only send `__Host-` cookies over HTTPS, but curl doesn't enforce that l
 | `INTAKE_URL` | unset | intake's `run.app` URL (internal ingress, reached over direct VPC egress). Unset: messages are stored, turns are skipped with a WARNING |
 | `INTAKE_AUTH` | `google` | `google`: an ID token for audience `INTAKE_URL` from the metadata server. `none`: no `Authorization` header (local, tests) |
 | `REGISTRY_INCLUDE_DRAFTS` | `false` | `true`: `candidate_parts` considers draft parts as well as active ones |
+| `ANON_BUILDS_PER_HOUR` | `60` | builds created without a valid anonymous owner cookie, per instance per sliding hour |
 
 An empty variable counts as unset.
 

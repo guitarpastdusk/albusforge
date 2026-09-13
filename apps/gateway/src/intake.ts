@@ -87,6 +87,8 @@ export interface TurnContext {
 export interface TurnScheduler {
   /** Starts a turn for the build in the background. Never throws, never rejects. */
   trigger(buildId: string, context?: TurnContext): void;
+  /** Whether a turn for the build is running on this instance. */
+  isRunning(buildId: string): boolean;
   /** Resolves when no turn is running on this instance (tests, shutdown). */
   idle(): Promise<void>;
 }
@@ -95,20 +97,45 @@ export interface TurnSchedulerOptions {
   /** Null when INTAKE_URL is unset: each trigger logs a WARNING instead. */
   intake: IntakeClient | null;
   log: Log;
-  /** Per call. Intake's own deadline is 45 s. */
+  /** Per attempt. Intake's own deadline is 45 s. */
   timeoutMs?: number;
+  /** Wait before the single retry. */
+  retryDelayMs?: number;
 }
 
 export const INTAKE_TIMEOUT_MS = 50_000;
+export const INTAKE_RETRY_DELAY_MS = 5000;
+
+/**
+ * Worth one retry: intake answered 5xx, or the request never got an answer
+ * (connection refused or reset, DNS). Not a 4xx or a malformed body, which
+ * would fail again, and not our own timeout: intake may still be running that
+ * turn, and its idempotency is per stored message, not per concurrent call.
+ */
+export function isRetryable(error: unknown): boolean {
+  if (error instanceof IntakeError) return error.status !== undefined && error.status >= 500;
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) return false;
+  // fetch rejects with TypeError("fetch failed") for network failures.
+  return error instanceof TypeError;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * One turn per build at a time on this instance. A trigger that arrives while
  * a turn for the same build is running queues exactly one more run after it,
  * so a message stored mid-turn still gets a turn (intake answers `noop` when
- * there is nothing new). Failures log a WARNING and are not retried here: the
- * next user message, or a manual retry, starts a new turn.
+ * there is nothing new). A network error or 5xx is retried once after
+ * retryDelayMs; a turn that still fails logs a WARNING, and the next user
+ * message or a refetch of the transcript (build-routes.ts recovery) starts a
+ * new one.
  */
-export function createTurnScheduler({ intake, log, timeoutMs = INTAKE_TIMEOUT_MS }: TurnSchedulerOptions): TurnScheduler {
+export function createTurnScheduler({
+  intake,
+  log,
+  timeoutMs = INTAKE_TIMEOUT_MS,
+  retryDelayMs = INTAKE_RETRY_DELAY_MS,
+}: TurnSchedulerOptions): TurnScheduler {
   const running = new Map<string, { again: boolean; done: Promise<void> }>();
 
   async function runOnce(buildId: string, context: TurnContext): Promise<void> {
@@ -118,26 +145,42 @@ export function createTurnScheduler({ intake, log, timeoutMs = INTAKE_TIMEOUT_MS
       return;
     }
     const started = Date.now();
-    try {
-      const result = await intake.turn(buildId, AbortSignal.timeout(timeoutMs));
-      log("INFO", "intake turn completed", {
-        trace: context.trace,
-        fields: {
-          ...fields,
-          durationMs: Date.now() - started,
-          ...("noop" in result ? { noop: true } : { messageId: result.message_id, specVersion: result.spec_version, status: result.status }),
-        },
-      });
-    } catch (error) {
-      log("WARNING", "intake turn failed", {
-        error,
-        trace: context.trace,
-        fields: { ...fields, durationMs: Date.now() - started, intakeStatus: error instanceof IntakeError ? (error.status ?? null) : null },
-      });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const result = await intake.turn(buildId, AbortSignal.timeout(timeoutMs));
+        log("INFO", "intake turn completed", {
+          trace: context.trace,
+          fields: {
+            ...fields,
+            attempt,
+            durationMs: Date.now() - started,
+            ...("noop" in result ? { noop: true } : { messageId: result.message_id, specVersion: result.spec_version, status: result.status }),
+          },
+        });
+        return;
+      } catch (error) {
+        const intakeStatus = error instanceof IntakeError ? (error.status ?? null) : null;
+        if (attempt === 1 && isRetryable(error)) {
+          log("WARNING", "intake turn attempt failed; retrying", {
+            error,
+            trace: context.trace,
+            fields: { ...fields, attempt, intakeStatus, retryDelayMs },
+          });
+          await sleep(retryDelayMs);
+          continue;
+        }
+        log("WARNING", "intake turn failed", {
+          error,
+          trace: context.trace,
+          fields: { ...fields, attempt, durationMs: Date.now() - started, intakeStatus },
+        });
+        return;
+      }
     }
   }
 
   return {
+    isRunning: (buildId) => running.has(buildId),
     trigger(buildId, context = {}) {
       const current = running.get(buildId);
       if (current) {

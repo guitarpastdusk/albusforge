@@ -10,7 +10,7 @@ export class RateLimiter {
   constructor(
     readonly limit: number,
     readonly windowMs: number,
-    private readonly now: () => number = Date.now,
+    readonly now: () => number = Date.now,
   ) {}
 
   /** Records a hit and returns 0, or returns the milliseconds until one is allowed without recording. */

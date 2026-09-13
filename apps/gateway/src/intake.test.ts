@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient, IntakeError } from "./intake";
+import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient, IntakeError, isRetryable } from "./intake";
 import { createLogger } from "./log";
 
 type Handler = (body: unknown, req: http.IncomingMessage, res: http.ServerResponse) => void;
@@ -100,23 +100,74 @@ describe("createTurnScheduler", () => {
     expect(lines).toEqual([expect.objectContaining({ severity: "INFO", message: "intake turn completed", buildId: BUILD, requestId: "r1", messageId: "m1" })]);
   });
 
-  it("logs a failed or timed-out turn as a WARNING and never rejects", async () => {
+  it("retries a 5xx once after the delay, then logs a WARNING and never rejects", async () => {
     const failing = await stubIntake((_body, _req, res) => json(res, 500, {}));
+    const { lines, log } = capture();
+    const turns = createTurnScheduler({ intake: httpIntakeClient({ url: failing.url, authHeader: async () => undefined }), log, retryDelayMs: 150 });
+    const started = Date.now();
+    turns.trigger(BUILD);
+    await turns.idle();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(140);
+    expect(failing.calls).toHaveLength(2);
+    expect(lines).toEqual([
+      expect.objectContaining({ severity: "WARNING", message: "intake turn attempt failed; retrying", attempt: 1, intakeStatus: 500, retryDelayMs: 150 }),
+      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", buildId: BUILD, attempt: 2, intakeStatus: 500 }),
+    ]);
+  });
+
+  it("completes when the retry succeeds", async () => {
+    let calls = 0;
+    const flaky = await stubIntake((_body, _req, res) => (calls++ === 0 ? json(res, 503, {}) : json(res, 200, { noop: true })));
+    const { lines, log } = capture();
+    const turns = createTurnScheduler({ intake: httpIntakeClient({ url: flaky.url, authHeader: async () => undefined }), log, retryDelayMs: 10 });
+    turns.trigger(BUILD);
+    await turns.idle();
+    expect(flaky.calls).toHaveLength(2);
+    expect(lines.at(-1)).toMatchObject({ severity: "INFO", message: "intake turn completed", attempt: 2, noop: true });
+  });
+
+  it("retries a network error once", async () => {
+    const gone = http.createServer();
+    await new Promise<void>((resolve) => gone.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(gone.address() as AddressInfo).port}`;
+    await new Promise<void>((resolve) => gone.close(() => resolve()));
+    const { lines, log } = capture();
+    const turns = createTurnScheduler({ intake: httpIntakeClient({ url, authHeader: async () => undefined }), log, retryDelayMs: 10 });
+    turns.trigger(BUILD);
+    await turns.idle();
+    expect(lines.map((l) => [l.message, l.attempt])).toEqual([
+      ["intake turn attempt failed; retrying", 1],
+      ["intake turn failed", 2],
+    ]);
+  });
+
+  it("doesn't retry a 4xx, a malformed answer or a timeout", async () => {
+    const rejecting = await stubIntake((_body, _req, res) => json(res, 400, {}));
     const hanging = await stubIntake(() => {});
     stops.unshift(async () => void hanging.server.closeAllConnections());
     const { lines, log } = capture();
 
-    const failed = createTurnScheduler({ intake: httpIntakeClient({ url: failing.url, authHeader: async () => undefined }), log });
-    failed.trigger(BUILD);
-    await failed.idle();
-    const slow = createTurnScheduler({ intake: httpIntakeClient({ url: hanging.url, authHeader: async () => undefined }), log, timeoutMs: 100 });
+    const rejected = createTurnScheduler({ intake: httpIntakeClient({ url: rejecting.url, authHeader: async () => undefined }), log, retryDelayMs: 10 });
+    rejected.trigger(BUILD);
+    await rejected.idle();
+    const slow = createTurnScheduler({ intake: httpIntakeClient({ url: hanging.url, authHeader: async () => undefined }), log, timeoutMs: 100, retryDelayMs: 10 });
     slow.trigger(BUILD);
     await slow.idle();
 
+    expect(rejecting.calls).toHaveLength(1);
+    expect(hanging.calls).toHaveLength(1);
     expect(lines).toEqual([
-      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", buildId: BUILD, intakeStatus: 500 }),
-      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", buildId: BUILD, error: expect.objectContaining({ name: "TimeoutError" }) }),
+      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, intakeStatus: 400 }),
+      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, error: expect.objectContaining({ name: "TimeoutError" }) }),
     ]);
+  });
+
+  it("classifies retryable errors", () => {
+    expect(isRetryable(new IntakeError("x", 502))).toBe(true);
+    expect(isRetryable(new TypeError("fetch failed"))).toBe(true);
+    expect(isRetryable(new IntakeError("x", 404))).toBe(false);
+    expect(isRetryable(new IntakeError("bad body"))).toBe(false);
+    expect(isRetryable(new DOMException("timed out", "TimeoutError"))).toBe(false);
   });
 
   it("warns when intake isn't configured", async () => {

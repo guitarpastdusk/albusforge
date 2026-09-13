@@ -32,13 +32,23 @@ export interface ChatOptions {
   turns: TurnScheduler;
   /** REGISTRY_INCLUDE_DRAFTS: candidate parts come from active and draft parts, not only active. */
   includeDrafts: boolean;
-  /** Per anonymous owner. Defaults: 10 builds an hour, 30 messages in 10 minutes. */
-  rateLimits?: { builds?: RateLimiter; messages?: RateLimiter };
+  /**
+   * builds and messages are per anonymous owner (defaults: 10 builds an hour,
+   * 30 messages in 10 minutes). anonOwners caps build creation without a valid
+   * cookie across this whole instance (ANON_BUILDS_PER_HOUR, default 60), as a
+   * spend backstop: each such request would otherwise be a fresh owner.
+   */
+  rateLimits?: { builds?: RateLimiter; messages?: RateLimiter; anonOwners?: RateLimiter };
   sse?: Partial<SseOptions>;
 }
 
 /** A newer user message than this with no reply yet means a turn is still running. */
 export const TURN_IN_PROGRESS_S = 60;
+
+/** A user message unanswered for longer than this counts as a lost turn; recovery runs at most this often per build. */
+export const RECOVERY_INTERVAL_MS = 60_000;
+
+const ANON_OWNERS_KEY = "instance";
 
 const BuildParams = z.object({ id: z.string().min(1).max(100) });
 
@@ -107,6 +117,38 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
 
   const turnContext = (request: FastifyRequest) => ({ trace: request.trace, requestId: request.id });
 
+  const anonOwnerLimiter = chat.rateLimits?.anonOwners ?? new RateLimiter(60, 60 * 60_000);
+  /** When the instance-wide cap last logged, so it warns once per window rather than per request. */
+  let anonCapWarnedAt = Number.NEGATIVE_INFINITY;
+
+  /**
+   * Lost-turn recovery: a read that finds the newest message is a user message
+   * unanswered for more than a minute starts a background turn, at most once
+   * per build per RECOVERY_INTERVAL_MS on this instance and never while a turn
+   * for it is running here. So the portal's "Check for a reply" refetch
+   * recovers a lost turn without a resend. Intake answers `noop` if the reply
+   * was only slow.
+   */
+  const recoveredAt = new Map<string, number>();
+  const recoverLostTurn = async (request: FastifyRequest, buildId: string) => {
+    if (turns.isRunning(buildId)) return;
+    const now = Date.now();
+    const last = recoveredAt.get(buildId);
+    if (last !== undefined && now - last < RECOVERY_INTERVAL_MS) return;
+    // Claimed before the query, so a burst of concurrent refetches runs one check.
+    recoveredAt.set(buildId, now);
+    if (recoveredAt.size > 10_000) {
+      for (const [id, at] of recoveredAt) if (now - at >= RECOVERY_INTERVAL_MS) recoveredAt.delete(id);
+    }
+    const newest = await store.lastMessage(buildId, TURN_IN_PROGRESS_S);
+    if (!newest || newest.role !== "user" || newest.recent) {
+      recoveredAt.delete(buildId); // nothing lost; check again on the next read
+      return;
+    }
+    log("INFO", "recovering an unanswered turn", { trace: request.trace, fields: { requestId: request.id, buildId, messageId: newest.id } });
+    turns.trigger(buildId, turnContext(request));
+  };
+
   app.post(routes.builds.create.pattern, async (request, reply) => {
     const body = parse(CreateBuildRequest, request.body, "request body");
     const existingToken = anonTokenFromCookieHeader(request.headers.cookie);
@@ -118,6 +160,21 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
       if (replayed) {
         const built = await detail(replayed);
         return reply.code(200).send(CreatedBuild.parse({ ...built, build_id: built.id, status: replayed.status }));
+      }
+    }
+
+    if (existingToken === undefined) {
+      const capRetryMs = anonOwnerLimiter.take(ANON_OWNERS_KEY);
+      if (capRetryMs > 0) {
+        const now = anonOwnerLimiter.now();
+        if (now - anonCapWarnedAt >= anonOwnerLimiter.windowMs) {
+          anonCapWarnedAt = now;
+          log("WARNING", "anonymous build cap reached on this instance", {
+            trace: request.trace,
+            fields: { requestId: request.id, limit: anonOwnerLimiter.limit, windowMs: anonOwnerLimiter.windowMs },
+          });
+        }
+        throw rateLimited(capRetryMs, "new builds");
       }
     }
 
@@ -134,11 +191,13 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
 
   app.get(routes.builds.get.pattern, async (request) => {
     const { build } = await ownedBuild(request);
+    await recoverLostTurn(request, build.id);
     return CreatedBuild.omit({ build_id: true }).parse(await detail(build));
   });
 
   app.get(routes.builds.messages.pattern, async (request) => {
     const { build } = await ownedBuild(request);
+    await recoverLostTurn(request, build.id);
     const rows = await store.listMessages(build.id);
     return MessageList.parse({ messages: rows.map(toChatMessage) });
   });

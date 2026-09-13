@@ -11,13 +11,21 @@ describe("configFromEnv", () => {
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
       intake: { url: null, auth: "google" },
       registryIncludeDrafts: false,
+      anonBuildsPerHour: 60,
     });
   });
 
-  it("reads the intake URL, its auth mode and REGISTRY_INCLUDE_DRAFTS", () => {
-    const config = configFromEnv({ ...DB, INTAKE_URL: "https://intake-abc-uc.a.run.app", INTAKE_AUTH: "none", REGISTRY_INCLUDE_DRAFTS: "true" });
+  it("reads the intake URL, its auth mode, REGISTRY_INCLUDE_DRAFTS and ANON_BUILDS_PER_HOUR", () => {
+    const config = configFromEnv({
+      ...DB,
+      INTAKE_URL: "https://intake-abc-uc.a.run.app",
+      INTAKE_AUTH: "none",
+      REGISTRY_INCLUDE_DRAFTS: "true",
+      ANON_BUILDS_PER_HOUR: "250",
+    });
     expect(config.intake).toEqual({ url: "https://intake-abc-uc.a.run.app", auth: "none" });
     expect(config.registryIncludeDrafts).toBe(true);
+    expect(config.anonBuildsPerHour).toBe(250);
     expect(configFromEnv({ ...DB, INTAKE_URL: "" }).intake.url).toBeNull();
   });
 
@@ -25,6 +33,8 @@ describe("configFromEnv", () => {
     ["INTAKE_URL", "intake.internal"],
     ["INTAKE_AUTH", "basic"],
     ["REGISTRY_INCLUDE_DRAFTS", "yes"],
+    ["ANON_BUILDS_PER_HOUR", "0"],
+    ["ANON_BUILDS_PER_HOUR", "lots"],
   ])("rejects a bad %s", (name, value) => {
     expect(() => configFromEnv({ ...DB, [name]: value })).toThrow(new RegExp(name));
   });

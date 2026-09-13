@@ -20,7 +20,13 @@
 - If `gcloud` later starts writing another field that Terraform diffs on, add it to `ignore_changes` rather than dropping this rule.
 - **Don't apply a service's Terraform while its deploy workflow is running.** A change to any other part of the template (env vars, scaling, resources) makes the provider send the whole template, and for the ignored `image` it sends the value read at plan time. If a deploy lands a newer image between plan and apply, the apply writes the older image back and creates a revision that rolls the service back. **The service stays rolled back until another deploy succeeds.** A later `deploy-web` run sees the older commit serving and deploys forward, but nothing triggers that automatically. Checking for a running deploy before planning isn't enough either, because a deploy can still start between plan and apply. To keep deploys out for the whole window:
   1. Disable the service's deploy workflow: `gh workflow disable deploy-web.yml` for staging, `gh workflow disable promote-web.yml` for prod.
-  2. Make sure every existing run of that workflow has **completed**. Disabling stops new triggers but doesn't cancel runs that already exist. Both deploy workflows use `concurrency` with `cancel-in-progress: false`, so a run created before you disabled the workflow can still be queued, pending or waiting behind another deploy, and start during the apply. Let those runs finish or cancel them, then confirm nothing is left: `gh run list --workflow <file> --json status --jq '[.[] | select(.status != "completed")] | length'` must print `0`.
+  2. Make sure every existing run of that workflow has **completed**. Disabling stops new triggers but doesn't cancel runs that already exist. Both deploy workflows use `concurrency` with `cancel-in-progress: false`, so a run created before you disabled the workflow can still be queued, pending or waiting behind another deploy, and start during the apply. Let those runs finish or cancel them, then confirm nothing is left across the workflow's **entire** run history. (`gh run list` only returns the latest 20 runs, so it can't prove this.) This command must exit successfully and print `0`:
+     ```sh
+     set -o pipefail
+     gh api --paginate --slurp 'repos/guitarpastdusk/albusforge/actions/workflows/<file>/runs?per_page=100' \
+       | jq '[.[].workflow_runs[] | select(.status != "completed")] | length'
+     ```
+     `gh` won't combine `--slurp` with `--jq`, so the count runs in a separate `jq`. `pipefail` makes a failed API call fail the check instead of printing a misleading `0`.
   3. Re-plan, check the plan, and apply.
   4. Re-enable the workflow with `gh workflow enable`.
 

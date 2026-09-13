@@ -153,6 +153,9 @@ export type DeviceDashboard = z.infer<typeof DeviceDashboard>;
 
 export const AskRequest = z.object({
   text: z.string().trim().min(1).max(4000),
+  channel: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).optional(),
+  from: Timestamp.optional(),
+  to: Timestamp.optional(),
 });
 export type AskRequest = z.infer<typeof AskRequest>;
 

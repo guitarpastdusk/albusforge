@@ -7,6 +7,7 @@ import {
 } from "@albusforge/schema";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DeviceChat } from "@/components/devices/DeviceChat";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
@@ -26,7 +27,7 @@ export default async function DevicePage({
   searchParams: Promise<Search>;
 }) {
   const { deviceId } = await params;
-  await requireSession(`/live/${encodeURIComponent(deviceId)}`);
+  const me = await requireSession(`/live/${encodeURIComponent(deviceId)}`);
   if (!TelemetryDeviceParams.safeParse({ id: deviceId }).success) notFound();
   const detail = await orNotFound(
     apiGet(routes.telemetry.device.path(deviceId), TelemetryDeviceDetail),
@@ -200,6 +201,14 @@ export default async function DevicePage({
             />
           </>
         )}
+      </section>
+      <section className="mt-10 max-w-2xl" aria-label="Sensor questions">
+        <DeviceChat
+          key={`${me.tenant.id}:${deviceId}`}
+          deviceId={deviceId}
+          greeting="Choose a channel and time window, then ask about its stored readings."
+          channels={channels.map((key) => ({ key, label: key, unit: detail.channels[key]!.unit }))}
+        />
       </section>
     </PageContainer>
   );

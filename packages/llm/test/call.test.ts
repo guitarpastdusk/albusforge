@@ -1,6 +1,7 @@
 import { SpecTurn } from "@albusforge/schema";
 import { describe, expect, it } from "vitest";
-import { callStructured, type CallOptions } from "../src/call";
+import { callStructured, type CallDiagnostic, type CallOptions } from "../src/call";
+import { prefixHash } from "../src/request";
 import { hangingResponse, memoryMeter, replayProvider } from "../src/testing";
 import type { LlmMessage, LlmProvider, LlmRoute } from "../src/types";
 import { fixture } from "./fixtures";
@@ -118,9 +119,9 @@ describe("callStructured", () => {
       model: "claude-opus-5",
       attribution,
       meter: {
-        async record(stage, response, a) {
+        async record(call, response, a) {
           used += response.usage.input_tokens + response.usage.output_tokens;
-          return meter.record(stage, response, a);
+          return meter.record(call, response, a);
         },
       },
       tokenCeiling: { limit: 5000, used: async () => used },
@@ -147,6 +148,53 @@ describe("callStructured", () => {
     };
     const { run } = setup(provider);
     expect(await run()).toMatchObject({ ok: false, failure: "provider_error", calls: 0 });
+  });
+
+  it("meters every call with the route's prefix hash, and a changed prefix changes it", async () => {
+    const { meter, run } = setup(replayProvider([fixture("valid")]));
+    await run();
+    expect(meter.records[0]?.prefixHash).toBe(prefixHash(route));
+
+    const again = setup(replayProvider([fixture("valid")]));
+    await again.run();
+    // Same system prompt and catalogue: the same hash, so a cache miss can't be blamed on the prefix.
+    expect(again.meter.records[0]?.prefixHash).toBe(meter.records[0]?.prefixHash);
+
+    const changed = { ...route, cachedContext: "catalogue, with one more part" };
+    const third = memoryMeter();
+    await callStructured(changed, SpecTurn, messages, {
+      provider: replayProvider([fixture("valid")]),
+      model: "claude-opus-5",
+      meter: third,
+      attribution,
+    });
+    expect(third.records[0]?.prefixHash).not.toBe(meter.records[0]?.prefixHash);
+  });
+
+  it("failures carry a sanitized diagnostic, never the rejected text", async () => {
+    const invalid = await setup(replayProvider([fixture("invalid-json"), fixture("invalid-json")])).run();
+    expect(invalid).toEqual({ ok: false, failure: "invalid_output", calls: 2, diagnostic: { reason: "invalid_json" } });
+
+    const mismatch = await setup(replayProvider([fixture("schema-mismatch"), fixture("schema-mismatch")])).run();
+    expect(mismatch).toMatchObject({ ok: false, failure: "invalid_output", diagnostic: { reason: "schema_mismatch" } });
+    const diagnostic = (mismatch as { diagnostic: CallDiagnostic }).diagnostic;
+    expect(diagnostic.paths).toContain("spec_patch.connect.transport");
+    expect(diagnostic.codes?.length).toBeGreaterThan(0);
+    // The rejected value itself never leaves the exchange with the model.
+    expect(JSON.stringify(diagnostic)).not.toContain("zigbee");
+
+    const provider: LlmProvider = {
+      name: "anthropic",
+      create: async () => {
+        throw Object.assign(new Error("529 overloaded: keep my fridge cold"), { name: "InternalServerError", status: 529, request_id: "req_9" });
+      },
+    };
+    expect(await setup(provider).run()).toEqual({
+      ok: false,
+      failure: "provider_error",
+      calls: 0,
+      diagnostic: { reason: "provider_error", errorName: "InternalServerError", status: 529, requestId: "req_9" },
+    });
   });
 
   it("a failed meter insert doesn't lose the turn", async () => {

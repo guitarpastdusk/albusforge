@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLogger, formatLogLine, parseCloudTraceContext, parseTraceparent, traceFromHeaders } from "./log";
+import { createLogger, formatLogLine, parseCloudTraceContext, parseTraceparent, safeToLog, traceFromHeaders } from "./log";
 
 const TRACE = "0123456789abcdef0123456789abcdef";
 
@@ -44,13 +44,25 @@ describe("formatLogLine", () => {
     expect(entry).toEqual({ severity: "ERROR", message: "real" });
   });
 
-  it("serializes an error, its code and cause, and keeps the stack on one line", () => {
-    const error = Object.assign(new Error("outer", { cause: new Error("inner") }), { code: "ECONNREFUSED" });
+  it("serializes an error by class, code and stack frames, dropping the messages", () => {
+    const error = Object.assign(new Error("outer PRIVATE", { cause: new Error("inner PRIVATE") }), { code: "ECONNREFUSED" });
     const line = formatLogLine("ERROR", "failed", { error }, undefined);
     expect(line.trimEnd().split("\n")).toHaveLength(1);
+    expect(line).not.toContain("PRIVATE");
     const entry = JSON.parse(line);
-    expect(entry.error).toEqual({ name: "Error", message: "outer", code: "ECONNREFUSED", cause: { name: "Error", message: "inner" } });
-    expect(entry.stack).toContain("outer");
+    expect(entry.error).toMatchObject({ name: "Error", code: "ECONNREFUSED", redacted: true, cause: { name: "Error", redacted: true } });
+    expect(entry.error.message).toBeUndefined();
+    expect(entry.error.frames[0]).toMatch(/^at /);
+    // No raw stack: its first line is the message.
+    expect(entry.stack).toBeUndefined();
+  });
+
+  it("keeps the message of an error marked safeToLog, and never of a non-Error value", () => {
+    const entry = JSON.parse(formatLogLine("CRITICAL", "invalid configuration", { error: safeToLog(new Error("LLM_MODEL is required")) }, undefined));
+    expect(entry.error).toMatchObject({ name: "Error", message: "LLM_MODEL is required" });
+    expect(JSON.parse(formatLogLine("ERROR", "x", { error: "a raw string with PRIVATE in it" }, undefined))).toMatchObject({
+      error: { name: "string", redacted: true },
+    });
   });
 
   it("createLogger writes through the given sink", () => {

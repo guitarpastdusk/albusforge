@@ -33,6 +33,35 @@ export interface CreateDbOptions {
   queryTimeoutMs?: number;
 }
 
+/**
+ * A typed Drizzle instance over one already checked-out connection.
+ *
+ * For work that holds a session-level resource on a connection — a
+ * `pg_advisory_lock`, a temp table — and must not take a second connection
+ * from the pool to run its queries: with a small pool, holders waiting on
+ * queries and queries waiting on holders deadlock.
+ *
+ * `close()` fences the handle: queries issued after the caller has released
+ * the connection reject instead of running on whatever the pool handed the
+ * next caller. Call it before `client.release()`, always.
+ */
+export function createClientDb(client: pg.PoolClient): { db: Db; close: () => void } {
+  let closed = false;
+  const fenced = new Proxy(client, {
+    get(target, property, receiver) {
+      if (property === "query") {
+        return (...args: unknown[]) =>
+          closed
+            ? Promise.reject(new Error("this database handle was closed with its connection"))
+            : (target.query as (...a: unknown[]) => unknown).apply(target, args);
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { db: drizzle(fenced, { schema }), close: () => void (closed = true) };
+}
+
 /** A typed Drizzle instance over its own pool. Call `pool.end()` on shutdown. */
 export function createDb(config: DbConfig, options: CreateDbOptions = {}): { db: Db; pool: pg.Pool } {
   const pool = new pg.Pool({

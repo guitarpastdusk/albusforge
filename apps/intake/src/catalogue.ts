@@ -16,11 +16,17 @@ export interface CatalogueSnapshot {
   partCount: number;
 }
 
-export type PartsSource = (statuses: readonly PartStatus[]) => Promise<PartDefinition[]>;
+/**
+ * `db` is the caller's own connection: a turn holds one for its advisory lock
+ * and must not take a second from the pool (handler.ts). Sources that don't
+ * read the database ignore it.
+ */
+export type PartsSource = (statuses: readonly PartStatus[], db?: Db) => Promise<PartDefinition[]>;
 
-export function dbPartsSource(db: Db): PartsSource {
-  return async (statuses) => {
+export function dbPartsSource(): PartsSource {
+  return async (statuses, db) => {
     if (statuses.length === 0) return [];
+    if (!db) throw new Error("dbPartsSource needs the caller's database handle");
     const rows = await db.query.parts.findMany({
       columns: { id: true, version: true, definition: true },
       where: (t, { inArray }) => inArray(t.status, [...statuses]),
@@ -46,7 +52,8 @@ export function snapshotFrom(parts: readonly PartDefinition[], statuses: readonl
 }
 
 export interface CatalogueCache {
-  get(): Promise<CatalogueSnapshot>;
+  /** Pass the caller's handle: a refresh reads the registry on it. */
+  get(db?: Db): Promise<CatalogueSnapshot>;
 }
 
 export interface CatalogueCacheOptions {
@@ -67,9 +74,9 @@ export function createCatalogueCache({ source, includeDrafts, ttlMs = 10 * 60_00
   let cached: { snapshot: CatalogueSnapshot; at: number } | undefined;
   let loading: Promise<CatalogueSnapshot> | undefined;
   return {
-    async get() {
+    async get(db) {
       if (cached && now() - cached.at < ttlMs) return cached.snapshot;
-      loading ??= source(statuses)
+      loading ??= source(statuses, db)
         .then((parts) => {
           const snapshot = snapshotFrom(parts, statuses);
           cached = { snapshot, at: now() };

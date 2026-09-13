@@ -1,7 +1,16 @@
-export { callStructured, responseText, type CallFailure, type CallOptions, type CallResult, type TokenCeiling } from "./call";
+export { callStructured, responseText, type CallDiagnostic, type CallFailure, type CallOptions, type CallResult, type TokenCeiling } from "./call";
 export { buildTokensUsed } from "./ceiling";
-export { createMeter, formatLlmCallLine, llmCallsInserter, toRecord, type LlmCallRecord, type Meter, type MeterOptions } from "./meter";
-export { costUsd, PRICES_USD_PER_MTOK, priceFor, type ModelPrice } from "./pricing";
+export {
+  createMeter,
+  formatLlmCallLine,
+  llmCallsInserter,
+  toRecord,
+  type CallContext,
+  type LlmCallRecord,
+  type Meter,
+  type MeterOptions,
+} from "./meter";
+export { costUsd, PRICES_USD_PER_MTOK, priceFor, pricedModels, UNKNOWN_MODEL_PRICE, type ModelPrice } from "./pricing";
 export {
   createAnthropicProvider,
   createProvider,

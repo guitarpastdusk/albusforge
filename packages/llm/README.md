@@ -14,6 +14,8 @@ Returns `{ ok: true, value }` or `{ ok: false, failure }`. It never throws for a
 4. **Branch on `stop_reason`:** `refusal` returns `refusal` (no retry). `max_tokens` retries once with `route.retryMaxTokens`, then returns `max_tokens`. `model_context_window_exceeded` returns `max_tokens`.
 5. **Validate** the text blocks with `JSON.parse` and `schema.safeParse`. On failure there's one repair retry: the transcript plus the bad output as an assistant turn and the validation error as a user turn. A second failure returns `invalid_output`.
 
+A failure also carries a `diagnostic`: a fixed `reason`, and — only where they exist — schema paths and Zod issue codes (from the schema we sent), the thrown error's class, HTTP status and request id. The detail that makes a repair work (the rejected text, Node's parse message quoting it, an API error's message) stays inside the exchange with the model, so a caller that logs the whole result still can't log a private message.
+
 That's at most three calls. Other results are `deadline` (the signal aborted) and `provider_error` (the SDK's own retries on 408/409/429/5xx are exhausted, or a 4xx). The caller turns each failure into a safe reply.
 
 ### Routes and caching
@@ -25,12 +27,16 @@ An `LlmRoute` is one kind of call: `system` (a prompt file's text), optional `ca
 Each call writes one `builds.llm_calls` row (`tenant_id` or `anon_owner_hash` from the caller's attribution, ADR 0009), and one log line to stdout:
 
 ```json
-{"severity":"INFO","message":"llm call","event":"llm_call","stage":"intake","model":"claude-opus-5","cost_usd":0.032498,"input_tokens":412,"output_tokens":640,"cache_read_input_tokens":0,"cache_creation_input_tokens":2310,"stop_reason":"end_turn","build_id":"…"}
+{"severity":"INFO","message":"llm call","event":"llm_call","stage":"intake","model":"claude-opus-5","cost_usd":0.032498,"input_tokens":412,"output_tokens":640,"cache_read_input_tokens":0,"cache_creation_input_tokens":2310,"stop_reason":"end_turn","build_id":"…","prefix_hash":"…"}
 ```
 
 With `GOOGLE_CLOUD_PROJECT` set and a trace, `logging.googleapis.com/trace` is added. Infra's log-based spend metric and alert read `jsonPayload.event = "llm_call"` and `jsonPayload.cost_usd`, so don't rename or drop fields. `meter.test.ts` pins the exact line.
 
-`src/pricing.ts` holds the per-model price table (input, 5-minute and 1-hour cache writes, cache reads, output), from <https://platform.claude.com/docs/en/about-claude/pricing>. When a server-side fallback ran, `usage.iterations` prices each model's share at its own rate. A model missing from the table is priced at the most expensive row, and `onUnknownModel` fires.
+`prefix_hash` is `prefixHash(route)` for the call (ASK-TO-ENCLOSURE.md §3): with it, a request that created a cache entry instead of reading one can be told apart from one whose prefix changed. The cache counts alone can't say which happened.
+
+The row's owner is resolved **as it is inserted**, under the build row's lock, not from the attribution captured when the turn began: a sign-up during a model call re-attributes the rows that exist then, and the row this call is about to write has to land on the right side of that (ADR 0009).
+
+`src/pricing.ts` holds the per-model price table (input, 5-minute and 1-hour cache writes, cache reads, output), from <https://platform.claude.com/docs/en/about-claude/pricing>. When a server-side fallback ran, `usage.iterations` prices each model's share at its own rate. A model missing from the table is priced at `UNKNOWN_MODEL_PRICE`, the highest rate in *each* token category across the table — not the most expensive row, which would under-report a mix that row is cheap at (Fable 5.1 has the highest output price and half Opus's cache-read price). That bounds an unknown model above every listed one; it is still an estimate, so `onUnknownModel` fires for it, including for a model that only appears in `usage.iterations`.
 
 `buildTokensUsed(db, buildId)` sums input, output, cache-read and cache-write tokens from `llm_calls`. Counting cache reads makes the ceiling conservative; it's an abuse guard, not a bill.
 
@@ -49,8 +55,8 @@ The model id is always the caller's (`LLM_MODEL`), never a constant here.
 
 `pnpm --filter @albusforge/llm test`. No network and no key.
 
-- `test/call.test.ts`: every `callStructured` branch against recorded-shape fixtures (`test/fixtures/`): valid, refusal, truncation then success, truncation twice, invalid JSON, schema mismatch, repair success, the three-call cap, the token ceiling before the first call and before a retry, the deadline, provider errors, and a failed meter insert
+- `test/call.test.ts`: every `callStructured` branch against recorded-shape fixtures (`test/fixtures/`): valid, refusal, truncation then success, truncation twice, invalid JSON, schema mismatch, repair success, the three-call cap, the token ceiling before the first call and before a retry, the deadline, provider errors, a failed meter insert, the prefix hash on every metered call, and sanitized failure diagnostics
 - `test/request.test.ts`: pins the request's field names and types to the installed SDK with `expectTypeOf`, so an SDK upgrade that changes them fails typecheck
-- `test/meter.test.ts`: prices, fallback iterations, the exact log line, log-before-insert, and the provider stubs
+- `test/meter.test.ts`: prices, the component-wise unknown-model rate, fallback iterations and their unknown-model warnings, the exact log line, log-before-insert, and the provider stubs
 
 `src/testing.ts` (`@albusforge/llm/testing`) has `replayProvider`, `recordingProvider`, `hangingResponse`, `memoryMeter` and `fakeResponse`. `createAnthropicProvider` refuses to build a client under vitest, and `test/no-live-calls.ts` fails the run if CI has `ANTHROPIC_API_KEY` set.

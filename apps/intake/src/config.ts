@@ -1,6 +1,7 @@
 import { type DbConfig, dbConfigFromEnv } from "@albusforge/db";
 import { type Effort, LLM_PROVIDERS, type LlmProviderName } from "@albusforge/llm";
 import { z } from "zod";
+import { safeToLog } from "./log";
 
 export interface DbTimeouts {
   connectMs: number;
@@ -54,7 +55,8 @@ type Env = Readonly<Record<string, string | undefined>>;
 /** Throws on invalid config, naming variables but never echoing a value. */
 export function configFromEnv(env: Env = process.env): IntakeConfig {
   const parsed = ServerEnv.safeParse(env);
-  if (!parsed.success) throw new Error(`Invalid intake environment:\n${z.prettifyError(parsed.error)}`);
+  // Names variables and Zod's own messages, never a value: safe to log as-is.
+  if (!parsed.success) throw safeToLog(new Error(`Invalid intake environment:\n${z.prettifyError(parsed.error)}`));
   const e = parsed.data;
   return {
     port: e.PORT,

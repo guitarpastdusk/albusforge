@@ -62,8 +62,8 @@ export function memoryMeter(): Meter & { records: LlmCallRecord[]; lines: string
   return {
     records,
     lines,
-    async record(stage, response, attribution) {
-      const record = toRecord(stage, response, attribution);
+    async record(call, response, attribution) {
+      const record = toRecord(call, response, attribution);
       records.push(record);
       return record;
     },

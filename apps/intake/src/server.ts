@@ -6,12 +6,12 @@
  * turn still waiting on the model past that is cut off without a reply. The
  * gateway's retry of POST /v1/turns answers it.
  */
-import { createDb } from "@albusforge/db";
+import { createDb, type Db } from "@albusforge/db";
 import { buildTokensUsed, createMeter, createProvider, llmCallsInserter } from "@albusforge/llm";
 import { buildApp } from "./app";
 import { createCatalogueCache, dbPartsSource } from "./catalogue";
 import { configFromEnv } from "./config";
-import { handleTurn } from "./handler";
+import { handleTurn, type HandlerDeps } from "./handler";
 import { createLogger } from "./log";
 import { loadPrompts } from "./prompts";
 
@@ -36,7 +36,8 @@ async function main(): Promise<void> {
   }
 
   const { connectMs, queryMs, readMs, idleMs } = config.dbTimeouts;
-  const { db, pool } = createDb(config.db, {
+  // No pool-wide handle: every query a turn makes runs on the turn's own connection.
+  const { pool } = createDb(config.db, {
     max: 5,
     connectTimeoutMs: connectMs,
     statementTimeoutMs: queryMs,
@@ -45,33 +46,37 @@ async function main(): Promise<void> {
   });
   pool.on("error", (error) => log("ERROR", "idle database client error", { error }));
 
-  const meter = createMeter({
-    insert: llmCallsInserter(db),
-    onUnknownModel: (model) => log("WARNING", "model missing from the price table; priced at the most expensive row", { fields: { model } }),
-  });
   const catalogue = createCatalogueCache({
-    source: dbPartsSource(db),
+    source: dbPartsSource(),
     includeDrafts: config.registryIncludeDrafts,
     onLoad: (snapshot) =>
       log(snapshot.partCount === 0 ? "WARNING" : "INFO", "part catalogue loaded", {
         fields: { parts: snapshot.partCount, capabilities: snapshot.vocabulary.capabilities.size, includeDrafts: config.registryIncludeDrafts },
       }),
   });
+  // Metering runs on the turn's own connection, never a second one from the
+  // pool: see handler.ts on why a turn costs exactly one connection.
+  const bindDb = (turnDb: Db) => ({
+    catalogue: { get: () => catalogue.get(turnDb) },
+    meter: createMeter({
+      insert: llmCallsInserter(turnDb),
+      onUnknownModel: (model) =>
+        log("WARNING", "model missing from the price table; priced at the highest rate in every token category", { fields: { model } }),
+    }),
+    tokensUsed: (buildId: string) => buildTokensUsed(turnDb, buildId),
+  });
 
-  const deps = {
-    db,
+  const deps: HandlerDeps = {
     pool,
     log,
+    bindDb,
     deadlineMs: config.turnDeadlineMs,
     turn: {
       provider,
       model: config.llm.model,
       effort: config.llm.effort,
-      meter,
-      catalogue,
       prompts,
       tokenCeiling: config.buildTokenCeiling,
-      tokensUsed: (buildId: string) => buildTokensUsed(db, buildId),
       log,
     },
   };

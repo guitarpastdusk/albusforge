@@ -4,7 +4,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { eq, sql } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb } from "./client.js";
+import { createClientDb, createDb } from "./client.js";
 import type { DbConfig } from "./config.js";
 import { MIGRATIONS_FOLDER, runMigrations } from "./migrate.js";
 import { APP_SCHEMAS, buildMessages, builds, llmCalls, tenants } from "./schema/index.js";
@@ -245,5 +245,54 @@ describe("app role memberships", () => {
 
     // 28000: role is not permitted to log in.
     expect(await canCreateViaSetRole(app, "ddl_stuck")).toBe("28000");
+  });
+});
+
+describe("createClientDb", () => {
+  let handle: ReturnType<typeof createDb>;
+
+  beforeAll(async () => {
+    const config = await freshDatabase();
+    await runMigrations(config);
+    handle = createDb(config, { max: 1 });
+  });
+
+  afterAll(async () => {
+    await handle?.pool.end();
+  });
+
+  /*
+   * The pool holds one connection, so anything that took a second one would
+   * hang here: the point of the handle is that it never does.
+   */
+  it("runs queries and transactions on one checked-out connection, session lock included", async () => {
+    const client = await handle.pool.connect();
+    const { db, close } = createClientDb(client);
+    try {
+      const { rows } = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock(1, 1) AS locked");
+      expect(rows[0]?.locked).toBe(true);
+
+      const [tenant] = await db.insert(tenants).values({ name: "Held" }).returning({ id: tenants.id });
+      const id = await db.transaction(async (tx) => {
+        const [build] = await tx.insert(builds).values({ askText: "a sensor", tenantId: tenant!.id }).returning({ id: builds.id });
+        await tx.insert(buildMessages).values({ buildId: build!.id, role: "user", text: "hello" });
+        return build!.id;
+      });
+      expect(await db.select().from(buildMessages).where(eq(buildMessages.buildId, id))).toHaveLength(1);
+
+      await client.query("SELECT pg_advisory_unlock(1, 1)");
+    } finally {
+      close();
+      client.release();
+    }
+  });
+
+  it("close() fences the handle, so late work can't run on someone else's connection", async () => {
+    const client = await handle.pool.connect();
+    const { db, close } = createClientDb(client);
+    close();
+    client.release();
+    // Drizzle wraps it, so the reason is in the cause.
+    await expect(db.select().from(tenants)).rejects.toMatchObject({ cause: { message: expect.stringContaining("closed with its connection") } });
   });
 });

@@ -1,4 +1,4 @@
-import { buildMessages, builds, type Db, specs } from "@albusforge/db";
+import { buildMessages, builds, createClientDb, type Db, specs } from "@albusforge/db";
 import { type IntakeTurnResponse, Spec } from "@albusforge/schema";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type pg from "pg";
@@ -17,12 +17,24 @@ import { runTurn, type TurnContext, type TurnOutcome } from "./turn";
  *
  * Every answered user message gets exactly one assistant message: success,
  * refusal, limit, deadline and failure all end in the same write.
+ *
+ * One connection per turn, and every query the turn makes — the reads, the
+ * token ceiling, metering, the final transaction — runs on the connection
+ * that holds the lock. A turn that took a second connection for its queries
+ * would deadlock against other turns as soon as the holders filled the pool:
+ * each one holding a connection, each waiting for one. That happens before the
+ * deadline race, so it would reject rather than write the fallback reply.
+ * A turn therefore costs exactly one connection; the pool size is the limit on
+ * concurrent builds, and a turn beyond it waits out `connectTimeoutMs` and
+ * gets a 503 rather than taking part in a deadlock.
  */
 
 export interface HandlerDeps {
-  db: Db;
   pool: pg.Pool;
-  turn: TurnContext;
+  /** Everything about a turn that doesn't touch the database. */
+  turn: Omit<TurnContext, "catalogue" | "meter" | "tokensUsed">;
+  /** The turn's registry read, metering and ceiling read, bound to the turn's own connection. */
+  bindDb: (db: Db) => Pick<TurnContext, "catalogue" | "meter" | "tokensUsed">;
   /** The whole turn, retries included. */
   deadlineMs: number;
   log: Log;
@@ -36,20 +48,21 @@ const MAX_PASSES = 3;
 type Answered = Extract<IntakeTurnResponse, { message_id: string }>;
 
 export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<IntakeTurnResponse | null> {
-  const [build] = await deps.db.select({ id: builds.id }).from(builds).where(eq(builds.id, buildId));
-  if (!build) return null;
+  const client = await deps.pool.connect();
+  const { db, close } = createClientDb(client);
+  let broken: Error | undefined;
+  try {
+    const [build] = await db.select({ id: builds.id }).from(builds).where(eq(builds.id, buildId));
+    if (!build) return null;
 
-  let last: Answered | undefined;
-  let passes = 0;
-  while (passes < MAX_PASSES) {
-    const client = await deps.pool.connect();
-    let broken: Error | undefined;
-    try {
+    let last: Answered | undefined;
+    let passes = 0;
+    while (passes < MAX_PASSES) {
       const { rows } = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock($1, hashtext($2)) AS locked", [TURN_LOCK_CLASS, buildId]);
       if (!rows[0]?.locked) break;
       try {
         while (passes < MAX_PASSES) {
-          const answered = await answerLatest(deps, buildId, trace);
+          const answered = await answerLatest(deps, client, db, buildId, trace);
           if (!answered) break;
           last = answered;
           passes++;
@@ -60,15 +73,18 @@ export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: Tra
           broken = error;
         });
       }
-    } catch (error) {
-      broken ??= error as Error;
-      throw error;
-    } finally {
-      client.release(broken);
+      if (broken || !(await latestIsUnanswered(db, buildId))) break;
     }
-    if (!(await latestIsUnanswered(deps.db, buildId))) break;
+    return last ?? { noop: true };
+  } catch (error) {
+    broken ??= error as Error;
+    throw error;
+  } finally {
+    // Anything still in flight for this turn — a late meter insert after the
+    // deadline — must not run on a connection someone else now owns.
+    close();
+    client.release(broken);
   }
-  return last ?? { noop: true };
 }
 
 async function latestMessage(db: Db, buildId: string) {
@@ -86,8 +102,8 @@ async function latestIsUnanswered(db: Db, buildId: string): Promise<boolean> {
 }
 
 /** Answers the latest message if it's from the user; undefined if there's nothing to answer. Needs the lock. */
-async function answerLatest(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<Answered | undefined> {
-  const { db, log } = deps;
+async function answerLatest(deps: HandlerDeps, client: pg.PoolClient, db: Db, buildId: string, trace?: TraceContext): Promise<Answered | undefined> {
+  const { log } = deps;
   const [build] = await db
     .select({ tenantId: builds.tenantId, anonOwnerHash: builds.anonOwnerHash })
     .from(builds)
@@ -116,16 +132,30 @@ async function answerLatest(deps: HandlerDeps, buildId: string, trace?: TraceCon
 
   await db.update(builds).set({ status: "specifying", updatedAt: new Date() }).where(eq(builds.id, buildId));
 
-  const outcome = await withDeadline(deps, buildId, trace, (signal) =>
-    runTurn(deps.turn, {
-      buildId,
-      attribution: { buildId, tenantId: build.tenantId, anonOwnerHash: build.anonOwnerHash, trace },
-      transcript: transcript.map((m) => ({ role: m.role, text: m.text })),
-      previous,
-      roundsUsed: rounds,
-      signal,
-    }),
-  );
+  // The turn's own handle on this connection. Closing it when the deadline
+  // race ends keeps a metering insert that arrives late out of the write
+  // below, which shares the connection: it fails and is logged instead.
+  const turnHandle = createClientDb(client);
+  let outcome: TurnOutcome;
+  try {
+    outcome = await withDeadline(deps, buildId, trace, (signal) =>
+      runTurn(
+        { ...deps.turn, ...deps.bindDb(turnHandle.db) },
+        {
+          buildId,
+          // What the build looks like now. Metering re-resolves the owner as it
+          // inserts, so a sign-up during the call still gets the usage (ADR 0009).
+          attribution: { buildId, tenantId: build.tenantId, anonOwnerHash: build.anonOwnerHash, trace },
+          transcript: transcript.map((m) => ({ role: m.role, text: m.text })),
+          previous,
+          roundsUsed: rounds,
+          signal,
+        },
+      ),
+    );
+  } finally {
+    turnHandle.close();
+  }
 
   const idleStatus = previous?.settled ? "planning" : "asking";
   const reply = outcome.kind === "spec" ? outcome.decision.reply : outcome.reply;

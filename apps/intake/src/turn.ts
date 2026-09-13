@@ -125,10 +125,12 @@ export async function runTurn(ctx: TurnContext, input: TurnInput): Promise<TurnO
   });
 
   if (!result.ok) {
+    // The failure class and `callStructured`'s sanitized diagnostic only: a
+    // rejected model output, and the parse error quoting it, stay in the
+    // exchange with the model (ASK-TO-ENCLOSURE §3, private messages).
     ctx.log(result.failure === "provider_error" ? "ERROR" : "WARNING", "turn answered with a fallback", {
-      error: result.error,
       trace: input.attribution.trace,
-      fields: { buildId: input.buildId, failure: result.failure, calls: result.calls },
+      fields: { buildId: input.buildId, failure: result.failure, calls: result.calls, ...result.diagnostic },
     });
     return { kind: "reply", reason: result.failure, reply: FAILURE_REPLY[result.failure] };
   }

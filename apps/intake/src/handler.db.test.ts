@@ -13,7 +13,7 @@ import { Spec } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { asc, eq } from "drizzle-orm";
 import pg from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
 import { createCatalogueCache, dbPartsSource } from "./catalogue";
 import { emptySpec } from "./decide";
@@ -62,22 +62,25 @@ type Response = LlmResponse | ((request: never, signal?: AbortSignal) => Promise
 
 function setup(responses: Response[], overrides: { deadlineMs?: number; tokenCeiling?: number } = {}): Setup {
   const provider = replayProvider(responses as Parameters<typeof replayProvider>[0]);
+  const catalogue = createCatalogueCache({ source: dbPartsSource(), includeDrafts: true });
   const lines: string[] = [];
   const log = createLogger({ write: () => {} });
   const deps: HandlerDeps = {
-    db: handle.db,
     pool: handle.pool,
     log,
     deadlineMs: overrides.deadlineMs ?? 45_000,
+    // As the service wires it: metering and the ceiling read run on the turn's own connection.
+    bindDb: (turnDb) => ({
+      catalogue: { get: () => catalogue.get(turnDb) },
+      meter: createMeter({ insert: llmCallsInserter(turnDb), write: (line) => lines.push(line), project: undefined }),
+      tokensUsed: (buildId) => buildTokensUsed(turnDb, buildId),
+    }),
     turn: {
       provider,
       model: "claude-opus-5",
       effort: "medium",
-      meter: createMeter({ insert: llmCallsInserter(handle.db), write: (line) => lines.push(line), project: undefined }),
-      catalogue: createCatalogueCache({ source: dbPartsSource(handle.db), includeDrafts: true }),
       prompts: loadPrompts(),
       tokenCeiling: overrides.tokenCeiling ?? 300_000,
-      tokensUsed: (buildId) => buildTokensUsed(handle.db, buildId),
       log,
     },
   };
@@ -270,5 +273,109 @@ describe("handleTurn against Postgres", () => {
     expect(assistant).toHaveLength(2);
     expect(assistant[1]!.text).toBe(FALLBACK_REPLY);
     expect((await callsOf(buildId)).map((c) => c.stopReason)).toEqual(["refusal"]);
+  });
+});
+
+describe("one connection per turn", () => {
+  /*
+   * Five *different* builds, so every caller takes its build's lock: none of
+   * them is a noop. The barrier holds all five inside the lock at once, and
+   * the pool is the service's five connections with a short acquisition
+   * timeout, so a turn that needed a second connection for its reads,
+   * metering or final write would wait for one that is never coming back and
+   * reject before the deadline could write a fallback.
+   */
+  it("five distinct builds answer concurrently without exhausting the pool", async () => {
+    const ids = await Promise.all(Array.from({ length: 5 }, () => newBuild("A fridge temperature sensor")));
+    const { deps } = setup(Array.from({ length: 5 }, () => goldenTurn("fridge-monitor", 1)));
+    const timeout = handle.pool.options.connectionTimeoutMillis;
+    handle.pool.options.connectionTimeoutMillis = 200;
+    const original = pg.Client.prototype.query;
+    let locks = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(pg.Client.prototype, "query").mockImplementation(function (this: pg.Client, ...args: unknown[]) {
+      const result = Reflect.apply(original, this, args) as Promise<unknown>;
+      if (typeof args[0] === "string" && args[0].startsWith("SELECT pg_try_advisory_lock")) {
+        return result.then(async (value: unknown) => {
+          if (++locks === 5) release();
+          await barrier;
+          return value;
+        });
+      }
+      return result;
+    } as never);
+    let outcomes: PromiseSettledResult<unknown>[];
+    try {
+      outcomes = await Promise.allSettled(ids.map((id) => handleTurn(deps, id)));
+    } finally {
+      spy.mockRestore();
+      handle.pool.options.connectionTimeoutMillis = timeout;
+    }
+    expect(locks).toBe(5);
+    expect(outcomes.map((r) => r.status)).toEqual(Array(5).fill("fulfilled"));
+    for (const id of ids) {
+      const assistant = (await messagesOf(id)).filter((m) => m.role === "assistant");
+      expect(assistant).toHaveLength(1);
+      // A real answer, not the fallback a failed read would have written.
+      expect(assistant[0]!.text).not.toBe(FALLBACK_REPLY);
+      expect(await callsOf(id)).toHaveLength(1);
+    }
+  });
+});
+
+describe("usage attribution across a sign-up (ADR 0009)", () => {
+  /** The claim transaction: the build and the usage it has so far move to the tenant. */
+  async function claim(buildId: string, tenantId: string): Promise<void> {
+    await handle.db.transaction(async (tx) => {
+      await tx.update(builds).set({ tenantId, anonOwnerHash: null }).where(eq(builds.id, buildId));
+      await tx.update(llmCalls).set({ tenantId, anonOwnerHash: null }).where(eq(llmCalls.buildId, buildId));
+    });
+  }
+
+  const newTenant = async (name: string) => (await handle.db.insert(tenants).values({ name }).returning({ id: tenants.id }))[0]!.id;
+
+  it("claim during the model call: the usage inserted after it belongs to the new tenant", async () => {
+    const tenantId = await newTenant("Claim during turn");
+    const buildId = await newBuild("A fridge temperature sensor");
+    const { deps } = setup([
+      async () => {
+        await claim(buildId, tenantId);
+        return goldenTurn("fridge-monitor", 1);
+      },
+    ]);
+    await handleTurn(deps, buildId);
+    expect(await callsOf(buildId)).toMatchObject([{ tenantId, anonOwnerHash: null }]);
+  });
+
+  it("claim after the turn: the claim re-attributes the row the turn wrote", async () => {
+    const tenantId = await newTenant("Claim after turn");
+    const buildId = await newBuild("A fridge temperature sensor");
+    const { deps } = setup([goldenTurn("fridge-monitor", 1)]);
+    await handleTurn(deps, buildId);
+    expect(await callsOf(buildId)).toMatchObject([{ tenantId: null }]);
+    await claim(buildId, tenantId);
+    expect(await callsOf(buildId)).toMatchObject([{ tenantId, anonOwnerHash: null }]);
+  });
+
+  it("claim between a call and its repair retry: every row of the turn ends up with the tenant", async () => {
+    const tenantId = await newTenant("Claim mid-retry");
+    const buildId = await newBuild("A fridge temperature sensor");
+    const { deps } = setup([
+      fakeResponse({ text: "sorry, here it is: {" }),
+      async () => {
+        await claim(buildId, tenantId);
+        return goldenTurn("fridge-monitor", 1);
+      },
+    ]);
+    await handleTurn(deps, buildId);
+    const calls = await callsOf(buildId);
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => [c.tenantId, c.anonOwnerHash])).toEqual([
+      [tenantId, null],
+      [tenantId, null],
+    ]);
   });
 });

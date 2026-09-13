@@ -18,7 +18,9 @@ Request and response schemas are `IntakeTurnRequest` and `IntakeTurnResponse` in
 
 `POST /v1/turns` is synchronous and writes everything before it returns:
 
-1. **Lock.** `pg_try_advisory_lock(424200001, hashtext(build_id))` on a dedicated connection. A caller that can't take it returns `noop`: the holder answers. The holder checks for an unanswered message again after unlocking, so a message sent mid-turn is picked up rather than stranded (at most three turns per call).
+1. **Lock.** `pg_try_advisory_lock(424200001, hashtext(build_id))` on the turn's connection. A caller that can't take it returns `noop`: the holder answers. The holder checks for an unanswered message again after unlocking, so a message sent mid-turn is picked up rather than stranded (at most three turns per call).
+
+   A turn costs **exactly one connection**. Every query it makes — the reads, the catalogue refresh, the token ceiling, metering, the final transaction — runs on the connection holding the lock (`createClientDb`). Taking a second one would deadlock: with a five-connection pool, five turns in progress hold every connection while each waits for another, and that wait happens before the deadline race, so they would fail without writing the fallback reply. The pool size is therefore the limit on concurrent builds per instance, and a turn past it times out into a `503` that gateway retries.
 2. **Read** the transcript, the latest spec version, and how many versions asked questions (`jsonb_array_length(open_questions) > 0`). The build goes to `specifying`.
 3. **Scope filter** (`src/policy.ts`) on the latest user message: weapons and harm, mains voltage, medical monitoring, covert tracking. A rule match replies `OUT_OF_SCOPE` for that category with no model call. The rules are narrow on purpose; anything they miss meets the extract prompt's boundaries and the model's own refusals.
 4. **Model call** through `callStructured` (`@albusforge/llm`), under a 45 s deadline covering retries. The system prompt (`prompts/extract.v1.md`) and the part catalogue are the cached prefix. The transcript follows as user and assistant turns, then a `role: "system"` message (`prompts/turn.v1.md`) carrying the rounds used and the current spec. The person's words appear only in user turns.
@@ -64,6 +66,8 @@ The part catalogue comes from `registry.parts`, rendered by `@albusforge/registr
 
 JSON lines on stdout, in gateway's format (`src/log.ts` is a copy of gateway's; a shared package can replace both). Each request gets a `request completed` line, except successful health checks. Each turn gets `turn answered` with the outcome. Each model call gets the `llm_call` spend line described in [packages/llm](../../packages/llm/README.md#metering). Fallbacks, dropped vocabulary and unstored calls log a `WARNING` or `ERROR`. Message text, prompts, the key and the password are never logged.
 
+That guarantee is enforced at the logger, not by convention: an error is serialized to its class, its `code`/`status` and its stack **frames**, and its message is dropped unless the error is marked `safeToLog` (config and startup failures, which are operator-authored). An error message can carry anything the code that threw it had in hand — an excerpt of a model response, a row, a person's words. Failed calls log `callStructured`'s sanitized diagnostic instead: a failure class, schema paths and issue codes from our own schema, and the provider's error class, HTTP status and request id. `test/redaction.test.ts` drives each of these paths with a synthetic private marker and asserts it appears in no log field.
+
 ## Run it
 
 ```sh
@@ -99,6 +103,9 @@ ANTHROPIC_API_KEY=… LLM_MODEL=claude-opus-5 \
   - a message sent mid-turn still gets answered
   - the deadline, including work that ignores the abort signal, writing exactly one fallback message
   - the token ceiling, a scope refusal, the round cap, a model refusal and a provider failure
+  - five *distinct* builds answering at once on a five-connection pool with a short acquisition timeout: every turn answers and meters, which a turn that took a second connection can't do
+  - usage attribution across a sign-up (ADR 0009): the claim landing during the model call, after the turn, and between a call and its repair retry
+- `test/redaction.test.ts`: the real failure-to-logger path for a JSON parse failure, a schema mismatch, a provider error and a failed usage insert, each carrying a private marker that must not reach a log
 - `src/decide.test.ts`: patch merge, vocabulary checks, question filtering, the round cap and settling
 - `src/policy.test.ts`: every scope category, plus phrasings that must stay allowed
 - `src/app.test.ts`, `src/config.test.ts`, `src/prompts.test.ts`, `src/log.test.ts`

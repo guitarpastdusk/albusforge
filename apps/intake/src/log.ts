@@ -73,13 +73,48 @@ export function traceFromHeaders(headers: Headers): TraceContext | undefined {
   return parseCloudTraceContext(header(headers, "x-cloud-trace-context")) ?? parseTraceparent(header(headers, "traceparent"));
 }
 
-/** Errors have no enumerable fields; spell out what is worth keeping. */
-export function serializeError(error: unknown): Record<string, unknown> {
-  if (!(error instanceof Error)) return { value: typeof error === "string" ? error : safeStringify(error) };
+/**
+ * Marks an error whose message is operator-authored — a config or startup
+ * failure naming environment variables — so the logger may keep it.
+ */
+export function safeToLog<E extends Error>(error: E): E {
+  Object.defineProperty(error, "safeToLog", { value: true, enumerable: false });
+  return error;
+}
 
-  const serialized: Record<string, unknown> = { name: error.name, message: error.message };
+const isSafeToLog = (error: unknown): boolean => (error as { safeToLog?: unknown } | null)?.safeToLog === true;
+
+/** Stack frames only: file, line and function, never the `Error: message` header. */
+const MAX_FRAMES = 5;
+
+function frames(error: Error): string[] {
+  return (error.stack ?? "")
+    .split("\n")
+    .filter((line) => line.trimStart().startsWith("at "))
+    .slice(0, MAX_FRAMES)
+    .map((line) => line.trim());
+}
+
+/**
+ * Errors have no enumerable fields; spell out what is worth keeping — and no
+ * more than that. An error's message can carry anything the code that threw it
+ * had in hand: an excerpt of a model response, a row, a query, a person's
+ * words. The allowlist is the class name, the codes that classify it, and the
+ * stack's frames. `message` (and the stack's header line, which repeats it)
+ * survives only for errors marked `safeToLog`.
+ */
+export function serializeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { name: typeof error, redacted: true };
+
+  const serialized: Record<string, unknown> = { name: error.name };
   const code = (error as { code?: unknown }).code;
   if (typeof code === "string") serialized.code = code;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status === "number") serialized.status = status;
+  if (isSafeToLog(error)) serialized.message = error.message;
+  else serialized.redacted = true;
+  const stack = frames(error);
+  if (stack.length > 0) serialized.frames = stack;
   if (error.cause !== undefined) serialized.cause = serializeError(error.cause);
   return serialized;
 }
@@ -111,10 +146,9 @@ export function formatLogLine(
   entry.severity = severity;
   entry.message = message;
 
-  if (error !== undefined) {
-    entry.error = serializeError(error);
-    if (error instanceof Error && error.stack) entry.stack = error.stack;
-  }
+  // The serialized error carries its own frames; a raw `stack` would repeat
+  // the message header the allowlist just dropped.
+  if (error !== undefined) entry.error = serializeError(error);
 
   if (trace && project) {
     entry[TRACE_FIELD] = `projects/${project}/traces/${trace.traceId}`;

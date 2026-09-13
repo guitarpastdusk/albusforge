@@ -50,20 +50,22 @@ async function main() {
 
   const { db, pool } = createDb(dbConfigFromEnv(), { max: 3, statementTimeoutMs: 10_000 });
   const log = createLogger();
+  const catalogue = createCatalogueCache({ source: dbPartsSource(), includeDrafts: true });
   const deps: HandlerDeps = {
-    db,
     pool,
     log,
     deadlineMs: 45_000,
+    bindDb: (turnDb) => ({
+      catalogue: { get: () => catalogue.get(turnDb) },
+      meter: createMeter({ insert: llmCallsInserter(turnDb) }),
+      tokensUsed: (id) => buildTokensUsed(turnDb, id),
+    }),
     turn: {
       provider,
       model,
       effort,
-      meter: createMeter({ insert: llmCallsInserter(db) }),
-      catalogue: createCatalogueCache({ source: dbPartsSource(db), includeDrafts: true }),
       prompts: loadPrompts(),
       tokenCeiling: 300_000,
-      tokensUsed: (id) => buildTokensUsed(db, id),
       log,
     },
   };

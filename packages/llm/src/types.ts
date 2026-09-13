@@ -47,6 +47,9 @@ export interface LlmProvider {
 }
 
 export class LlmError extends Error {
+  /** Operator-authored text: loggers that redact arbitrary messages may keep this one. */
+  readonly safeToLog = true;
+
   constructor(
     readonly code: "NOT_IMPLEMENTED" | "CONFIG",
     message: string,

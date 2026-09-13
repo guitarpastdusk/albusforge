@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMeter, formatLlmCallLine, type LlmCallRecord } from "../src/meter";
-import { costUsd, priceFor, PRICES_USD_PER_MTOK } from "../src/pricing";
+import { costUsd, type ModelPrice, pricedModels, priceFor, PRICES_USD_PER_MTOK, UNKNOWN_MODEL_PRICE } from "../src/pricing";
 import { createProvider, createVertexProvider } from "../src/provider";
 import { fakeResponse } from "../src/testing";
 import type { LlmUsage } from "../src/types";
@@ -41,8 +41,42 @@ describe("pricing", () => {
     expect(costUsd(usage, "claude-opus-4-8")).toBeCloseTo((1000 * 5 + 100 * 25) / 1e6, 6);
   });
 
-  it("prices an unknown model at the most expensive row, never zero", () => {
-    expect(priceFor("claude-future-9")).toEqual({ price: PRICES_USD_PER_MTOK["claude-fable-5-1"], known: false });
+  it("prices an unknown model at the highest rate in every token category, not at one row", () => {
+    expect(priceFor("claude-future-9")).toEqual({ price: UNKNOWN_MODEL_PRICE, known: false });
+    // Fable 5.1 is the most expensive row by output, but its cache reads are half Opus's rate.
+    expect(UNKNOWN_MODEL_PRICE.output).toBe(PRICES_USD_PER_MTOK["claude-fable-5-1"]!.output);
+    expect(UNKNOWN_MODEL_PRICE.cacheRead).toBe(PRICES_USD_PER_MTOK["claude-opus-5"]!.cacheRead);
+    for (const price of Object.values(PRICES_USD_PER_MTOK)) {
+      for (const key of Object.keys(UNKNOWN_MODEL_PRICE) as (keyof ModelPrice)[]) {
+        expect(UNKNOWN_MODEL_PRICE[key]).toBeGreaterThanOrEqual(price[key]);
+      }
+    }
+  });
+
+  it("a cache-heavy unknown model is never priced below a listed model", () => {
+    const usage = {
+      ...fakeResponse().usage,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 1_000_000,
+      cache_creation_input_tokens: 0,
+    } as LlmUsage;
+    const unknown = costUsd(usage, "claude-opus-4-7");
+    for (const model of Object.keys(PRICES_USD_PER_MTOK)) expect(unknown).toBeGreaterThanOrEqual(costUsd(usage, model));
+    expect(unknown).toBe(0.5);
+  });
+
+  it("names every model a response is priced from, fallback iterations included", () => {
+    const usage = {
+      ...fakeResponse().usage,
+      iterations: [
+        { type: "message", model: "claude-opus-5", input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+        { type: "fallback_message", model: "claude-future-9", input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+        { type: "compaction", input_tokens: 5, output_tokens: 5 },
+      ],
+    } as unknown as LlmUsage;
+    expect(pricedModels(usage, "claude-opus-5")).toEqual(["claude-opus-5", "claude-future-9"]);
+    expect(pricedModels(fakeResponse().usage, "claude-opus-5")).toEqual(["claude-opus-5"]);
   });
 });
 
@@ -59,12 +93,13 @@ describe("the llm_call log line", () => {
     buildId: "b1",
     tenantId: null,
     anonOwnerHash: "anon",
+    prefixHash: "0123456789abcdef",
   };
 
   it("has exactly the fields infra's spend metric reads, in order", () => {
     const line = formatLlmCallLine(record, undefined, undefined);
     expect(line).toBe(
-      '{"severity":"INFO","message":"llm call","event":"llm_call","stage":"intake","model":"claude-opus-5","cost_usd":0.032498,"input_tokens":412,"output_tokens":640,"cache_read_input_tokens":0,"cache_creation_input_tokens":2310,"stop_reason":"end_turn","build_id":"b1"}\n',
+      '{"severity":"INFO","message":"llm call","event":"llm_call","stage":"intake","model":"claude-opus-5","cost_usd":0.032498,"input_tokens":412,"output_tokens":640,"cache_read_input_tokens":0,"cache_creation_input_tokens":2310,"stop_reason":"end_turn","build_id":"b1","prefix_hash":"0123456789abcdef"}\n',
     );
     expect(typeof JSON.parse(line).cost_usd).toBe("number");
   });
@@ -86,12 +121,27 @@ describe("the llm_call log line", () => {
       project: undefined,
       onUnknownModel: (m) => unknown.push(m),
     });
-    await expect(meter.record("intake", fakeResponse({ model: "claude-opus-5" }), { buildId: "b1", tenantId: null, anonOwnerHash: "a" })).rejects.toThrow(
-      "db down",
-    );
+    await expect(
+      meter.record({ stage: "intake", prefixHash: "abc" }, fakeResponse({ model: "claude-opus-5" }), { buildId: "b1", tenantId: null, anonOwnerHash: "a" }),
+    ).rejects.toThrow("db down");
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "llm_call", model: "claude-opus-5", input_tokens: 100, output_tokens: 50 });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: "llm_call", model: "claude-opus-5", input_tokens: 100, output_tokens: 50, prefix_hash: "abc" });
     expect(unknown).toEqual([]);
+  });
+
+  it("warns for an unknown model that only appears in a fallback iteration", async () => {
+    const unknown: string[] = [];
+    const meter = createMeter({ insert: async () => {}, write: () => {}, project: undefined, onUnknownModel: (m) => unknown.push(m) });
+    const response = fakeResponse({ model: "claude-opus-5" });
+    const usage = {
+      ...response.usage,
+      iterations: [
+        { type: "message", model: "claude-opus-5", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+        { type: "fallback_message", model: "claude-future-9", input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+      ],
+    } as unknown as LlmUsage;
+    await meter.record({ stage: "intake" }, { ...response, usage }, { buildId: "b1", tenantId: null, anonOwnerHash: "a" });
+    expect(unknown).toEqual(["claude-future-9"]);
   });
 });
 

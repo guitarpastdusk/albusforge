@@ -9,6 +9,17 @@ import { Accent, Id, Timestamp } from "./common";
 export const DeviceStatus = z.enum(["online", "offline", "never_seen"]);
 export type DeviceStatus = z.infer<typeof DeviceStatus>;
 
+/** From part.cloud.telemetry_schema (CLOUD-PLATFORM.md §6.1). */
+export const Channel = z.object({
+  key: z.string(),
+  label: z.string(),
+  unit: z.string(),
+  kind: z.enum(["number", "duration", "status"]),
+  precision: z.number().int().nonnegative(),
+  valid_range: z.tuple([z.number(), z.number()]).nullable(),
+});
+export type Channel = z.infer<typeof Channel>;
+
 export const DeviceTile = z.object({
   id: Id,
   name: z.string(),
@@ -24,6 +35,12 @@ export const DeviceTile = z.object({
   metric: z.string(),
   /** Null for a `never_seen` device. */
   last_reading_at: Timestamp.nullable(),
+  /**
+   * The channel `value` shows, so a live reading on the stream can be
+   * formatted the same way. Optional: a tile without it still updates its
+   * age and status live, just not its value.
+   */
+  channel: Channel.optional(),
 });
 export type DeviceTile = z.infer<typeof DeviceTile>;
 

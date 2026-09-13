@@ -2,6 +2,7 @@ import { readRule } from "./rules";
 import type {
   ActionProposal,
   AskResponse,
+  Channel,
   BuildDetail,
   BuildList,
   BuildSummary,
@@ -318,6 +319,9 @@ function conversationDetail(id: string, conversation: Conversation): BuildDetail
 
 // --- fleet --------------------------------------------------------------------
 
+const SOIL: Channel = { key: "soil_vwc", label: "Soil moisture", unit: "% VWC", kind: "number", precision: 1, valid_range: [0, 60] };
+const FRIDGE_TEMP: Channel = { key: "temperature_c", label: "Temperature", unit: "°C", kind: "number", precision: 1, valid_range: [-30, 40] };
+
 export function fleet(): Fleet {
   return {
     stats: { device_count: 8, readings_per_day: 2400, online_ratio: 1 },
@@ -327,12 +331,12 @@ export function fleet(): Fleet {
         name: "Greenhouse soil monitor",
         location: "Home · 44.05°N 123.09°W",
         devices: [
-          { id: "bed-a", name: "Bed A — soil probe", accent: "green", status: "online", value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40) },
-          { id: "bed-b", name: "Bed B — soil probe", accent: "green", status: "online", value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE) },
+          { id: "bed-a", name: "Bed A — soil probe", accent: "green", status: "online", value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40), channel: SOIL },
+          { id: "bed-b", name: "Bed B — soil probe", accent: "green", status: "online", value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE), channel: SOIL },
           { id: "canopy", name: "Canopy — air sensor", accent: "blue", status: "online", value: "24.1", unit: "°C · 61% RH", metric: "Air temp + humidity", last_reading_at: ago(35) },
           { id: "north-gateway", name: "North wall — gateway", accent: "peach", status: "online", value: "2.4k", unit: "msgs/day", metric: "LoRa gateway", last_reading_at: ago(0) },
           // Provisioned, never powered on: the dashboard exists before the first reading.
-          { id: "bed-c", name: "Bed C — soil probe", accent: "green", status: "never_seen", value: null, unit: null, metric: "Soil moisture", last_reading_at: null },
+          { id: "bed-c", name: "Bed C — soil probe", accent: "green", status: "never_seen", value: null, unit: null, metric: "Soil moisture", last_reading_at: null, channel: SOIL },
         ],
       },
       {
@@ -341,7 +345,7 @@ export function fleet(): Fleet {
         location: "Home · kitchen",
         devices: [
           { id: "fridge", name: "Fridge — door + temp", accent: "blue", status: "online", value: "3.8", unit: "°C", metric: "Door closed · temp", last_reading_at: ago(12) },
-          { id: "freezer", name: "Freezer — temp probe", accent: "violet", status: "online", value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30) },
+          { id: "freezer", name: "Freezer — temp probe", accent: "violet", status: "online", value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30), channel: FRIDGE_TEMP },
           { id: "pantry-leak", name: "Pantry — leak sensor", accent: "green", status: "online", value: "DRY", unit: null, metric: "Water presence", last_reading_at: ago(2 * MINUTE) },
         ],
       },
@@ -384,7 +388,7 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       ],
     },
     channels: [
-      { key: "soil_vwc", label: "Soil moisture", unit: "% VWC", kind: "number", precision: 1, valid_range: [0, 60] },
+      SOIL,
       { key: "battery", label: "Battery", unit: "%", kind: "number", precision: 0, valid_range: [0, 100] },
       { key: "rssi", label: "Signal", unit: "dBm", kind: "number", precision: 0, valid_range: [-120, 0] },
       { key: "uptime", label: "Uptime", unit: "s", kind: "duration", precision: 0, valid_range: null },

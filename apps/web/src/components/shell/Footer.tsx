@@ -7,6 +7,7 @@ export function Footer() {
         albusforge.ai — your own Physical AI · Being built with <span className="text-coral">♥</span> at MIT
       </span>
       <nav aria-label="Footer" className="flex gap-[22px] text-[14px]">
+        <Link href="/about">About us</Link>
         <Link href="/docs">Docs</Link>
         <Link href="/pricing">Pricing</Link>
         <Link href="/security">Security pledge</Link>

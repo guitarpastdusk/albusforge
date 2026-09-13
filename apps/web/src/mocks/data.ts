@@ -1,4 +1,6 @@
+import { readRule } from "./rules";
 import type {
+  ActionProposal,
   AskResponse,
   BuildDetail,
   BuildList,
@@ -336,8 +338,106 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       : device.id === "bed-a"
         ? BED_A_GREETING
         : `Hi — I'm ${device.name}. Ask me anything about my readings.`,
-    ...(device.id === "bed-a" ? { actions: BED_A_ACTIONS, last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+      permissions: { edit_actions: true },
+    ...actionsBlock(device.id),
   };
+}
+
+// --- closed-loop actions ------------------------------------------------------
+
+/**
+ * Mock mode's rule store: bed-a starts with the prototype's three rules,
+ * every other device with none. Lives for the process, like the chat
+ * transcripts, so a toggle survives a refresh.
+ */
+const actionStore = new Map<string, DeviceAction[]>();
+const proposals = new Map<string, { deviceId: string; proposal: ActionProposal }>();
+/** Confirmed proposals, kept so a retried confirmation returns the rule it already created (ADR 0010). */
+const consumed = new Map<string, { deviceId: string; actionId: string; until: number }>();
+const PROPOSAL_TTL_MS = 10 * MINUTE * 1000;
+
+function actionsOf(deviceId: string): DeviceAction[] {
+  let actions = actionStore.get(deviceId);
+  if (!actions) {
+    actions = deviceId === "bed-a" ? BED_A_ACTIONS.map((a) => ({ ...a, version: 1 })) : [];
+    actionStore.set(deviceId, actions);
+  }
+  return actions;
+}
+
+function actionsBlock(deviceId: string): Pick<DeviceDashboard, "actions" | "last_action"> {
+  const actions = actionsOf(deviceId);
+  if (actions.length === 0) return {};
+  return {
+    actions: actions.map((a) => ({ ...a })),
+    ...(deviceId === "bed-a" ? { last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+  };
+}
+
+/** PATCH /v1/devices/:id/actions/:actionId. Null when the device or the rule is unknown. */
+export function setActionEnabled(deviceId: string, actionId: string, enabled: boolean): DeviceAction | null {
+  if (!dashboardExists(deviceId)) return null;
+  const action = actionsOf(deviceId).find((a) => a.id === actionId);
+  if (!action) return null;
+  action.enabled = enabled;
+  // The device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4); it acks this version.
+  action.sync = "pending";
+  action.version = (action.version ?? 0) + 1;
+  return { ...action };
+}
+
+/** POST /v1/devices/:id/actions/proposals. Reads the words against the device's channels; writes nothing. */
+export function proposeAction(deviceId: string, text: string): ActionProposal | null {
+  const dash = dashboard(deviceId);
+  if (!dash) return null;
+  const reading = readRule(text, dash.channels);
+  const proposal: ActionProposal = {
+    id: `prop_${Date.now().toString(36)}_${proposals.size}`,
+    ...reading,
+    expires_at: new Date(Date.now() + PROPOSAL_TTL_MS).toISOString(),
+  };
+  proposals.set(proposal.id, { deviceId, proposal });
+  return proposal;
+}
+
+export type ConfirmOutcome =
+  | { ok: true; action: DeviceAction; created: boolean }
+  | { ok: false; reason: "not_found" | "unresolved"; issues?: string[] };
+
+/**
+ * POST /v1/devices/:id/actions. A proposal is confirmed for the device it was
+ * made for, before it expires. Confirming it again returns the rule it
+ * created (`created: false`), so a retry after a lost response is safe.
+ */
+export function confirmAction(deviceId: string, proposalId: string): ConfirmOutcome {
+  const done = consumed.get(proposalId);
+  if (done && done.deviceId === deviceId && done.until > Date.now()) {
+    const action = actionsOf(deviceId).find((a) => a.id === done.actionId);
+    if (action) return { ok: true, action: { ...action }, created: false };
+  }
+  const held = proposals.get(proposalId);
+  if (!held || held.deviceId !== deviceId || Date.parse(held.proposal.expires_at) < Date.now()) return { ok: false, reason: "not_found" };
+  if (held.proposal.issues.length > 0) return { ok: false, reason: "unresolved", issues: held.proposal.issues };
+  proposals.delete(proposalId);
+  const { kind, rule, via } = held.proposal;
+  const action: DeviceAction = { id: `act_${Date.now().toString(36)}_${actionsOf(deviceId).length}`, kind, rule, via, enabled: true, sync: "pending", version: 1 };
+  actionsOf(deviceId).push(action);
+  consumed.set(proposalId, { deviceId, actionId: action.id, until: Date.now() + PROPOSAL_TTL_MS });
+  return { ok: true, action: { ...action }, created: true };
+}
+
+/** Tests only: the device acknowledged its rules, as cloudlink will record from an ingest (ADR 0010). */
+export function ackActions(deviceId: string): void {
+  for (const action of actionsOf(deviceId)) action.sync = "synced";
+}
+
+const dashboardExists = (deviceId: string) => fleet().systems.some((s) => s.devices.some((d) => d.id === deviceId));
+
+/** Tests only: forget toggles, rules and proposals. */
+export function resetActions(): void {
+  actionStore.clear();
+  proposals.clear();
+  consumed.clear();
 }
 
 // --- marketplace --------------------------------------------------------------

@@ -21,6 +21,10 @@ function byId(method: Method, pattern: string): Route<[id: string]> {
   return { method, pattern, path: (id) => pattern.replace(":id", seg(id)) };
 }
 
+function byIdAndChild(method: Method, pattern: string, child: string): Route<[id: string, childId: string]> {
+  return { method, pattern, path: (id, childId) => pattern.replace(":id", seg(id)).replace(child, seg(childId)) };
+}
+
 export const routes = {
   auth: {
     requestCode: fixed("POST", "/v1/auth/code"),
@@ -57,6 +61,14 @@ export const routes = {
     dashboard: byId("GET", "/v1/devices/:id/dashboard"),
     series: byId("GET", "/v1/devices/:id/series"),
     ask: byId("POST", "/v1/devices/:id/ask"),
+    actions: {
+      /** Body SetActionEnabledRequest → DeviceAction. Operator or admin; audited; applied at the device's next check-in. */
+      setEnabled: byIdAndChild("PATCH", "/v1/devices/:id/actions/:actionId", ":actionId"),
+      /** Body ProposeActionRequest → ActionProposal. Reads a plain-words rule back; writes nothing. */
+      propose: byId("POST", "/v1/devices/:id/actions/proposals"),
+      /** Body ConfirmActionRequest → 201 DeviceAction. The only way a rule is created (ADR 0010). */
+      create: byId("POST", "/v1/devices/:id/actions"),
+    },
   },
 
   listings: {

@@ -7,9 +7,12 @@
  */
 import { createDb } from "@albusforge/db";
 import { buildApp } from "./app";
+import { createChatStore } from "./chat-store";
 import { configFromEnv } from "./config";
+import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient } from "./intake";
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
+import { RateLimiter } from "./rate-limit";
 
 const SHUTDOWN_GRACE_MS = 8000;
 
@@ -43,12 +46,29 @@ async function main(): Promise<void> {
   // An idle client losing its connection emits on the pool; unhandled, that crashes the process.
   pool.on("error", (error) => log("ERROR", "idle database client error", { error }));
 
+  // Gateway runs with CPU always allocated, so a turn keeps running after the
+  // 201/202 has gone out. Intake is idempotent: a turn lost to a shutdown is
+  // picked up by the next message.
+  const { url: intakeUrl, auth: intakeAuth } = config.intake;
+  const intake =
+    intakeUrl === null
+      ? null
+      : httpIntakeClient({ url: intakeUrl, authHeader: intakeAuth === "google" ? googleIdTokenAuth(intakeUrl) : async () => undefined });
+  if (intake === null) log("WARNING", "INTAKE_URL is not set: messages are stored but get no reply");
+
   const app = buildApp({
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");
     },
     log,
+    chat: {
+      store: createChatStore(db),
+      turns: createTurnScheduler({ intake, log }),
+      includeDrafts: config.registryIncludeDrafts,
+      rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },
+      streamLimits: config.sseStreamLimits,
+    },
   });
 
   let shuttingDown = false;

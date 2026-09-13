@@ -12,10 +12,24 @@ export interface DbTimeouts {
   idleMs: number;
 }
 
+export interface IntakeConfig {
+  /** Intake's run.app URL, the ID token audience. Null when unset: turns are skipped with a WARNING. */
+  url: string | null;
+  /** `google`: an ID token from the metadata server. `none`: no Authorization header (local, tests). */
+  auth: "google" | "none";
+}
+
 export interface GatewayConfig {
   port: number;
   db: DbConfig;
   dbTimeouts: DbTimeouts;
+  intake: IntakeConfig;
+  /** Candidate parts include draft parts as well as active ones. */
+  registryIncludeDrafts: boolean;
+  /** Builds that create a new anonymous owner, per instance per sliding hour. */
+  anonBuildsPerHour: number;
+  /** Open event streams per anonymous owner and per instance. */
+  sseStreamLimits: { perOwner: number; perInstance: number };
 }
 
 const Millis = z.coerce.number().int().min(1).max(600_000);
@@ -26,6 +40,12 @@ const ServerEnv = z.object({
   DB_CONNECT_TIMEOUT_MS: Millis.default(5000),
   DB_QUERY_TIMEOUT_MS: Millis.default(10_000),
   DB_IDLE_TIMEOUT_MS: Millis.default(30_000),
+  INTAKE_URL: z.url({ protocol: /^https?$/ }).optional(),
+  INTAKE_AUTH: z.enum(["google", "none"]).default("google"),
+  REGISTRY_INCLUDE_DRAFTS: z.enum(["true", "false"]).default("false"),
+  ANON_BUILDS_PER_HOUR: z.coerce.number().int().min(1).max(1_000_000).default(60),
+  SSE_MAX_STREAMS_PER_OWNER: z.coerce.number().int().min(1).max(1000).default(3),
+  SSE_MAX_STREAMS: z.coerce.number().int().min(1).max(100_000).default(100),
 });
 
 /** Added to DB_QUERY_TIMEOUT_MS for the client-side read timeout. */
@@ -40,7 +60,9 @@ type Env = Readonly<Record<string, string | undefined>>;
  * first request.
  */
 export function configFromEnv(env: Env = process.env): GatewayConfig {
-  const parsed = ServerEnv.safeParse(env);
+  // An empty variable reads as unset.
+  const cleaned = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ""));
+  const parsed = ServerEnv.safeParse(cleaned);
   if (!parsed.success) throw new Error(`Invalid gateway environment:\n${z.prettifyError(parsed.error)}`);
   const e = parsed.data;
   return {
@@ -52,5 +74,9 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
       readMs: e.DB_QUERY_TIMEOUT_MS + READ_TIMEOUT_MARGIN_MS,
       idleMs: e.DB_IDLE_TIMEOUT_MS,
     },
+    intake: { url: e.INTAKE_URL ?? null, auth: e.INTAKE_AUTH },
+    registryIncludeDrafts: e.REGISTRY_INCLUDE_DRAFTS === "true",
+    anonBuildsPerHour: e.ANON_BUILDS_PER_HOUR,
+    sseStreamLimits: { perOwner: e.SSE_MAX_STREAMS_PER_OWNER, perInstance: e.SSE_MAX_STREAMS },
   };
 }

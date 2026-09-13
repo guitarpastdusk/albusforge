@@ -9,7 +9,38 @@ describe("configFromEnv", () => {
       port: 8080,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
+      intake: { url: null, auth: "google" },
+      registryIncludeDrafts: false,
+      anonBuildsPerHour: 60,
+      sseStreamLimits: { perOwner: 3, perInstance: 100 },
     });
+  });
+
+  it("reads the intake URL, its auth mode, REGISTRY_INCLUDE_DRAFTS and ANON_BUILDS_PER_HOUR", () => {
+    const config = configFromEnv({
+      ...DB,
+      INTAKE_URL: "https://intake-abc-uc.a.run.app",
+      INTAKE_AUTH: "none",
+      REGISTRY_INCLUDE_DRAFTS: "true",
+      ANON_BUILDS_PER_HOUR: "250",
+    });
+    expect(config.intake).toEqual({ url: "https://intake-abc-uc.a.run.app", auth: "none" });
+    expect(config.registryIncludeDrafts).toBe(true);
+    expect(config.anonBuildsPerHour).toBe(250);
+    expect(configFromEnv({ ...DB, SSE_MAX_STREAMS_PER_OWNER: "5", SSE_MAX_STREAMS: "400" }).sseStreamLimits).toEqual({ perOwner: 5, perInstance: 400 });
+    expect(configFromEnv({ ...DB, INTAKE_URL: "" }).intake.url).toBeNull();
+  });
+
+  it.each([
+    ["INTAKE_URL", "intake.internal"],
+    ["INTAKE_AUTH", "basic"],
+    ["REGISTRY_INCLUDE_DRAFTS", "yes"],
+    ["ANON_BUILDS_PER_HOUR", "0"],
+    ["ANON_BUILDS_PER_HOUR", "lots"],
+    ["SSE_MAX_STREAMS_PER_OWNER", "0"],
+    ["SSE_MAX_STREAMS", "many"],
+  ])("rejects a bad %s", (name, value) => {
+    expect(() => configFromEnv({ ...DB, [name]: value })).toThrow(new RegExp(name));
   });
 
   it("reads PORT and the timeouts", () => {

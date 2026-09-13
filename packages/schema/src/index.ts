@@ -12,3 +12,4 @@ export * from "./part";
 export * from "./parts";
 export * from "./connector";
 export * from "./spec";
+export * from "./telemetry";

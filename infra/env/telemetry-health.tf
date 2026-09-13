@@ -1,8 +1,14 @@
 locals {
   telemetry_health_fields = {
-    dirty_hours          = { unit = "1", threshold = 10000 }
-    oldest_dirty_seconds = { unit = "s", threshold = 900 }
-    default_rows         = { unit = "1", threshold = 0 }
+    dirty_hours          = { unit = "1" }
+    oldest_dirty_seconds = { unit = "s" }
+    default_rows         = { unit = "1" }
+  }
+  # Exact log predicates determine breaches; distribution buckets are visualization only.
+  telemetry_breach_predicates = {
+    dirty_hours          = "jsonPayload.dirty_hours>10000"
+    oldest_dirty_seconds = "jsonPayload.oldest_dirty_seconds>900"
+    default_rows         = "jsonPayload.default_rows>0"
   }
   sql_health_metrics = {
     cpu  = { metric = "cpu/utilization", threshold = 0.8 }
@@ -47,7 +53,19 @@ resource "google_logging_metric" "telemetry_heartbeat" {
 resource "google_logging_metric" "telemetry_default_present" {
   project = local.project_id
   name    = "telemetry_default_present"
-  filter  = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"telemetry-rollup\" AND jsonPayload.event=\"telemetry_health\" AND jsonPayload.default_rows>0"
+  filter  = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"telemetry-rollup\" AND jsonPayload.event=\"telemetry_health\" AND ${local.telemetry_breach_predicates.default_rows}"
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "google_logging_metric" "telemetry_breach" {
+  for_each = { for key, predicate in local.telemetry_breach_predicates : key => predicate if key != "default_rows" }
+  project  = local.project_id
+  name     = "telemetry_${each.key}_breach"
+  filter   = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"telemetry-rollup\" AND jsonPayload.event=\"telemetry_health\" AND ${each.value}"
   metric_descriptor {
     metric_kind = "DELTA"
     value_type  = "INT64"
@@ -65,20 +83,21 @@ resource "google_monitoring_alert_policy" "telemetry_backlog" {
   conditions {
     display_name = "Unhealthy post-rollup snapshot for ten minutes"
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${each.key == "default_rows" ? google_logging_metric.telemetry_default_present.name : google_logging_metric.telemetry_health[each.key].name}\""
-      comparison      = "COMPARISON_GT"
-      threshold_value = each.value.threshold
-      duration        = "600s"
+      filter                  = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${each.key == "default_rows" ? google_logging_metric.telemetry_default_present.name : google_logging_metric.telemetry_breach[each.key].name}\""
+      comparison              = "COMPARISON_GT"
+      threshold_value         = 0
+      duration                = "600s"
+      evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
       aggregations {
         alignment_period     = "300s"
-        per_series_aligner   = each.key == "default_rows" ? "ALIGN_SUM" : "ALIGN_PERCENTILE_99"
+        per_series_aligner   = "ALIGN_SUM"
         cross_series_reducer = "REDUCE_MAX"
       }
     }
   }
   documentation {
     mime_type = "text/markdown"
-    content   = "Inspect telemetry job logs and queue age. Default rows can be valid backfill pending maintenance; inspect before changing retention. Default-row presence uses an exact positive-snapshot counter; queue/age percentiles are bucket estimates, not exact counts. Do not delete dirty markers to silence alerts. See docs/SENSOR-OBSERVABILITY.md."
+    content   = "Inspect telemetry job logs and queue age. Default rows can be valid backfill pending maintenance; inspect before changing retention. All queue/default/age decisions use exact breach counters; histograms are dashboard-only. At least one breach must remain in each five-minute alignment window for ten minutes; missing data is inactive. Do not delete dirty markers to silence alerts. See docs/SENSOR-OBSERVABILITY.md."
   }
 }
 
@@ -221,26 +240,38 @@ resource "google_logging_metric" "ingest_pool_wait" {
   }
 }
 
+resource "google_logging_metric" "ingest_pool_wait_breach" {
+  project = local.project_id
+  name    = "ingest_pool_wait_breach"
+  filter  = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"cloudlink\" AND jsonPayload.event=\"ingest_pool_wait\" AND jsonPayload.pool_wait_ms>500"
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
 resource "google_monitoring_alert_policy" "ingest_pool_wait" {
   project               = local.project_id
-  display_name          = "Ingestion pool acquisition p95 above 500ms (${local.env})"
+  display_name          = "Ingestion pool acquisition breaches above 500ms (${local.env})"
   combiner              = "OR"
   notification_channels = [google_monitoring_notification_channel.spend.id]
   conditions {
-    display_name = "Slow pool acquisition persists for five minutes"
+    display_name = "Above-500ms acquisitions recur for five minutes"
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.ingest_pool_wait.name}\""
-      comparison      = "COMPARISON_GT"
-      threshold_value = 500
-      duration        = "300s"
+      filter                  = "resource.type=\"cloud_run_revision\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.ingest_pool_wait_breach.name}\""
+      comparison              = "COMPARISON_GT"
+      threshold_value         = 0
+      duration                = "300s"
+      evaluation_missing_data = "EVALUATION_MISSING_DATA_INACTIVE"
       aggregations {
-        alignment_period   = "300s"
-        per_series_aligner = "ALIGN_PERCENTILE_95"
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_SUM"
       }
     }
   }
   documentation {
     mime_type = "text/markdown"
-    content   = "This measures pool.connect wall time (queue plus new connection setup), including failed acquisitions. Inspect SQL connections, CPU, active transactions and Cloud Run revisions. Do not raise pool/max-instance limits without rechecking shared capacity."
+    content   = "This alerts when at least one pool.connect duration strictly above 500ms occurs in each one-minute alignment window for five minutes; it is a recurring exact-breach policy, not a p95 policy. Missing data is inactive. Durations include queue, connection setup and failed acquisitions. Inspect SQL connections, CPU, active transactions and Cloud Run revisions. Do not raise pool/max-instance limits without rechecking shared capacity."
   }
 }

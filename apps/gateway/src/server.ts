@@ -57,6 +57,7 @@ async function main(): Promise<void> {
   if (intake === null) log("WARNING", "INTAKE_URL is not set: messages are stored but get no reply");
 
   const app = buildApp({
+    telemetryPool: pool,
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");

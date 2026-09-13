@@ -87,8 +87,8 @@ run "observability_disabled_until_acceptance" {
 run "observability_active_with_schedules" {
   command = plan
   variables {
-    telemetry_schedules_enabled             = true
-    sensor_sql_connection_alert_threshold   = 65
+    telemetry_schedules_enabled           = true
+    sensor_sql_connection_alert_threshold = 65
   }
   assert {
     condition     = google_monitoring_alert_policy.telemetry_heartbeat.enabled && google_monitoring_alert_policy.telemetry_maintenance_heartbeat.enabled && alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : policy.enabled])

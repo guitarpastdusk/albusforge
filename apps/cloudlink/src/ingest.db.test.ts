@@ -4,15 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { createDb, dbConfigFromEnv, type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { tokenHash } from "./routes.js";
-import { buildApp } from "../app.js";
-import { createPartsStore } from "../parts.js";
+import { buildApp } from "./app.js";
 import { simulatorChannels } from "./local.js";
 
 let container: StartedPostgreSqlContainer;
@@ -33,7 +32,7 @@ beforeAll(async () => {
   cliEnv = { ...process.env, DB_HOST: config.host, DB_PORT: String(config.port), DB_NAME: config.database, DB_USER: "albus_app", DB_PASSWORD: "app-secret", DB_SSL: "disable" };
   owner = createDb(config).pool;
   handle = createDb({ ...config, user: "albus_app", password: "app-secret" }, { max: 5, connectTimeoutMs: 1000, statementTimeoutMs: 2000, queryTimeoutMs: 3000 });
-  app = buildApp({ parts: createPartsStore(handle.db), ping: async () => { await handle.pool.query("SELECT 1"); }, telemetry: { pool: handle.pool, now: () => new Date(epoch * 1000) }, log: () => {} });
+  app = buildApp({ pool: handle.pool, now: () => new Date(epoch * 1000), log: () => {} });
 });
 afterAll(async () => { await app?.close(); await handle?.pool.end(); await owner?.end(); await container?.stop(); });
 async function fixture() {
@@ -131,16 +130,16 @@ it("validates body limits, finite numbers and required status; exposes health ch
 it("runs the local provision and simulator CLIs over real HTTP, retaining one packet", async () => {
   const dir = await mkdtemp(join(tmpdir(), "albus-telemetry-test-"));
   const file = join(dir, "device.json");
-  const live = buildApp({ parts: createPartsStore(handle.db), ping: async () => {}, telemetry: { pool: handle.pool }, log: () => {} });
+  const live = buildApp({ pool: handle.pool, log: () => {} });
   const run = promisify(execFile);
   try {
-    const provision = await run("pnpm", ["exec", "tsx", "src/telemetry/provision.ts", file], { env: cliEnv });
+    const provision = await run("pnpm", ["exec", "tsx", "src/provision.ts", file], { env: cliEnv });
     const credential = JSON.parse(await readFile(file, "utf8"));
     expect(provision.stdout).not.toContain(credential.token);
     expect((await stat(file)).mode & 0o777).toBe(0o600);
-    await expect(run("pnpm", ["exec", "tsx", "src/telemetry/provision.ts", file], { env: cliEnv })).rejects.toThrow();
+    await expect(run("pnpm", ["exec", "tsx", "src/provision.ts", file], { env: cliEnv })).rejects.toThrow();
     const origin = await live.listen({ host: "127.0.0.1", port: 0 });
-    const simulated = await run("pnpm", ["exec", "tsx", "src/telemetry/simulate.ts", file, origin, "1"]);
+    const simulated = await run("pnpm", ["exec", "tsx", "src/simulate.ts", file, origin, "1"]);
     const lines = simulated.stdout.trim().split("\n");
     expect(lines).toHaveLength(2);
     for (const [i, line] of lines.entries()) {
@@ -154,4 +153,17 @@ it("runs the local provision and simulator CLIs over real HTTP, retaining one pa
     await live.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("deduplicates retries across independent service instances and SQL pools", async () => {
+  const f = await fixture();
+  const secondDb = createDb(dbConfigFromEnv(cliEnv), { max: 2, connectTimeoutMs: 1000, statementTimeoutMs: 2000, queryTimeoutMs: 3000 });
+  const second = buildApp({ pool: secondDb.pool, now: () => new Date(epoch * 1000), log: () => {} });
+  try {
+    const replies = await Promise.all(Array.from({ length: 8 }, (_, i) => i % 2 === 0 ? f.send() : second.inject({ method: "POST", url: "/ingest/v1", headers: { authorization: `Bearer ${f.token}` }, payload: f.body })));
+    expect(replies.map((r) => r.statusCode)).toEqual(Array(8).fill(202));
+    expect(await count(f.dev, "packets")).toBe(1);
+    expect(await count(f.dev, "readings")).toBe(2);
+    expect((await handle.pool.query("SELECT readings_in FROM telemetry.usage WHERE device_id=$1", [f.dev])).rows[0].readings_in).toBe("2");
+  } finally { await second.close(); await secondDb.pool.end(); }
 });

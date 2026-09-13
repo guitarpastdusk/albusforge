@@ -11,12 +11,10 @@ import {
   summarizePart,
 } from "@albusforge/schema";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import type { Pool } from "pg";
 import type { z } from "zod";
 import { isDatabaseUnavailable } from "./db-errors";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
-import { registerTelemetry } from "./telemetry/routes";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -26,7 +24,6 @@ declare module "fastify" {
 
 export interface AppOptions {
   parts: PartsStore;
-  telemetry?: { pool: Pool; now?: () => Date };
   /** Resolves when the database answers; rejects otherwise. */
   ping: () => Promise<void>;
   log?: Log;
@@ -81,7 +78,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, telemetry, log = createLogger(), readyTimeoutMs = 2000 }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000 }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -183,11 +180,6 @@ export function buildApp({ parts, ping, telemetry, log = createLogger(), readyTi
     if (!part) throw new HttpError(404, "NOT_FOUND", `No part ${id} with status ${statuses.join(" or ")}`);
     return PartDetail.parse({ part });
   });
-
-  if (telemetry) {
-    // Encapsulated errors prevent telemetry SQL values reaching the general error logger.
-    app.register(async (scope) => registerTelemetry(scope, telemetry.pool, telemetry.now));
-  }
 
   return app;
 }

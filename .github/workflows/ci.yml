@@ -177,6 +177,7 @@ jobs:
           check /readyz 503
           check /v1/builds 501
           check /nope 404
+          [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/ingest/v1)" = 404 ]
 
       # CLOUD_RUN_JOB selects the task, as on Cloud Run, where the jobs set no
       # command or args. --network host reaches the service container.
@@ -215,6 +216,75 @@ jobs:
         run: |
           docker logs gateway-nodb || true
           docker logs gateway || true
+
+  docker-cloudlink:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: albus_migrate
+          POSTGRES_PASSWORD: migrate-secret
+          POSTGRES_DB: albus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U albus_migrate -d albus"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build cloudlink image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/cloudlink/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: cloudlink:ci
+          provenance: false
+          sbom: false
+      - name: Build migration image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/db-jobs.Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: db-jobs:ci
+          provenance: false
+          sbom: false
+      - name: Migrate and provision isolated fixture
+        run: |
+          docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+            -e CLOUD_RUN_JOB=db-migrate -e DB_USER=albus_migrate -e DB_PASSWORD=migrate-secret \
+            -e DB_APP_ROLE=albus_app -e DB_APP_PASSWORD=app-secret db-jobs:ci
+          docker run --rm -i --network host -e PGPASSWORD=app-secret postgres:16-alpine \
+            psql -h 127.0.0.1 -U albus_app -d albus -v ON_ERROR_STOP=1 < apps/cloudlink/scripts/smoke-fixture.sql
+      - name: Smoke-test standalone image
+        run: |
+          docker run -d --name cloudlink --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+            -e DB_USER=albus_app -e DB_PASSWORD=app-secret -e PORT=8080 cloudlink:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8080/readyz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/readyz
+          node apps/cloudlink/scripts/smoke.mjs
+          count=$(docker run --rm --network host -e PGPASSWORD=app-secret postgres:16-alpine \
+            psql -h 127.0.0.1 -U albus_app -d albus -Atc 'SELECT count(*) FROM telemetry.readings')
+          [ "$count" = 1 ]
+          docker stop --time 10 cloudlink
+          [ "$(docker inspect --format '{{.State.ExitCode}}' cloudlink)" = 0 ]
+      - name: Container logs
+        if: failure()
+        run: docker logs cloudlink || true
 
   deploy-scripts:
     # The deploy workflows' freshness and promotion checks, against a stub

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { LocalCredential, localEndpoint } from "./local.js";
 
 const [file, origin = "http://127.0.0.1:8080", seqInput = "1"] = process.argv.slice(2);
-if (!file || process.argv.length > 5) throw new Error("Usage: pnpm --filter gateway telemetry:simulate DEVICE_FILE [HTTP_ORIGIN] [SEQUENCE]");
+if (!file || process.argv.length > 5) throw new Error("Usage: pnpm --filter cloudlink simulate DEVICE_FILE [HTTP_ORIGIN] [SEQUENCE]");
 const endpoint = localEndpoint(origin);
 const credential = LocalCredential.parse(JSON.parse(await readFile(file, "utf8")));
 const seq = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).parse(seqInput);

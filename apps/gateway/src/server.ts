@@ -45,7 +45,6 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     parts: createPartsStore(db),
-    telemetry: config.telemetryEnabled ? { pool } : undefined,
     ping: async () => {
       await pool.query("SELECT 1");
     },

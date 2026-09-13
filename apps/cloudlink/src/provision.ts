@@ -8,7 +8,7 @@ import { localDatabase, simulatorChannels } from "./local.js";
 
 // No HTTP provisioning route. This command is exclusively a local simulator bootstrap.
 const output = process.argv[2];
-if (!output || process.argv.length !== 3) throw new Error("Usage: pnpm --filter gateway telemetry:provision /absolute/path/device.json");
+if (!output || process.argv.length !== 3) throw new Error("Usage: pnpm --filter cloudlink provision /absolute/path/device.json");
 const config = dbConfigFromEnv();
 localDatabase(config.host);
 const file = await open(resolve(output), "wx", 0o600);

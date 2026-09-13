@@ -1,21 +1,24 @@
 {
-  "name": "gateway",
+  "name": "cloudlink",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.js --external:pg-native \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.js --external:pg-native --external:@google-cloud/cloud-sql-connector \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "provision": "tsx src/provision.ts",
+    "simulate": "tsx src/simulate.ts"
   },
   "dependencies": {
     "@albusforge/db": "workspace:*",
-    "@albusforge/registry": "workspace:*",
     "@albusforge/schema": "workspace:*",
+    "@google-cloud/cloud-sql-connector": "^1.12.0",
     "fastify": "^5.12.4",
+    "pg": "^8.23.0",
     "zod": "~4.5.4"
   },
   "devDependencies": {
@@ -25,7 +28,6 @@
     "@types/pg": "^8.23.1",
     "esbuild": "~0.28.2",
     "eslint": "^9.39.5",
-    "pg": "^8.23.0",
     "tsx": "^4.23.13",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.0",

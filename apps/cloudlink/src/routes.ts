@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { Pool } from "pg";
 import { TelemetryAck, TelemetryChannels, TelemetryEnvelope } from "@albusforge/schema";
 
@@ -9,7 +9,7 @@ class IngestError extends Error {
 }
 
 /** All tenant attribution comes from the authenticated device, never the wire. */
-export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date()) {
+export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8) {
   app.setErrorHandler((error, _request, reply) => {
     // Never log driver errors: they can contain values from parameterized SQL.
     const code = (error as { statusCode?: number }).statusCode;
@@ -17,7 +17,7 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       : typeof code === "number" && code >= 400 && code < 500 ? code : 503;
     reply.code(status).send({ error: { code: error instanceof IngestError ? error.code : status < 500 ? "invalid_request" : "storage_unavailable", message: status < 500 ? "Telemetry request rejected" : "Telemetry storage unavailable" } });
   });
-  app.post("/ingest/v1", { bodyLimit: 128 * 1024 }, async (request, reply) => {
+  const ingest = async (request: FastifyRequest, reply: FastifyReply) => {
     const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
     if (!match) throw new IngestError(401, "unauthorized");
     const parsed = TelemetryEnvelope.safeParse(request.body);
@@ -89,5 +89,11 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
     } finally {
       client.release(discard);
     }
+  };
+  let inflight = 0;
+  app.post("/ingest/v1", { bodyLimit: 128 * 1024 }, async (request, reply) => {
+    if (inflight >= maxInflight) return reply.code(503).header("retry-after", "1").send({ error: { code: "busy", message: "Retry this packet later" } });
+    inflight++;
+    try { return await ingest(request, reply); } finally { inflight--; }
   });
 }

@@ -1,6 +1,6 @@
 # Albus Forge — The Cloud Platform
 
-> **Implementation boundary, 2026-09-13:** The initial M6a slice is on `m6/telemetry-ingest`, pending review/merge: an opt-in module in the existing gateway, shared wire contract, transactional PostgreSQL storage and local simulator. There is no new `cloudlink` deployment. The topology and retention/intelligence layers below are the target design; [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) identifies implemented behavior and remaining work, including the ADR 0003 production isolation decision.
+> **Implementation boundary, 2026-09-13:** M6a is on `m6/telemetry-ingest`, pending review/merge: standalone `apps/cloudlink`, shared wire contract, transactional PostgreSQL storage and local simulator. Gateway contains no ingestion code. Its separate Cloud Run/NEG/Armor infrastructure is owned by Claude session albusforge-44, following ADR 0003. [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) records runtime configuration, autoscaling/connection budgets, implemented behavior and remaining work.
 
 
 **Status:** draft, pre-M0. Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md); expands §7.6 (ingest) and §11.3 (intelligence), which the source spec covers in two sentences.

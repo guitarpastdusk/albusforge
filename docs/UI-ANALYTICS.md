@@ -104,10 +104,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-### 4.2 Gating Script Injection, Host Eligibility, and Lifecycle Disablement
+### 4.2 Gating Script Injection, Host Eligibility, and Synchronous Disablement
 A default GA4 snippet or standard `<GoogleAnalytics>` tag causes immediate data leakage across three vectors:
 1. **Tenant Subdomain Exposure:** ADR 0007 routes both the apex and tenant subdomains (`<tenant>.albusforge.ai`) to `web`. If a visitor hits a public path like `/docs` on `acme.albusforge.ai`, injecting the Google script would leak the tenant name via HTTP `Referer` headers and script request origins.
-2. **Persistent Script Lifecycle in SPAs:** Next.js caches injected `<Script>` tags in the document. Once loaded, unmounting React components does **not** unload `gtag.js` from `window`. GA continues listening to events.
+2. **Persistent Script Lifecycle in SPAs:** Next.js caches injected `<Script>` tags in the document. Once loaded, unmounting React components does **not** unload `gtag.js` from `window`. GA continues listening to events in memory.
 3. **Enhanced Measurement Automatic Events:** Even with `send_page_view: false`, GA4's default Enhanced Measurement fires on browser History API changes (`replaceState`, `pushState`), scroll events, engagement timing, and form submissions. When `BuildConversation.tsx` calls `history.replaceState` turning `/` into `/build/<UUID>`, or a user interacts on `/live/<device-UUID>`, GA automatically logs private URLs and engagement pings.
 
 To enforce an airtight boundary, **four coordinated controls are required**:
@@ -117,7 +117,10 @@ To enforce an airtight boundary, **four coordinated controls are required**:
    * The host is an approved public apex host (`isApprovedPublicHost(hostname)` is true: `albusforge.ai`, `staging.albusforge.ai`, or `localhost`). Any tenant subdomain (`*.albusforge.ai`) is strictly ineligible.
    * `hasAnalyticsConsent() === true`.
    * The initial route is a public path (`isPublicPath(pathname)`).
-3. **Programmatic Opt-Out (`window['ga-disable-<ID>']`):** When navigating from a public page into a private surface (`/build/*`, `/live/*`, `/projects/*`) or when consent is revoked, the client sets `window['ga-disable-' + measurementId] = true`. This is Google's documented programmatic kill-switch that completely prevents all hits, engagement timers, scrolls, and cookieless pings from being transmitted.
+3. **Synchronous Opt-Out Execution (`window['ga-disable-<ID>']`):** Setting `window['ga-disable-' + measurementId] = true` is Google's documented programmatic opt-out that immediately halts all hits, engagement timers, scrolls, and cookieless pings. Because React `useEffect` runs asynchronously after paint and can be deferred, the opt-out flag must be set **synchronously at the privacy boundary**:
+   * **On Consent Revocation:** The consent change subscriber sets `setTrackingDisabled(id, true)` **synchronously** before scheduling React state updates.
+   * **On Route Transitions:** Callsites invoking native history mutations (such as `BuildConversation.tsx:84` calling `history.replaceState` to `/build/<id>`) execute `setTrackingDisabled(id, true)` **synchronously before mutating history**.
+   * **During Render/Layout:** If rendering an ineligible target, `setTrackingDisabled(id, true)` runs synchronously in render/layout phase before child effects run. Re-enabling tracking (`setTrackingDisabled(id, false)`) only occurs after eligibility is established and reconciled.
 4. **Consent Mode v2 Defaults:** Default all consent states (`analytics_storage`, `ad_storage`, etc.) to `denied` prior to any library initialization.
 
 ```tsx
@@ -126,7 +129,7 @@ To enforce an airtight boundary, **four coordinated controls are required**:
 
 import Script from "next/script";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import {
   isEligibleTrackingTarget,
   hasAnalyticsConsent,
@@ -149,26 +152,33 @@ export function AnalyticsProvider({
   useEffect(() => {
     setHostname(window.location.hostname);
     setHasConsent(hasAnalyticsConsent());
+
     return subscribeToConsentChanges((consent) => {
+      // SYNCHRONOUS REVOCATION: If consent is revoked, disable GA synchronously
+      // before scheduling React state updates to prevent queued hits during render.
+      if (!consent && measurementId) {
+        setTrackingDisabled(measurementId, true);
+      }
       setHasConsent(consent);
     });
-  }, []);
+  }, [measurementId]);
 
   // Strict pre-gate: requires valid measurement ID, consent, approved apex host, and public route
   const isEligible = Boolean(
     measurementId && isEligibleTrackingTarget(hostname, pathname, hasConsent)
   );
 
-  useEffect(() => {
+  // Synchronous boundary enforcement: if ineligible, disable immediately before DOM paint
+  useLayoutEffect(() => {
     if (!measurementId) return;
 
-    if (isEligible) {
+    if (!isEligible) {
+      // Synchronously halt GA before child effects or interactions execute
+      setTrackingDisabled(measurementId, true);
+    } else {
       // Re-enable tracking and record sanitized virtual pageview
       setTrackingDisabled(measurementId, false);
       trackSanitizedPageView(measurementId, pathname);
-    } else {
-      // Hard disable GA4: halts all hits, engagement timing, and background pings
-      setTrackingDisabled(measurementId, true);
     }
   }, [isEligible, measurementId, pathname]);
 
@@ -303,10 +313,10 @@ Before any analytics code reaches staging, the automated end-to-end test suite m
 |---|---|---|
 | **Direct Private Entry** | Cold load on `https://acme.albusforge.ai/live/dev_123` | `<Script>` not rendered; zero network calls to Google; `window.gtag` undefined; tenant slug and device UUID absent from all headers. |
 | **Consented Tenant Public Route** | Cold load on `https://acme.albusforge.ai/docs` with consent active | Host fails `isApprovedPublicHost`; zero scripts mounted; zero network requests to Google (guards against tenant header exposure on shared routing). |
-| **Public-to-Private SPA Transition** | Consented visit on `/` $\rightarrow$ user enters prompt $\rightarrow$ `replaceState` to `/build/bld_456` | Initial `/` fires sanitized pageview; on navigation to `/build/*`, `window['ga-disable-<ID>'] = true` is immediately set; zero network hits or history events fired. |
-| **Private Surface Interaction Post-Load** | User navigates from `/` into `/live/dev_123` and scrolls/clicks forms | `ga-disable` remains true; Enhanced Measurement automatic scroll, click, and engagement pings emit zero outbound network traffic. |
-| **Private-to-Public Return** | User navigates from `/live` back to `/pricing` | `ga-disable` reset to false; pageview dispatched with apex URL `https://albusforge.ai/pricing` and scrubbed referrer `https://albusforge.ai/`. |
-| **In-Session Consent Revocation** | User toggles off analytics consent while on `/docs` | Consent subscriber immediately invokes `setTrackingDisabled(id, true)`; subsequent navigations or events are completely silenced without requiring a page reload. |
+| **Public-to-Private Transition (Synchronous Boundary)** | User enters prompt on `/` $\rightarrow$ callsite invokes `history.replaceState` to `/build/bld_456` | Callsite sets `ga-disable = true` synchronously before `replaceState`; zero network hits or history events fired across the transition. |
+| **Private Surface Interaction Post-Load** | User navigates from `/` into `/live/dev_123` and scrolls/clicks forms | `ga-disable` remains true via `useLayoutEffect`; Enhanced Measurement automatic scroll, click, and engagement pings emit zero outbound network traffic. |
+| **Private-to-Public Return** | User navigates from `/live` back to `/pricing` | `ga-disable` reset to false in layout reconciliation; pageview dispatched with apex URL `https://albusforge.ai/pricing` and scrubbed referrer `https://albusforge.ai/`. |
+| **Synchronous Consent Revocation** | User toggles off analytics consent while on `/docs` | Consent subscriber immediately invokes `setTrackingDisabled(id, true)` synchronously inside callback; asserting `window['ga-disable-<ID>'] === true` passes before React effects flush; subsequent calls emit zero hits. |
 
 ---
 
@@ -326,7 +336,7 @@ Before any analytics code reaches staging, the automated end-to-end test suite m
    * Implement `<AnalyticsProvider>` reading server runtime `process.env.GA_MEASUREMENT_ID` to preserve [ADR 0005](adr/0005-ci-owns-images-terraform-owns-shape.md).
    * Disable GA4 Enhanced Measurement history-change tracking in stream settings.
    * Gate `<Script>` DOM injection behind `isEligibleTrackingTarget(hostname, pathname, hasConsent)`.
-   * Enforce `window['ga-disable-<ID>'] = true` whenever crossing into private surfaces or on consent revocation.
+   * Enforce synchronous opt-out (`window['ga-disable-<ID>'] = true`) via `useLayoutEffect`, route transition callsite hooks, and synchronous consent revocation callback execution.
    * Bind `GA_MEASUREMENT_ID` via Terraform in `infra/env/apps.tf` for production only.
 
 2. **Phase 2 — Server-Side & First-Party Analytics (Post-M2):**

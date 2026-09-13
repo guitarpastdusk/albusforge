@@ -489,6 +489,8 @@ The web portal is a client of this contract and adds no API of its own. Its rout
 
 **Build-event authorization snapshots:** each gateway SSE poll resolves the session and tenant membership, checks build ownership, and reads state/messages inside one short PostgreSQL `REPEATABLE READ READ ONLY` transaction. It commits before writing events or waiting for socket backpressure. An admitted batch may finish after access is revoked; messages committed after that snapshot cannot enter it, and the next poll closes after revocation, expiry, membership removal or ownership loss. The poll owns its lease explicitly from BEGIN through bounded cleanup, handles checked-out socket errors, and discards uncertain connections; no stream-lifetime transaction or extra pool is introduced. See [`BUILD-EVENT-SECURITY.md`](BUILD-EVENT-SECURITY.md).
 
+**Email-code recovery UI:** signup/signin support changing email without dropping the guarded destination, local 30-second resend pacing, and separately tracked request/verify cooldowns derived from sanitized backend `Retry-After`. Local pacing does not block verification or sending to an edited address; backend limits persist through email changes because they can be per IP. Wrong/expired/exhausted codes remain intentionally indistinguishable. Delivery/network failures preserve input and offer retry; signup success no longer asserts a specific saved build. See [`AUTH-RECOVERY-UI.md`](AUTH-RECOVERY-UI.md).
+
 ### 6.1 Edge and service-to-service auth
 
 - Global External HTTPS LB → serverless NEG → gateway, with Cloud Armor rate-limit rules. The in-app rate-limit plugin stays as defense in depth.

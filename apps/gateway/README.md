@@ -2,7 +2,7 @@
 
 The API: Fastify and zod, TypeScript. Deployed as the Cloud Run service `gateway`, which the load balancer sends `/v1` and `/v1/*` to on every host ([ADR 0007](../../docs/adr/0007-portal-routing.md)). Response shapes come from [`@albusforge/schema`](../../packages/schema/), and every response is validated against them on the way out. Data comes from [`@albusforge/db`](../../packages/db/).
 
-M1 is a skeleton: health checks and the parts registry.
+M1 added health checks and the parts registry. M2 adds the anonymous chat: start a build from an ask, talk to intake, and stream replies.
 
 ## Routes
 
@@ -12,7 +12,12 @@ M1 is a skeleton: health checks and the parts registry.
 | `GET /readyz` | `200` when `SELECT 1` answers within 2 s, otherwise `503` |
 | `GET /v1/parts?status=&category=` | `PartList`: the highest SemVer version of each part among versions whose status matches, sorted by id, without blocks |
 | `GET /v1/parts/:id?status=` | `PartDetail`: every block of that version, or `404` |
-| any other `/v1` path or method | `501 {"error":{"code":"NOT_IMPLEMENTED",…}}` |
+| `POST /v1/builds` | `{ ask_text, client_message_id? }` → `201 CreatedBuild` (below). Sets the anonymous owner cookie when the request has no valid one |
+| `GET /v1/builds/:id` | `BuildDetail` with `status`, `spec_version`, `spec` and `candidate_parts` |
+| `GET /v1/builds/:id/messages` | `MessageList`, oldest first |
+| `POST /v1/builds/:id/messages` | `{ text, client_message_id }` → `202 { message }`; `200 { message }` for a repeated `client_message_id` |
+| `GET /v1/builds/:id/events` | `text/event-stream`: `message.created`, `build.updated` |
+| `GET /v1/builds` and any other `/v1` path or method | `501 {"error":{"code":"NOT_IMPLEMENTED",…}}` |
 | anything else | `404 {"error":{"code":"NOT_FOUND",…}}` |
 
 `status` is comma-separated or repeated (`?status=active,draft`) and defaults to every status except `retired`. The filter applies before "latest": with `?status=active`, a part whose newest version is a draft shows its newest active version. An unknown query parameter, status or category is a `400` with `details`.
@@ -21,7 +26,57 @@ Every error, including the 501 and 404, uses the API error shape `{ error: { cod
 
 Reads use the registry's SemVer comparator (`@albusforge/registry/semver`), not string order, so `1.10.0` beats `1.9.0` and a release beats its pre-release.
 
-The SSR contract in ADR 0007 (`X-Albus-Internal-Auth` and the forwarded host and client IP) isn't implemented yet: none of these routes depend on the tenant or the client IP. It arrives with the first route that does.
+The SSR contract in ADR 0007 (`X-Albus-Internal-Auth` and the forwarded host and client IP) isn't implemented yet. Nothing depends on the tenant yet, and the chat rate limits key on the anonymous owner, not the client IP.
+
+## Builds and chat (M2)
+
+### Ownership
+
+`POST /v1/builds` without a well-formed `__Host-albus_anon` cookie creates a random 32-byte token and sets `__Host-albus_anon=<token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`. The build stores `anon_owner_hash = sha256(token)` as hex. The token is never stored or logged. A valid cookie is reused, so one browser's builds share a hash.
+
+Every other build route loads the build only when it is unclaimed (`tenant_id` null) and its hash matches the cookie's. Anything else is a `404 NOT_FOUND`, never a 403: no cookie, someone else's build, a claimed build, an unknown or malformed id. So ids can't be probed. Claimed builds and sessions arrive with sign-in ([ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md), [0009](../../docs/adr/0009-tenant-created-at-sign-up.md)).
+
+SSR server actions call gateway on the visitor's behalf, so web has to relay the `Set-Cookie` to the browser and forward the cookie on later calls (ADR 0007).
+
+### Shapes
+
+- `CreatedBuild` = `BuildDetail` plus `build_id` (the same as `id`, kept for `CreateBuildResponse` readers) and a required `status`. A new build is `status: "asking"`, `spec: null`, `spec_version: null`, `candidate_parts: []`, `display_status: "designing"`, `device_count: 0`, `ready: null`. `name` is the ask's first line, cut to 60 characters; `description` is the ask.
+- `BuildDetail.spec` is the latest `builds.specs.data`, passed through as intake wrote it. `spec_version` is its version.
+- `BuildDetail.candidate_parts` is **a capability match, not a solved plan**. It lists the registry parts whose `software.capabilities` intersect the latest spec's `capabilities`, each with its sorted `matched_capabilities`, sorted by id. No wiring, power, conflict or quantity check has run; M3's matcher replaces it. Only `active` parts are considered unless `REGISTRY_INCLUDE_DRAFTS=true` (every committed part is a draft today). Gateway reads `capabilities` through a small local reader (`src/candidates.ts`) until `Spec` lands in `@albusforge/schema` with m2/intake.
+- `ChatMessage` = `{ id, role, text, created_at, client_message_id }`.
+
+### Turns
+
+After storing the first message (`POST /v1/builds`) or a new user message, gateway answers the client and then calls intake in the background: `POST {INTAKE_URL}/v1/turns { build_id }`. Intake writes the assistant message, spec versions, build status and `llm_calls` itself. Gateway runs with CPU always allocated, so the call outlives the response.
+
+- Each call has a 50 s timeout; intake's own deadline is 45 s.
+- A failure (non-2xx, timeout, network) logs `intake turn failed` at WARNING and is not retried. The next user message, or a manual retry, starts a new turn, and intake is idempotent. Nothing from a background turn can crash the process.
+- One turn per build runs at a time per instance. A trigger that arrives mid-turn queues exactly one more run.
+- `INTAKE_AUTH=google` sends a Google ID token for audience `INTAKE_URL`, taken from the metadata server through `google-auth-library`'s `IdTokenClient`, which caches it until shortly before expiry. `INTAKE_AUTH=none` sends no `Authorization` header, for local runs and tests.
+- With `INTAKE_URL` unset, messages are still stored, and each turn logs a WARNING instead of running.
+
+### Messages
+
+- `client_message_id` (a UUID) is required. A repeat for the same build returns the stored message with `200` and starts no turn, including when two requests race on the unique constraint.
+- `409 TURN_IN_PROGRESS` (`details: { pending_message_id, retry_after_s }`) when the build's newest message is a user message less than 60 s old, by the database clock. After 60 s a new message is accepted, so a lost turn can be recovered. The portal's "Check for a reply" refetches messages and never resends.
+- On `POST /v1/builds`, a `client_message_id` sent with an existing cookie returns the build already created from it (`200`).
+
+### Events
+
+`GET /v1/builds/:id/events` polls Postgres every second; there's no Redis yet.
+
+- On every connect: one `build.updated` `{ status, spec_version }`. It is sent again whenever either changes.
+- `message.created` `{ message }` for each message after `Last-Event-ID`, oldest first. Without a valid `Last-Event-ID` the whole transcript is replayed, so clients dedupe by message id.
+- **Event ids** are message cursors, `<created_at in integer microseconds since the Unix epoch>.<message uuid>`, ordered like `(created_at, id)`. Treat them as opaque. A `build.updated` repeats the latest cursor sent, so it never moves the resume position.
+- Each poll re-reads a 5 s lookback window and skips messages this connection has already sent. That catches a message whose transaction committed after a later one was delivered. Across a reconnect only messages strictly after the cursor are sent, so a `GET …/messages` after reconnecting stays the source of truth.
+- A `: ping` comment every 15 s and `retry: 3000`. The stream ends after 10 minutes and the client reconnects with `Last-Event-ID`. Shutdown ends every open stream first.
+- A failed poll logs `build events poll failed` at WARNING and ends the stream.
+
+### Rate limits
+
+These are held in memory per instance, keyed by the anonymous owner hash: 10 new builds an hour and 30 messages in 10 minutes. Beyond that: `429 RATE_LIMITED` with `Retry-After` and `details.retry_after_s`. They are **defence in depth behind Cloud Armor**. Each instance counts separately and a restart forgets. A replayed `client_message_id` doesn't count.
+
+A request without a cookie always gets a fresh hash, so these limits don't bound cookie-less build creation. Only Cloud Armor's per-IP rule does that until the SSR contract gives gateway a trustworthy client IP.
 
 ## Run it
 
@@ -34,8 +89,11 @@ DB_HOST=localhost DB_NAME=albus DB_USER=albus_app DB_PASSWORD=albus_app DB_SSL=d
   pnpm --filter @albusforge/registry load
 
 DB_HOST=localhost DB_NAME=albus DB_USER=albus_app DB_PASSWORD=albus_app DB_SSL=disable \
+INTAKE_URL=http://localhost:8081 INTAKE_AUTH=none REGISTRY_INCLUDE_DRAFTS=true \
   pnpm --filter gateway dev          # http://localhost:8080/v1/parts
 ```
+
+Browsers only send `__Host-` cookies over HTTPS, but curl doesn't enforce that locally.
 
 ## Environment
 
@@ -47,6 +105,11 @@ DB_HOST=localhost DB_NAME=albus DB_USER=albus_app DB_PASSWORD=albus_app DB_SSL=d
 | `DB_CONNECT_TIMEOUT_MS` | `5000` | connecting a database client, or waiting for a free one when the pool (5) is full |
 | `DB_QUERY_TIMEOUT_MS` | `10000` | server-side `statement_timeout`. The client also gives up on a response that hasn't arrived 1 s after this |
 | `DB_IDLE_TIMEOUT_MS` | `30000` | an idle pooled client is closed |
+| `INTAKE_URL` | unset | intake's `run.app` URL (internal ingress, reached over direct VPC egress). Unset: messages are stored, turns are skipped with a WARNING |
+| `INTAKE_AUTH` | `google` | `google`: an ID token for audience `INTAKE_URL` from the metadata server. `none`: no `Authorization` header (local, tests) |
+| `REGISTRY_INCLUDE_DRAFTS` | `false` | `true`: `candidate_parts` considers draft parts as well as active ones |
+
+An empty variable counts as unset.
 
 ### Database timeouts
 
@@ -58,6 +121,8 @@ Every database wait is bounded, so a stalled database can't hold the pool:
 
 pg-pool destroys any client whose query failed rather than returning it to the pool, so a timed-out connection is never reused. Each of these failures, and a refused or dropped connection, answers `503 {"error":{"code":"UNAVAILABLE",…}}` and logs one `database unavailable` WARNING with the pg error. The log leaves out Drizzle's wrapper, which carries the SQL and its parameters. `timeouts.db.test.ts` checks all three cases, and that the pool serves requests again afterwards.
 
+Each open event stream runs two short queries a second against the 5-client pool.
+
 Terraform also sets `PUBLIC_DOMAIN` and `SSR_SERVICE_ACCOUNT`, for the SSR contract; nothing reads them yet.
 
 ## Logs
@@ -66,21 +131,30 @@ One JSON object per line on stdout, in the shape Cloud Logging parses, with the 
 
 - One `request completed` line per request: `requestId`, `method`, `route` (the pattern), `path` (no query string), `status`, `durationMs`. Successful health checks aren't logged.
 - `request failed` at `ERROR` for every 500, with the serialized error.
+- `intake turn completed` (INFO) or `intake turn failed` (WARNING), with `buildId`, `requestId`, `durationMs` and, on failure, `intakeStatus`.
 - Request ids are always generated (UUID) and returned as `X-Request-Id`; an incoming `X-Request-Id` is ignored.
-- Never logged: headers, cookies, query values, bodies, `DB_PASSWORD`.
+- Never logged: headers, cookies (including the anonymous owner token), query values, bodies, message text, `DB_PASSWORD`.
 
 ## Shutdown
 
-On `SIGTERM` or `SIGINT` the server stops accepting connections, finishes in-flight requests, closes the database pool and exits. If that takes more than 8 s (Cloud Run allows 10), it exits with status 1.
+On `SIGTERM` or `SIGINT` the server ends open event streams, stops accepting connections, finishes in-flight requests, closes the database pool and exits. If that takes more than 8 s (Cloud Run allows 10), it exits with status 1. A background intake turn still running is abandoned; the next message starts it again.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `src/server.ts` | the process: config, pool, listen, signals |
-| `src/app.ts` | `buildApp`: hooks, error and not-found handlers, routes |
+| `src/server.ts` | the process: config, pool, intake client, listen, signals |
+| `src/app.ts` | `buildApp`: hooks, error and not-found handlers, health and parts routes |
+| `src/build-routes.ts` | the build, message and event routes: ownership, idempotency, 409, rate limits |
+| `src/chat-store.ts` | `ChatStore` over `builds.builds`, `build_messages` and `specs`; message cursors |
+| `src/sse.ts` | the polling event stream |
+| `src/intake.ts` | intake HTTP client, ID token auth, background turn scheduler |
+| `src/candidates.ts` | capability matching and the local spec reader |
+| `src/owner.ts` | the anonymous owner cookie and its hash |
+| `src/rate-limit.ts` | in-memory sliding-window limiter |
+| `src/http.ts` | `HttpError`, the error shape, request parsing |
 | `src/parts.ts` | `PartsStore` over `registry.parts`, and `latestPerId` |
-| `src/config.ts` | `PORT` and the database env |
+| `src/config.ts` | `PORT`, the database, intake and registry env |
 | `src/log.ts` | structured logs and trace parsing |
 | `Dockerfile` | production image; build from the **repo root** (`docker build -f apps/gateway/Dockerfile .`) |
 
@@ -88,11 +162,13 @@ On `SIGTERM` or `SIGINT` the server stops accepting connections, finishes in-fli
 
 ## Tests
 
-`pnpm --filter gateway test`. Needs Docker, as for packages/db (see [its README](../../packages/db/README.md#tests) for Colima).
+`pnpm --filter gateway test`. Needs Docker, as for packages/db (see [its README](../../packages/db/README.md#tests) for Colima). No test reaches Google or Anthropic.
 
 - `app.test.ts`: every route against an in-memory store: health, 501 and 404 fallbacks, query validation, the error shape, and what's logged
 - `routes.db.test.ts`: starts `postgres:16-alpine`, migrates with `@albusforge/db`, loads the committed registry with the registry loader as `albus_app`, adds extra versions, and checks SemVer ordering and the status and category filters through the real store
-- `parts.test.ts`, `log.test.ts`, `config.test.ts`: unit tests
+- `chat.db.test.ts`: the build routes against Postgres, with a stub intake server on localhost. It covers cookie issuance and the stored hash, 404s for non-owners on every route, idempotent builds and messages, 409, rate limits, candidate parts with drafts on and off, the background turn and a failing intake (WARNING, still serving), and SSE (a message and a status change after connect, heartbeats, resume from `Last-Event-ID`, the time limit)
+- `intake.test.ts`: the HTTP client against a stub server, ID token auth with a fake `GoogleAuth`, and the scheduler's logging, timeout and coalescing
+- `parts.test.ts`, `log.test.ts`, `config.test.ts`, `owner.test.ts`, `rate-limit.test.ts`, `candidates.test.ts`: unit tests
 
 ## Deploy
 

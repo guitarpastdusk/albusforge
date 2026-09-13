@@ -9,7 +9,24 @@ describe("configFromEnv", () => {
       port: 8080,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
+      intake: { url: null, auth: "google" },
+      registryIncludeDrafts: false,
     });
+  });
+
+  it("reads the intake URL, its auth mode and REGISTRY_INCLUDE_DRAFTS", () => {
+    const config = configFromEnv({ ...DB, INTAKE_URL: "https://intake-abc-uc.a.run.app", INTAKE_AUTH: "none", REGISTRY_INCLUDE_DRAFTS: "true" });
+    expect(config.intake).toEqual({ url: "https://intake-abc-uc.a.run.app", auth: "none" });
+    expect(config.registryIncludeDrafts).toBe(true);
+    expect(configFromEnv({ ...DB, INTAKE_URL: "" }).intake.url).toBeNull();
+  });
+
+  it.each([
+    ["INTAKE_URL", "intake.internal"],
+    ["INTAKE_AUTH", "basic"],
+    ["REGISTRY_INCLUDE_DRAFTS", "yes"],
+  ])("rejects a bad %s", (name, value) => {
+    expect(() => configFromEnv({ ...DB, [name]: value })).toThrow(new RegExp(name));
   });
 
   it("reads PORT and the timeouts", () => {

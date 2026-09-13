@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  type ApiError,
   DEFAULT_PART_STATUSES,
   PartDetail,
   PartList,
@@ -10,11 +9,14 @@ import {
   routes,
   summarizePart,
 } from "@albusforge/schema";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import type { z } from "zod";
+import Fastify, { type FastifyInstance } from "fastify";
+import { type ChatOptions, registerBuildRoutes } from "./build-routes";
 import { isDatabaseUnavailable } from "./db-errors";
+import { HttpError, parse, pathOf, sendError } from "./http";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
+
+export { HttpError } from "./http";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -29,36 +31,14 @@ export interface AppOptions {
   log?: Log;
   /** How long /readyz waits for the ping. */
   readyTimeoutMs?: number;
-}
-
-/** A failure the client caused or should know about, sent as the API error shape. */
-export class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly code: string,
-    message: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
-    this.name = "HttpError";
-  }
+  /**
+   * The build and chat routes. server.ts always passes it; tests that only
+   * exercise health and parts leave it out, and the build routes stay 501.
+   */
+  chat?: ChatOptions;
 }
 
 const HEALTH_PATHS = new Set(["/healthz", "/readyz"]);
-
-function sendError(reply: FastifyReply, status: number, code: string, message: string, details?: unknown) {
-  const body: ApiError = { error: { code, message, ...(details === undefined ? {} : { details }) } };
-  return reply.code(status).type("application/json; charset=utf-8").send(body);
-}
-
-function parse<T extends z.ZodType>(schema: T, value: unknown, what: string): z.infer<T> {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    const details = result.error.issues.map((issue) => ({ path: issue.path.map(String).join("."), message: issue.message }));
-    throw new HttpError(400, "BAD_REQUEST", `Invalid ${what}`, details);
-  }
-  return result.data;
-}
 
 /** The innermost `cause`. */
 function rootCause(error: unknown): unknown {
@@ -66,9 +46,6 @@ function rootCause(error: unknown): unknown {
   for (let depth = 0; current instanceof Error && current.cause !== undefined && depth < 5; depth++) current = current.cause;
   return current;
 }
-
-/** The path without its query string, so logs never carry query values. */
-const pathOf = (url: string) => url.split("?", 1)[0] ?? url;
 
 function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
@@ -78,7 +55,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000 }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -93,7 +70,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   });
 
   // One line per request: method, route pattern, path, status, duration. No
-  // headers, cookies, query values or bodies.
+  // headers, cookies, query values or bodies. An event stream logs when it ends.
   app.addHook("onResponse", async (request, reply) => {
     const path = pathOf(request.url);
     if (HEALTH_PATHS.has(path) && reply.statusCode < 500) return;
@@ -113,7 +90,10 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   });
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof HttpError) return sendError(reply, error.statusCode, error.code, error.message, error.details);
+    if (error instanceof HttpError) {
+      if (error.headers) reply.headers(error.headers);
+      return sendError(reply, error.statusCode, error.code, error.message, error.details);
+    }
 
     // Fastify's own 4xx errors: malformed URL, unsupported content type, body too large.
     const status = (error as { statusCode?: number }).statusCode;
@@ -180,6 +160,8 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     if (!part) throw new HttpError(404, "NOT_FOUND", `No part ${id} with status ${statuses.join(" or ")}`);
     return PartDetail.parse({ part });
   });
+
+  if (chat) registerBuildRoutes(app, { parts, log, chat });
 
   return app;
 }

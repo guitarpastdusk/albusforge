@@ -1,6 +1,8 @@
 import {
+  AskResponse,
   BuildDetail,
   BuildList,
+  CreateBuildResponse,
   DeviceDashboard,
   DeviceTile,
   Fleet,
@@ -11,14 +13,19 @@ import {
   routes,
   Showcase,
   Usage,
+  VerifyCodeResponse,
 } from "@albusforge/schema";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { ApiRequestError, request } from "@/lib/api/core";
 import * as data from "./data";
 import { mockTransport } from "./index";
 
 const get = <S extends Parameters<typeof request>[3]>(path: string, schema: S) =>
   request(mockTransport, "GET", path, schema);
+
+const post = <S extends Parameters<typeof request>[3]>(path: string, schema: S, body: unknown) =>
+  request(mockTransport, "POST", path, schema, body);
 
 describe("every mock parses against the schema", () => {
   it("session", async () => {
@@ -97,5 +104,77 @@ describe("mock transport errors", () => {
       status: 501,
       code: "no_mock",
     });
+  });
+});
+
+describe("mock conversation, device chat and sign-in", () => {
+  it("a new build follows the prototype's script and is ready after the third exchange", async () => {
+    const { build_id } = await post(routes.builds.create.path(), CreateBuildResponse, {
+      ask_text: "A soil moisture sensor for my greenhouse",
+    });
+
+    let transcript = await get(routes.builds.messages.path(build_id), MessageList);
+    expect(transcript.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(transcript.messages[0]!.text).toBe("A soil moisture sensor for my greenhouse");
+    expect(transcript.messages[1]!.text).toMatch(/^Good brief\. Two quick questions:/);
+    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toBeNull();
+
+    await post(routes.builds.postMessage.path(build_id), z.unknown(), { text: "One bed, and we have Wi-Fi" });
+    transcript = await get(routes.builds.messages.path(build_id), MessageList);
+    expect(transcript.messages[3]!.text).toMatch(/^Got it\. Here's my plan:/);
+    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toBeNull();
+
+    await post(routes.builds.postMessage.path(build_id), z.unknown(), { text: "go" });
+    transcript = await get(routes.builds.messages.path(build_id), MessageList);
+    expect(transcript.messages).toHaveLength(6);
+    expect(transcript.messages[5]!.text).toMatch(/^Done — design finalized below\./);
+    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toMatchObject({
+      name: "Greenhouse soil monitor",
+      est_price_usd: 34,
+      parts: expect.arrayContaining([expect.objectContaining({ label: "ESP32-WROOM" })]),
+    });
+  });
+
+  it("posting to an unknown build is a 404; an empty message is a 400", async () => {
+    await expect(post(routes.builds.postMessage.path("nope"), z.unknown(), { text: "hi" })).rejects.toMatchObject({ status: 404 });
+    await expect(post(routes.builds.create.path(), CreateBuildResponse, { ask_text: " " })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("device ask answers with the scripted reply and the query it ran", async () => {
+    const answer = await post(routes.devices.ask.path("bed-a"), AskResponse, { text: "How dry is it getting?" });
+    expect(answer.message).toMatchObject({ role: "assistant", text: data.DEVICE_REPLY });
+    expect(answer.queries[0]).toMatchObject({ tool: "compare_to_baseline" });
+    await expect(post(routes.devices.ask.path("nope"), AskResponse, { text: "hi" })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("requesting a code is a 204; any 6 digits verify; anything else is a 400", async () => {
+    await expect(post(routes.auth.requestCode.path(), z.unknown(), { email: "you@example.com" })).resolves.toBeNull();
+    await expect(post(routes.auth.verify.path(), VerifyCodeResponse, { email: "you@example.com", code: "123456" })).resolves.toMatchObject({
+      user: { email: "you@example.com" },
+    });
+    await expect(post(routes.auth.verify.path(), VerifyCodeResponse, { email: "you@example.com", code: "12345" })).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it("bed-a has three closed-loop actions (on, on, off) and a last action; bed-c has none", async () => {
+    const bedA = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(bedA.actions?.map((a) => [a.kind, a.enabled])).toEqual([
+      ["SERVO", true],
+      ["API", true],
+      ["ALERT", false],
+    ]);
+    expect(bedA.last_action?.summary).toBe("valve opened");
+    expect(bedA.greeting).toMatch(/^Hi — I'm Bed A's soil probe\./);
+
+    const bedC = await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard);
+    expect(bedC.actions).toBeUndefined();
+  });
+
+  it("the marketplace has twelve builds, seven of them industrial", async () => {
+    const { listings } = await get(routes.listings.list.path(), ListingList);
+    expect(listings).toHaveLength(12);
+    expect(listings.filter((l) => l.category === "industrial")).toHaveLength(7);
+    expect(listings.map((l) => l.name)).toEqual(expect.arrayContaining(["The Vibration Prophet", "The Air Marshal"]));
   });
 });

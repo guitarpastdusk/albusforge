@@ -25,9 +25,15 @@ export const LineChartWidget = WidgetBase.extend({
   threshold: z.object({ value: z.number(), label: z.string() }).nullable(),
 });
 
+/** Emphasis for a stat tile's value or caption; `success` is the design's green. */
+export const StatTone = z.enum(["default", "success"]);
+export type StatTone = z.infer<typeof StatTone>;
+
 export const StatWidget = WidgetBase.extend({
   type: z.literal("stat"),
   caption: z.string().nullable(),
+  value_tone: StatTone.optional(),
+  caption_tone: StatTone.optional(),
 });
 
 /**
@@ -54,6 +60,26 @@ export const LatestReading = z.object({
   t: Timestamp,
 });
 
+export const DeviceActionKind = z.enum(["SERVO", "API", "ALERT"]);
+export type DeviceActionKind = z.infer<typeof DeviceActionKind>;
+
+/**
+ * One closed-loop rule: a condition on the device's readings and what it does
+ * — drive an actuator (SERVO), call an integration (API), or hand over to a
+ * human (ALERT).
+ *
+ * TODO(api): read-only today. There is no route to create, enable or disable
+ * an action; PORTAL.md §3 needs one (e.g. PATCH /v1/devices/:id/actions/:actionId).
+ */
+export const DeviceAction = z.object({
+  id: Id,
+  kind: DeviceActionKind,
+  rule: z.string(),
+  via: z.string(),
+  enabled: z.boolean(),
+});
+export type DeviceAction = z.infer<typeof DeviceAction>;
+
 export const DeviceDashboard = z.object({
   device: z.object({
     id: Id,
@@ -73,6 +99,12 @@ export const DeviceDashboard = z.object({
   latest: z.record(z.string(), LatestReading),
   /** Empty for a never-seen device; a series with no points hasn't reported in the window. */
   series: z.array(Series),
+  /** Opening line of the device chat, written by the Ask service. The portal falls back to a generic line. */
+  greeting: z.string().nullable().optional(),
+  /** Closed-loop rules for this device. Absent when the device has none. */
+  actions: z.array(DeviceAction).optional(),
+  /** The most recent action a rule fired. */
+  last_action: z.object({ summary: z.string(), at: Timestamp }).nullable().optional(),
 });
 export type DeviceDashboard = z.infer<typeof DeviceDashboard>;
 

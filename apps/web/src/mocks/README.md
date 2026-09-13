@@ -2,8 +2,8 @@
 
 Mock API responses, used when `API_MODE=mock` — set for `next dev` by `apps/web/.env.development`. The server refuses mock mode on Cloud Run.
 
-- `data.ts` — the design prototype's data shaped to `@albusforge/schema`, with timestamps relative to the call.
-- `index.ts` — `mockTransport`: matches a request against the route patterns in `@albusforge/schema` and answers from `data.ts`; unknown ids get the real 404 error shape, unmocked routes get 501.
+- `data.ts` — the design prototype's data shaped to `@albusforge/schema`, with timestamps relative to the call. It also keeps landing-chat conversations in memory (bounded), answering with the prototype's three scripted replies; the device-ready card appears after the third exchange. Any 6-digit code verifies.
+- `index.ts` — `mockTransport`: matches a request against the route patterns in `@albusforge/schema` and answers from `data.ts`; unknown ids get the real 404 error shape, unmocked routes get 501. Chat and device replies wait the prototype's 900 ms / 800 ms (0 under vitest).
 - `mocks.test.ts` — every mock goes through the transport and is parsed by its schema, so a mock can't drift from the contract.
 
 Connecting a screen to gateway means nothing here changes — set `API_MODE=live`.

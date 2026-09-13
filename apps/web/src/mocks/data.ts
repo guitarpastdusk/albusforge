@@ -1,9 +1,13 @@
 import type {
+  AskResponse,
   BuildDetail,
   BuildList,
   BuildSummary,
   ChatMessage,
+  CreateBuildResponse,
+  DeviceAction,
   DeviceDashboard,
+  DeviceReadyCard,
   Fleet,
   Listing,
   ListingList,
@@ -40,6 +44,12 @@ export function me(): Me {
 }
 
 // --- builds -------------------------------------------------------------------
+
+/** POST /v1/auth/verify in mock mode: any 6 digits sign in as the demo user, under the given email. */
+export function verifiedSession(email: string): Me {
+  const session = me();
+  return { ...session, user: { ...session.user, email } };
+}
 
 const SUMMARIES: Array<Omit<BuildSummary, "updated_at"> & { updated_ago: number }> = [
   {
@@ -81,6 +91,9 @@ export function buildList(): BuildList {
 }
 
 export function buildDetail(id: string): BuildDetail | null {
+  const conversation = conversations.get(id);
+  if (conversation) return conversationDetail(id, conversation);
+
   if (id === ANONYMOUS_BUILD_ID) {
     return {
       id,
@@ -98,20 +111,7 @@ export function buildDetail(id: string): BuildDetail | null {
 
   return {
     ...build,
-    ready:
-      id === "greenhouse-soil"
-        ? {
-            name: "Greenhouse soil monitor",
-            est_price_usd: 34,
-            fulfillment_note: "ships in kit form",
-            parts: [
-              { part_id: "esp32-wroom", label: "ESP32-WROOM", accent: "peach" },
-              { part_id: "soil-capacitive", label: "Capacitive soil probe ×4", accent: "blue" },
-              { part_id: "solar-lipo", label: "Solar + LiPo", accent: "green" },
-              { part_id: "enclosure-ip65", label: "IP65 printed enclosure", accent: "violet" },
-            ],
-          }
-        : null,
+    ready: id === "greenhouse-soil" ? DESIGN_READY : null,
   };
 }
 
@@ -134,6 +134,8 @@ const GREENHOUSE_CONVERSATION: Array<[ChatMessage["role"], string]> = [
 ];
 
 export function messages(buildId: string): MessageList | null {
+  const conversation = conversations.get(buildId);
+  if (conversation) return { messages: [...conversation.messages] };
   if (!buildDetail(buildId)) return null;
   if (buildId !== "greenhouse-soil") return { messages: [] };
 
@@ -149,6 +151,89 @@ export function messages(buildId: string): MessageList | null {
 }
 
 // --- landing carousel ---------------------------------------------------------
+
+// --- build conversations (the landing chat) ------------------------------------
+
+const DESIGN_READY: DeviceReadyCard = {
+  name: "Greenhouse soil monitor",
+  est_price_usd: 34,
+  fulfillment_note: "ships in kit form",
+  parts: [
+    { part_id: "esp32-wroom", label: "ESP32-WROOM", accent: "peach" },
+    { part_id: "soil-capacitive", label: "Capacitive soil probe ×4", accent: "blue" },
+    { part_id: "solar-lipo", label: "Solar + LiPo", accent: "green" },
+    { part_id: "enclosure-ip65", label: "IP65 printed enclosure", accent: "violet" },
+  ],
+};
+
+interface Conversation {
+  messages: ChatMessage[];
+  replies: number;
+  updatedAt: number;
+}
+
+/** In-process, mock mode only. Bounded so a long-running dev server can't grow it forever. */
+const conversations = new Map<string, Conversation>();
+const MAX_CONVERSATIONS = 500;
+let conversationSeq = 0;
+
+/** The prototype's three scripted replies, in order; the last repeats. */
+const scriptedReplies = () =>
+  GREENHOUSE_CONVERSATION.filter(([role]) => role === "assistant").map(([, text]) => text);
+
+function appendMessage(conversation: Conversation, role: ChatMessage["role"], text: string): void {
+  conversation.messages.push({
+    id: `msg_${conversation.messages.length + 1}`,
+    role,
+    text,
+    created_at: new Date().toISOString(),
+  });
+  conversation.updatedAt = Date.now();
+}
+
+function appendReply(conversation: Conversation): void {
+  const replies = scriptedReplies();
+  appendMessage(conversation, "assistant", replies[Math.min(conversation.replies, replies.length - 1)]!);
+  conversation.replies += 1;
+}
+
+/** POST /v1/builds: the ask becomes the first message, and the first scripted reply follows. */
+export function createBuild(askText: string): CreateBuildResponse {
+  if (conversations.size >= MAX_CONVERSATIONS) {
+    const [oldest] = [...conversations.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+    if (oldest) conversations.delete(oldest[0]);
+  }
+  conversationSeq += 1;
+  const id = `bld_${Date.now().toString(36)}${conversationSeq}`;
+  const conversation: Conversation = { messages: [], replies: 0, updatedAt: Date.now() };
+  appendMessage(conversation, "user", askText);
+  appendReply(conversation);
+  conversations.set(id, conversation);
+  return { build_id: id, status: "designing" };
+}
+
+/** POST /v1/builds/:id/messages. False for an unknown build. */
+export function postBuildMessage(buildId: string, text: string): boolean {
+  const conversation = conversations.get(buildId);
+  if (!conversation) return false;
+  appendMessage(conversation, "user", text);
+  appendReply(conversation);
+  return true;
+}
+
+/** Ready after the third exchange, as in the prototype. */
+function conversationDetail(id: string, conversation: Conversation): BuildDetail {
+  const ready = conversation.replies >= 3;
+  return {
+    id,
+    name: ready ? DESIGN_READY.name : "New build",
+    description: conversation.messages[0]?.text ?? "",
+    display_status: "designing",
+    device_count: 0,
+    updated_at: new Date(conversation.updatedAt).toISOString(),
+    ready: ready ? DESIGN_READY : null,
+  };
+}
 
 export function showcase(): Showcase {
   return {
@@ -287,10 +372,10 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
     ],
     widgets: [
       { id: "w-soil", type: "line_chart", channel: "soil_vwc", window: "24h", threshold: { value: 22, label: "dry threshold · 22%" } },
-      { id: "w-battery", type: "stat", channel: "battery", caption: "solar charging" },
+      { id: "w-battery", type: "stat", channel: "battery", caption: "solar charging", caption_tone: "success" },
       { id: "w-rssi", type: "stat", channel: "rssi", caption: "Wi-Fi · strong" },
       { id: "w-uptime", type: "stat", channel: "uptime", caption: "since last patch" },
-      { id: "w-selftest", type: "stat", channel: "selftest", caption: "all 6 checks" },
+      { id: "w-selftest", type: "stat", channel: "selftest", caption: "all 6 checks", value_tone: "success" },
     ],
     latest: reported
       ? {
@@ -310,10 +395,47 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
           },
         ]
       : [],
+    greeting: !reported
+      ? `Hi — I'm ${device.name}. I haven't sent a first reading yet — once I'm powered on, ask me anything.`
+      : device.id === "bed-a"
+        ? BED_A_GREETING
+        : `Hi — I'm ${device.name}. Ask me anything about my readings.`,
+    ...(device.id === "bed-a" ? { actions: BED_A_ACTIONS, last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
   };
 }
 
 // --- marketplace --------------------------------------------------------------
+
+const BED_A_GREETING =
+  "Hi — I'm Bed A's soil probe. Moisture is 31.2% VWC, comfortably above your 22% dry threshold. Ask me anything.";
+
+const BED_A_ACTIONS: DeviceAction[] = [
+  { id: "act-irrigate", kind: "SERVO", rule: "Soil < 22% → open irrigation valve, 5 min", via: "micro-servo on GPIO 14 · max 3 cycles/day", enabled: true },
+  { id: "act-exhaust", kind: "API", rule: "Canopy > 30°C → start exhaust fan", via: "via smart plug API (Home Assistant)", enabled: true },
+  { id: "act-guardrail", kind: "ALERT", rule: "Still dry after 2 cycles → text me, pause watering", via: "guardrail — human takes over", enabled: false },
+];
+
+/** Yesterday at hh:mm, in the server's time zone (which also formats it). */
+function yesterdayAt(hours: number, minutes: number): string {
+  const at = new Date();
+  at.setDate(at.getDate() - 1);
+  at.setHours(hours, minutes, 0, 0);
+  return at.toISOString();
+}
+
+export const DEVICE_REPLY =
+  "Over the last 24h moisture dropped 4.1 points — normal evaporation for this heat. At the current rate you'll cross the 22% threshold in ~2 days. Want me to alert you at 24%?";
+
+/** POST /v1/devices/:id/ask: the prototype's scripted answer, with the query it would have run. */
+export function askDevice(deviceId: string): AskResponse | null {
+  if (!dashboard(deviceId)) return null;
+  return {
+    message: { id: `ask_${Date.now().toString(36)}`, role: "assistant", text: DEVICE_REPLY, created_at: new Date().toISOString() },
+    queries: [{ tool: "compare_to_baseline", input: { device_id: deviceId, channel: "soil_vwc", window: "24h" } }],
+  };
+}
+
+// --- marketplace listings -------------------------------------------------------
 
 const LISTINGS: Listing[] = [
   { id: "greenhouse-soil-monitor", name: "Greenhouse soil monitor", category: "garden", accent: "green", description: "Solar 4-probe moisture rig with dry-threshold alerts. The build this site was born from.", author: { handle: "maya" }, remix_count: 412 },
@@ -322,6 +444,12 @@ const LISTINGS: Listing[] = [
   { id: "beehive-scale-temp", name: "Beehive scale + temp", category: "garden", accent: "violet", description: "Weight trend spots swarms and honey flow; brood temp guards winter clusters.", author: { handle: "arvid" }, remix_count: 176 },
   { id: "sump-pump-failover", name: "Sump pump failover alarm", category: "home", accent: "blue", description: "Water level + current draw; screams before the basement floods, not after.", author: { handle: "june" }, remix_count: 154 },
   { id: "cold-room-logger", name: "Cold-room compliance logger", category: "industrial", accent: "peach", description: "Audit-grade temperature log with signed records and monthly PDF export.", author: { handle: "osei" }, remix_count: 97 },
+  { id: "the-vibration-prophet", name: "The Vibration Prophet", category: "industrial", accent: "violet", description: "ADXL355 + ESP32 learns each motor's signature and flags drift early. ~$51/machine.", author: { handle: "priya" }, remix_count: 88 },
+  { id: "the-thermal-watchman", name: "The Thermal Watchman", category: "industrial", accent: "peach", description: "MLX90640 heat map finds breaker-panel hot spots weeks before the fire. ~$90/panel.", author: { handle: "marco" }, remix_count: 76 },
+  { id: "the-cold-chain-witness", name: "The Cold Chain Witness", category: "industrial", accent: "blue", description: "SHT31 + GPS + LTE-M signed 2–8°C custody log, dock to dock. ~$84/pallet.", author: { handle: "lena" }, remix_count: 71 },
+  { id: "the-tank-teller", name: "The Tank Teller", category: "industrial", accent: "green", description: "Off-grid ultrasonic level over cellular; refill orders fire at threshold. ~$97/tank.", author: { handle: "sam" }, remix_count: 64 },
+  { id: "the-blind-corner-beacon", name: "The Blind Corner Beacon", category: "industrial", accent: "peach", description: "mmWave radar lights the floor before the forklift arrives. ~$46/corner.", author: { handle: "kai" }, remix_count: 59 },
+  { id: "the-air-marshal", name: "The Air Marshal", category: "industrial", accent: "green", description: "PMS5003 + SCD40 traffic-light air quality the whole shop can see. ~$68/zone.", author: { handle: "ines" }, remix_count: 52 },
 ];
 
 export function listingList(tags: string | null): ListingList {

@@ -19,7 +19,7 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
   - the two authentication cookies only, `__Host-albus_session` and `__Host-albus_anon` (§5), never the full `Cookie` header. `/build/:buildId` renders server-side for anonymous visitors, so the anonymous owner cookie has to be forwarded as well as the session cookie.
 
   Gateway trusts the two forwarded headers **only** when the token verifies: Google signature, `aud` equal to gateway's URL, `email` equal to `SSR_SERVICE_ACCOUNT`, `email_verified`, not expired. Otherwise it ignores them and uses the real `Host` and client IP. A forwarded host that is neither `PUBLIC_DOMAIN` nor `<valid slug>.PUBLIC_DOMAIN` is `400`. The load balancer strips all three headers from public requests as defense in depth; the token check is the actual control. Terraform sets `GATEWAY_INTERNAL_URL` and `PUBLIC_DOMAIN` on web, and `SSR_SERVICE_ACCOUNT` and `PUBLIC_DOMAIN` on gateway.
-- **Session cookies are host-only** (no `Domain` attribute), because `staging.albusforge.ai` sits under the prod apex. Signing in on a tenant subdomain is a redirect handoff from the apex.
+- **Both authentication cookies are host-only** (`__Host-` prefix, no `Domain` attribute), because `staging.albusforge.ai` sits under the prod apex. Signing in on a tenant subdomain is a redirect handoff from the apex.
 - Web and gateway share one per-IP Cloud Armor limit, and every static asset counts toward it. A cold page load is ~15–25 requests, which is comfortable at 600/min, but it is the first thing to check if real users see 429s before assets move behind a CDN backend bucket.
 
 ---

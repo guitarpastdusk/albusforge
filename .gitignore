@@ -15,3 +15,7 @@ next-env.d.ts
 .DS_Store
 npm-debug.log*
 pnpm-debug.log*
+
+# Agent instruction files that `next dev` writes into apps/web on every run.
+apps/web/AGENTS.md
+apps/web/CLAUDE.md

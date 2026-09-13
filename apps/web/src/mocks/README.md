@@ -10,6 +10,8 @@ Mock API responses, used when `API_MODE=mock` — set for `next dev` by `apps/we
 
 Connecting a screen to gateway means nothing here changes — set `API_MODE=live`.
 
+Mock conversations share one bounded store on `globalThis`, including their ID sequence. Next builds Server Functions/Server Components and route handlers into separate module graphs, so a module-local store would make the event route return 404 for a build that an action just created. This is single-process demo state, lost on restart; it is not shared between server processes. `data-sharing.test.ts` loads separate module instances and verifies that a delayed reply reaches the stream and a freshly loaded page still sees the same transcript and idempotency key.
+
 Mock responses carry the same cookies gateway sets — `__Host-albus_anon` on build creation, `__Host-albus_session` (and the anonymous cookie cleared) on verify — so mock mode exercises the Server Functions' cookie relay. The showcase and listings have no mock: they answer 501 like gateway does until those routes are built, so local dev shows the same example builds as staging and prod (`src/lib/example-builds.ts`).
 
 Sessions: mock verify issues `__Host-albus_session=mock-session.<base64url email>`; `mockSession(value)` is mock mode's GET /v1/me for it (anything else is logged out). Sign out clears it.

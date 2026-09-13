@@ -175,10 +175,18 @@ interface Conversation {
   updatedAt: number;
 }
 
-/** In-process, mock mode only. Bounded so a long-running dev server can't grow it forever. */
-const conversations = new Map<string, Conversation>();
+/**
+ * Mock-only process state. Next compiles actions/RSC and route handlers into
+ * separate module graphs: a module-local Map makes the SSE route return 404
+ * for builds created by an action. Share the store (and ID sequence) across
+ * those graphs. It remains bounded and is lost when this dev process exits.
+ */
+const mockProcess = globalThis as typeof globalThis & {
+  __albusforgeMockBuilds?: { conversations: Map<string, Conversation>; sequence: number };
+};
+const buildStore = (mockProcess.__albusforgeMockBuilds ??= { conversations: new Map<string, Conversation>(), sequence: 0 });
+const { conversations } = buildStore;
 const MAX_CONVERSATIONS = 500;
-let conversationSeq = 0;
 
 /** How long the scripted reply takes, so typing dots and the event stream show. Immediate under vitest. */
 const REPLY_DELAY_MS = process.env.NODE_ENV === "test" ? 0 : 1_500;
@@ -227,8 +235,8 @@ export function createBuild(askText: string, clientMessageId: string | null = nu
     const [oldest] = [...conversations.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
     if (oldest) conversations.delete(oldest[0]);
   }
-  conversationSeq += 1;
-  const id = `bld_${Date.now().toString(36)}${conversationSeq}`;
+  buildStore.sequence += 1;
+  const id = `bld_${Date.now().toString(36)}${buildStore.sequence}`;
   const conversation: Conversation = { messages: [], replies: 0, updatedAt: Date.now() };
   appendMessage(conversation, "user", askText, clientMessageId);
   conversations.set(id, conversation);

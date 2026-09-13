@@ -18,7 +18,7 @@ A code also works in cases a link does not: the email opened on a phone while th
 - **Sessions** are opaque random tokens, stored hashed in Postgres with an expiry, sent as an `httpOnly`, `Secure`, `SameSite=Lax`, **host-only** cookie ([0007](0007-portal-routing.md)). Each session carries `active_tenant_id`, and `parent_session_id` when it was created by the subdomain sign-in handoff. Sign-out revokes the whole session family ([0009](0009-tenant-created-at-sign-up.md)).
 - **Implemented in gateway** as a small auth plugin following the Lucia session guide, with `@oslojs` primitives for token generation and hashing. The tables (`users`, `sessions`, `email_codes`) live in `packages/db` like every other table.
 - A successful verify **claims anonymous builds** owned by the caller's anonymous owner cookie (PORTAL.md §5).
-- Routes: `POST /v1/auth/code`, `POST /v1/auth/verify`, `POST /v1/auth/signout`, `GET /v1/me`.
+- Routes: `POST /v1/auth/code`, `POST /v1/auth/verify`, `POST /v1/auth/signout`, `GET /v1/me`, `PUT /v1/me/active-tenant` ([0009](0009-tenant-created-at-sign-up.md)).
 
 ## Alternatives considered
 

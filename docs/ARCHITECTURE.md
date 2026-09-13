@@ -525,7 +525,7 @@ Three behaviors:
 1. **Capability coverage** — every `spec.sense`/`act` item maps to at least one part capability.
 2. **Brain compatibility** — all `electrical.requires` satisfied; I²C addresses unique; `conflicts` respected.
 3. **Electrical fit** — voltage windows overlap across the assembly; connector standards match.
-4. **Power** — `battery_capacity_mah / weighted_avg_current_ma × 24 ≥ target_life_days`, duty cycle derived from `interval_s`.
+4. **Power** — `usable_battery_capacity_mah / weighted_avg_source_current_ma / 24 ≥ target_life_days`, duty cycle derived from `interval_s` and measured active durations. Capacity accounts for cutoff and reserve; current includes conversion losses and board overhead.
 5. **Compat matrix** — the `(driver_version, runtime, brain)` triple must be green.
 
 Infeasible returns a **minimal conflict set** to `explain.ts`, which renders it as a human trade-off question rather than a failure.

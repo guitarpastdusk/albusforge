@@ -26,8 +26,9 @@ locals {
       type    = "CNAME"
       rrdatas = ["rsend.forge.rmta.net."]
     }
-    # Monitoring only for now: report, don't reject. Tighten to quarantine once
-    # sign-in mail has been passing SPF and DKIM for a while.
+    # Non-enforcing for now (no rua, so no aggregate reports either). Add a
+    # reporting address, then tighten to quarantine once sign-in mail has been
+    # passing SPF and DKIM for a while. This apex policy covers every subdomain.
     dmarc = {
       name    = "_dmarc.${local.env_domains["prod"]}."
       type    = "TXT"

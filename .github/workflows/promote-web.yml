@@ -1,0 +1,92 @@
+# Promote an image that deploy-web.yml successfully deployed to staging.
+# Dispatched by hand with the digest from that run's job summary; this is the
+# manual promotion step (ARCHITECTURE.md §12.3, docs/adr/0001). It never builds.
+#
+# The plan doesn't allow required reviewers on the prod environment, so the
+# protection is: only a person can dispatch this, and the environment accepts
+# dispatches from main only.
+name: promote-web
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Image digest from a successful deploy-web staging run's summary (sha256:…)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: web
+  PROJECT: albusforge-prod
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+
+jobs:
+  prod:
+    runs-on: ubuntu-latest
+    # WIF trust is bound to the GitHub environment (ADR 0001); its branch
+    # policy refuses dispatches from anything but main.
+    environment: prod
+    # One prod deploy at a time; a running deploy is never interrupted.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Validate before the input touches anything else.
+      - name: Validate digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest must match ^sha256:[0-9a-f]{64}\$"
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Only the scripts are needed; nothing uses git credentials.
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: deploy-prod@albusforge-ci.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # Being in the registry isn't enough: deploy-web pushes before it deploys,
+      # so a failed staging deploy leaves an image behind. Require the
+      # staging-deployed-<commit> tag deploy-web adds only after a successful
+      # deploy. deploy-prod can read the registry, so prod needs no access to
+      # the staging project.
+      - name: Require a successful staging deploy
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: bash .github/scripts/require-staging-deployed.sh "$DIGEST"
+
+      # gcloud run deploy creates a missing service, and deploy-prod is allowed
+      # to. Services come only from Terraform (ADR 0005).
+      - name: Require the Terraform-managed service
+        run: |
+          gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
+            --format='value(metadata.name)' >/dev/null \
+            || { echo "::error::Cloud Run service ${SERVICE} not found in ${PROJECT}. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
+
+      # Image only: Terraform owns env vars and everything else (ADR 0005).
+      - name: Deploy to prod
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          echo "Promoted \`${REPO}/${SERVICE}@${DIGEST}\` to prod (dispatched by ${GITHUB_ACTOR})" >> "$GITHUB_STEP_SUMMARY"

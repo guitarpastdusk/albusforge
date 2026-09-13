@@ -70,9 +70,26 @@ describe("buildCatalogue", () => {
       }
     });
 
+    it("picks the same version whatever the order, even for spellings the schema rejects", () => {
+      // rc.01 is invalid SemVer (§9) and can't reach the catalogue through the
+      // validator; the comparator still orders it deterministically.
+      const candidates = [probe("1.0.0-rc.1"), probe("1.0.0-rc.01"), probe("1.0.0-rc.001")];
+      for (const order of orderings(candidates)) {
+        expect(versionsIn(buildCatalogue(order))).toEqual(["P-002@1.0.0-rc.1"]);
+      }
+    });
+
     it("renders the same catalogue whatever order mixed versions arrive in", () => {
       const others = parts.filter((p) => p.id !== "P-002").map((p) => ({ ...p, status: "active" as const }));
-      const mixed = [probe("1.0.0-rc.2"), probe("1.0.0-alpha-a"), ...others, probe("1.0.0-rc.10"), probe("1.0.0-alpha-b")];
+      const mixed = [
+        probe("1.0.0-rc.2"),
+        probe("1.0.0-alpha-a"),
+        probe("1.0.0-rc.01"),
+        ...others,
+        probe("1.0.0-rc.10"),
+        probe("1.0.0-alpha-b"),
+        probe("1.0.0-rc.1"),
+      ];
       const reference = renderCatalogue(buildCatalogue(mixed));
       expect(reference).toContain("- P-002@1.0.0-rc.10 ");
       for (const order of orderings(mixed)) {

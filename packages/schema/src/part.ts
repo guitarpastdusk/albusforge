@@ -13,7 +13,14 @@ import { z } from "zod";
  * the whole registry and live in the validator, not here.
  */
 
-const SEMVER_CORE = String.raw`(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?`;
+/**
+ * SemVer 2.0.0 §2 and §9: no leading zeroes in major, minor, patch or in a
+ * numeric pre-release identifier, and no empty identifiers. Build metadata
+ * (§10) isn't accepted; nothing in the registry needs it.
+ */
+const NUMERIC_ID = String.raw`(?:0|[1-9]\d*)`;
+const PRERELEASE_ID = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
+const SEMVER_CORE = String.raw`${NUMERIC_ID}\.${NUMERIC_ID}\.${NUMERIC_ID}(?:-${PRERELEASE_ID}(?:\.${PRERELEASE_ID})*)?`;
 
 /** `1.0.0`. SemVer at every boundary (§7.5). */
 export const SemVer = z.string().regex(new RegExp(`^${SEMVER_CORE}$`), "expected a semver like 1.0.0");

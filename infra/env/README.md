@@ -15,5 +15,5 @@ The `default` workspace is not an environment and fails at plan with an invalid-
 ## What M0 creates
 
 - **network** — VPC, one `/24`, Cloud NAT, private services access range (used by Cloud SQL in M1 and Memorystore in M4)
-- **gateway** — a placeholder Cloud Run service (the Google `hello` image) with the real ingress, egress and scaling. CI replaces the image; Terraform never touches it again
-- **edge** — global HTTPS LB, Certificate Manager cert for the domain and its wildcard, Cloud Armor rate limit, HTTP→HTTPS redirect, DNS A records
+- **gateway** and **web**: placeholder Cloud Run services (the Google `hello` image) with the real ingress, egress and scaling. CI replaces the images; Terraform never touches them again
+- **edge**: global HTTPS LB routing `/v1/*` to gateway and everything else to web, on the apex and every tenant subdomain. Also a Certificate Manager cert for the domain and its wildcard, a Cloud Armor rate limit, an HTTP→HTTPS redirect, and DNS A records

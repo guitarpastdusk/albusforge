@@ -26,9 +26,33 @@ variable "include_wildcard" {
   default     = true
 }
 
-variable "default_service" {
-  description = "Cloud Run service name the URL map defaults to."
+variable "services" {
+  description = "Backend key => Cloud Run service name. Each gets a serverless NEG and backend service."
+  type        = map(string)
+}
+
+variable "default_backend" {
+  description = "Key in services that receives every request no path rule matches."
   type        = string
+
+  validation {
+    condition     = contains(keys(var.services), var.default_backend)
+    error_message = "default_backend must be a key in services."
+  }
+}
+
+variable "path_rules" {
+  description = "Applied to every hostname. \"/v1/*\" does not match \"/v1\" itself; list both."
+  type = list(object({
+    paths   = list(string)
+    backend = string
+  }))
+  default = []
+
+  validation {
+    condition     = alltrue([for r in var.path_rules : contains(keys(var.services), r.backend)])
+    error_message = "Every path_rules backend must be a key in services."
+  }
 }
 
 variable "rate_limit_count" {

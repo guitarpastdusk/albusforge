@@ -17,3 +17,11 @@ output "gateway_service" {
 output "gateway_service_account" {
   value = module.gateway.service_account_email
 }
+
+output "web_service" {
+  value = module.web.name
+}
+
+output "web_service_account" {
+  value = module.web.service_account_email
+}

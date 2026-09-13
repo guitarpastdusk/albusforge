@@ -47,16 +47,18 @@ resource "google_certificate_manager_certificate_map_entry" "primary" {
   matcher      = "PRIMARY"
 }
 
-# --- backend ----------------------------------------------------------------
+# --- backends ---------------------------------------------------------------
 
-resource "google_compute_region_network_endpoint_group" "default" {
+resource "google_compute_region_network_endpoint_group" "service" {
+  for_each = var.services
+
   project               = var.project_id
-  name                  = "${var.name}-${var.default_service}"
+  name                  = "${var.name}-${each.key}"
   region                = var.region
   network_endpoint_type = "SERVERLESS"
 
   cloud_run {
-    service = var.default_service
+    service = each.value
   }
 }
 
@@ -103,16 +105,19 @@ resource "google_compute_security_policy" "edge" {
   }
 }
 
-# No CDN here: the gateway serves SSE, which a cache would buffer.
-resource "google_compute_backend_service" "default" {
+# No CDN on these: gateway serves SSE, which a cache would buffer. Static web
+# assets get CDN through a backend bucket when that lands.
+resource "google_compute_backend_service" "service" {
+  for_each = var.services
+
   project               = var.project_id
-  name                  = "${var.name}-${var.default_service}"
+  name                  = "${var.name}-${each.key}"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   protocol              = "HTTPS"
   security_policy       = google_compute_security_policy.edge.id
 
   backend {
-    group = google_compute_region_network_endpoint_group.default.id
+    group = google_compute_region_network_endpoint_group.service[each.key].id
   }
 
   log_config {
@@ -123,10 +128,30 @@ resource "google_compute_backend_service" "default" {
 
 # --- frontend ---------------------------------------------------------------
 
+# One path matcher for every hostname — apex and tenant subdomains route
+# identically; the app tells them apart by Host header. See docs/adr/0007.
 resource "google_compute_url_map" "https" {
   project         = var.project_id
   name            = "${var.name}-https"
-  default_service = google_compute_backend_service.default.id
+  default_service = google_compute_backend_service.service[var.default_backend].id
+
+  host_rule {
+    hosts        = ["*"]
+    path_matcher = "all-hosts"
+  }
+
+  path_matcher {
+    name            = "all-hosts"
+    default_service = google_compute_backend_service.service[var.default_backend].id
+
+    dynamic "path_rule" {
+      for_each = var.path_rules
+      content {
+        paths   = path_rule.value.paths
+        service = google_compute_backend_service.service[path_rule.value.backend].id
+      }
+    }
+  }
 }
 
 resource "google_compute_target_https_proxy" "this" {

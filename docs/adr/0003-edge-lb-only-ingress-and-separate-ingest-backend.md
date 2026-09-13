@@ -12,7 +12,7 @@ Two statements in the architecture documents don't hold as written:
 ## Decision
 
 - Every public-facing service uses `INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER`, never `all`.
-- Gateway is the default backend. **In M6, cloudlink's ingest route gets its own serverless NEG and backend service** on the same LB, reached through a path rule for `/ingest/*`. A dedicated `ingest.` hostname is preferred so device traffic can be split off later. It gets its own Cloud Armor policy, keyed on the `Authorization` header rather than IP.
+- `/v1/*` routes to gateway and every other path to web ([0007](0007-portal-routing.md)). **In M6, cloudlink's ingest route gets its own serverless NEG and backend service** on the same LB, reached through a path rule for `/ingest/*`. A dedicated `ingest.` hostname is preferred so device traffic can be split off later. It gets its own Cloud Armor policy, keyed on the `Authorization` header rather than IP.
 - Every other service stays `INGRESS_TRAFFIC_INTERNAL_ONLY`.
 
 ## Consequences

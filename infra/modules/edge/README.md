@@ -4,10 +4,24 @@ The public front door for one environment (ARCHITECTURE.md §6.1):
 
 - a **global external Application Load Balancer** on a static IP, with 80 redirected to 443
 - a **Certificate Manager** cert covering `domain` and `*.domain`, validated by DNS authorization. Wildcards are why this uses Certificate Manager instead of classic managed certs. The wildcard is for per-tenant hosting (CLOUD-PLATFORM.md §6.4)
-- **Cloud Armor** with a per-IP throttle; the gateway's in-app rate limiter stays as defense in depth
-- a **serverless NEG** to the default Cloud Run service
+- one **serverless NEG + backend service per entry in `services`**
+- a **URL map with a single path matcher applied to every hostname**, so the apex and tenant subdomains route identically ([ADR 0007](../../../docs/adr/0007-portal-routing.md))
+- **Cloud Armor** with a per-IP throttle on every backend; the gateway's in-app rate limiter stays as defense in depth
 - **A records** for `domain` and `*.domain`, plus the `_acme-challenge` CNAME
 
-The URL map has a single default service today. M6 adds a second backend for `/ingest/v1` → cloudlink, and M7 adds the media backend bucket with Cloud CDN ([ADR 0003](../../../docs/adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md)).
+As composed by `env/`:
 
-**Tenant slugs** share the wildcard with fixed hostnames (`staging`, and later `ingest`, `api`, `www`), so the gateway must reserve those slugs.
+| Path | Backend |
+| --- | --- |
+| `/v1`, `/v1/*` | gateway |
+| everything else | web |
+
+M6 adds `/ingest/*` → cloudlink ([ADR 0003](../../../docs/adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md)), and M7 adds the media backend bucket with Cloud CDN.
+
+## Reserved hostnames
+
+Tenant slugs share the wildcard with fixed hostnames. The gateway must refuse these as tenant slugs: `staging`, `app`, `api`, `www`, `ingest`. Add to the list before creating any new fixed hostname under the domain.
+
+## Server-side calls from web
+
+When web renders on the server, it must call gateway's `run.app` URL, which travels internally through the VPC, and **not** the public domain. A server-side request through the public domain leaves through Cloud NAT, so Cloud Armor sees every user as the same NAT IP and the per-IP throttle rate-limits the whole site at once.

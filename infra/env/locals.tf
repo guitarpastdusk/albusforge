@@ -15,12 +15,14 @@ locals {
       subnet_cidr           = "10.10.0.0/24"
       psa_address           = "10.110.0.0"
       gateway_min_instances = 0
+      web_min_instances     = 0
       deletion_protection   = false
     }
     prod = {
       subnet_cidr           = "10.20.0.0/24"
       psa_address           = "10.120.0.0"
       gateway_min_instances = 1 # SSE and cold-start UX, ARCHITECTURE.md §12.2
+      web_min_instances     = 1 # first page load shouldn't wait on a cold start
       deletion_protection   = true
     }
   }

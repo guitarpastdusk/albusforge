@@ -4,7 +4,7 @@ import { Button } from "@/components/ui";
 import { useConversation } from "./BuildConversation";
 import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
-import { DesignReadyCard } from "./DesignReadyCard";
+import { SessionReadyCard } from "./SessionReadyCard";
 import { SpecPanel } from "./SpecPanel";
 
 /**
@@ -46,7 +46,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         ) : null}
         <SpecPanel spec={state.spec} status={state.status} />
         <CandidateParts parts={state.candidateParts} />
-        {state.ready && state.buildId ? <DesignReadyCard buildId={state.buildId} signedIn={signedIn} card={state.ready} enclosure={enclosurePreview} /> : null}
+        {state.ready && state.buildId ? <SessionReadyCard buildId={state.buildId} signedIn={signedIn} card={state.ready} enclosure={enclosurePreview} /> : null}
       </div>
 
       <form

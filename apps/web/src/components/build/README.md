@@ -9,6 +9,7 @@ The build conversation — the landing chat and `/build/[buildId]`.
 - `CandidateParts` — registry parts matching the spec's capabilities, labelled as a match, not a plan.
 - `useReplyWatchdog` — calls back once if a reply stays due for 60 s.
 - `DesignReadyCard` — "✓ Device design ready", the estimate, part chips from the plan, and a session-aware action: signed-in visitors open the current project, while anonymous visitors sign up with that project preserved in `next`.
+- `SessionReadyCard` — resolves the server’s boolean session promise in its own Suspense boundary, with a safe signup fallback; session latency never blocks public hero/chat rendering.
 - `conversation.ts` — the pure reducer, `runSend` (through `settle()`, never rejects) and `clientMessageIdFor` (a failed send's id is reused when the same text is sent again). Tracks the stream's observed spec version separately from the version whose details have loaded.
 - `useBuildRefresh` — reads the detail after stream opens, spec/status changes and manual checks. A failed read or one older than the observed spec retries after 1 s and 2 s; after that, an independent “Refresh build details” action remains available even if the assistant reply has arrived. A new request cancels old retry timers and ignores superseded results; unmount cancels the remaining work.
 

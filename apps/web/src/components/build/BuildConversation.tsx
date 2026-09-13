@@ -32,7 +32,7 @@ interface ConversationApi {
   state: ConversationState;
   /** Waiting for a reply and not yet overdue: typing dots, and no new send. */
   typing: boolean;
-  signedIn: boolean;
+  signedIn: boolean | Promise<boolean>;
   /** The device-ready card's 3D enclosure preview: the fixture in mock mode, null in live mode. */
   enclosurePreview: EnclosurePreviewData | null;
   /** Send a message; the first one creates the build. False if nothing was sent. */
@@ -68,7 +68,7 @@ export function BuildConversation({
   children,
 }: {
   initial?: BuildTranscript;
-  signedIn?: boolean;
+  signedIn?: boolean | Promise<boolean>;
   enclosurePreview?: EnclosurePreviewData | null;
   children: ReactNode;
 }) {

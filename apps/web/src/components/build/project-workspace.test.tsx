@@ -52,6 +52,30 @@ describe("project workspace", () => {
     expect(renderToStaticMarkup(<SpecPanel spec={{ capabilities: ["invented capability"] }} status={null} />)).toBe("");
   });
 
+  it("keeps the chat and safe project signup link usable while session resolution stalls", async () => {
+    let resolve!: (signedIn: boolean) => void;
+    const session = new Promise<boolean>(done => { resolve = done; });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(
+        <BuildConversation signedIn={session} initial={{ buildId: build.id, messages: [], status: "ready", specVersion: null, spec: null, candidateParts: [], ready: { name: "Garden", est_price_usd: 42.5, fulfillment_note: "Estimate", parts: [] } }}>
+          <ConversationView active />
+        </BuildConversation>,
+      ));
+      expect(container.querySelector('input[name="reply"]')).not.toBeNull();
+      expect(container.querySelector('a[href^="/signup?"]')).not.toBeNull();
+      await act(async () => { resolve(true); await session; });
+      expect(container.querySelector('a[href="/projects/build%2Fa"]')).not.toBeNull();
+      expect(container.querySelector('a[href^="/signup?"]')).toBeNull();
+      expect(container.querySelector('input[name="reply"]')).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
   it.each([false, true])("keeps the ready-card destination through the live conversation (signed in: %s)", async signedIn => {
     const container = document.createElement("div");
     document.body.appendChild(container);

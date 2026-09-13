@@ -43,7 +43,7 @@ export async function requireSession(path: string): Promise<Me> {
  * WARNING, instead of taking every page into the error boundary. A guarded
  * page still fails properly: its own `requireSession` call throws.
  */
-export async function getHeaderSession(): Promise<Me | null> {
+export const getHeaderSession = cache(async (): Promise<Me | null> => {
   try {
     return await getSession();
   } catch (error) {
@@ -57,4 +57,7 @@ export async function getHeaderSession(): Promise<Me | null> {
     });
     return null;
   }
-}
+});
+
+/** Serializable rendering hint; callers pass the promise without delaying public content. */
+export const getBuildSignedIn = cache(async (): Promise<boolean> => Boolean(await getHeaderSession()));

@@ -2,6 +2,28 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
+## Active rollout snapshot — 2026-09-13, 23:23 UTC
+
+The earlier inventory, PR ownership states and local tests below remain historical evidence at their stated timestamps/commits. They are not overwritten by this execution record. Current architecture and deployment are distinct: implementation is merged; deployment and acceptance proceed in stages.
+
+| Evidence | Observed result | Remaining boundary |
+| --- | --- | --- |
+| Capacity controls [#60](https://github.com/guitarpastdusk/albusforge/pull/60) | Merged as `d8c81b2`; staging caps fit the measured 50-connection server | Idle capacity is not a load test |
+| Observability [#61](https://github.com/guitarpastdusk/albusforge/pull/61) | Merged as `6ebe7fa`; exact breach counters avoid distribution-bucket threshold bias | Runtime signals and notification delivery still need acceptance |
+| Acceptance tooling [#59](https://github.com/guitarpastdusk/albusforge/pull/59) | Merged as `6003b6a` | Committed probes do not establish that cloud acceptance passed |
+| Maintenance alert correction [#66](https://github.com/guitarpastdusk/albusforge/pull/66) | Merged as `ce675bf`; supported 25-hour history | Historical plans before this correction are not current desired state |
+| Staging infrastructure | Root reports provisioned and converged; model disabled, schedules paused | Bootstrap resources alone do not establish working sensor ingestion or Ask |
+| Staging intake, source `03f40c1` | [Run 34789264756](https://github.com/guitarpastdusk/albusforge/actions/runs/34789264756) succeeded; revision `intake-00009-klg`, digest `cd7e9b008ad4262bc36fd6757628af510d235812d0e6b949014a5a72a4ef6cbc` | Intake deployment is separate from the sensor Ask runtime |
+| Staging gateway/schema, source `03f40c1` | [Run 34789222331](https://github.com/guitarpastdusk/albusforge/actions/runs/34789222331) succeeded at 23:23:20 UTC, including owner migration, registry load, gateway deploy and immutable staging marker steps | Exact serving digest inventory and integrated acceptance are recorded separately when collected |
+| Sensor runtime/job images | Deployment evidence not yet recorded in this snapshot | Cloudlink, Ask and processing runtime promotion/acceptance remain pending |
+| Production | Read-only preflight at `03f40c1`, 23:18:41 UTC: 54 creates, 2 updates, no deletes/replacements; only gateway Ask URL and edge route update, existing images unchanged | No production mutation. Preflight is explicitly not applyable; fresh plan follows the complete production drain |
+
+The production preflight confirmed SQL alert threshold 320, model disabled and schedules paused. New sensor resources use the module bootstrap placeholders until release workflows promote immutable images. Its private plan hash is `9b681a90758d3ca0bc3d41bda3afde41d2ca751d327e2b681a44fc5549f01221`; the hash identifies inspection evidence, not an apply artifact. Refreshed registry-load drift was execution count/latest execution metadata only, with no desired job configuration update.
+
+Named nonsecret initial configuration is committed as [`rollout-staging.tfvars.json`](../infra/env/rollout-staging.tfvars.json) and [`rollout-prod.tfvars.json`](../infra/env/rollout-prod.tfvars.json). The [environment runbook](../infra/env/README.md#initial-sensor-rollout-configuration) requires the explicit private base plus matching environment file and the reviewed workflow/job exclusion window. Staging reservations remain 40/50 connections including observer/reserved slots; production's one-retry/600-second rollup bound is approximately 266/400. Those are capacity reservations, not demonstrated throughput.
+
+No physical sensor, real-provider chatbot, complete deployed portal journey or production acceptance is claimed by this snapshot. Later rollout updates append exact evidence here and change activation flags only after the corresponding acceptance gates pass.
+
 ## Existing implementation and observed cloud state
 
 Merged foundations: standalone ingest (#32), partitioned storage and rollup/retention code (#40), live portal UI (#42), authenticated telemetry read APIs (#44), gateway sign-in/session issuance (#45), and intake/model infrastructure (#37). A merged PR proves repository state, not that its services or jobs have been deployed.
@@ -15,7 +37,7 @@ Read-only Cloud Run and Cloud Scheduler inventory on 2026-09-13 at approximately
 
 No `cloudlink` or sensor Ask service, telemetry rollup job or maintenance job was listed in either environment. These revision names are inventory evidence only: they do not attest to traffic allocation, image provenance, database migrations or working physical devices. Promotion of the existing production gateway is a separate deployment decision.
 
-## Work ownership and PR boundaries
+## Historical implementation ownership and PR boundaries
 
 | Workstream | Branch / isolated tree | Scope | State |
 | --- | --- | --- | --- |

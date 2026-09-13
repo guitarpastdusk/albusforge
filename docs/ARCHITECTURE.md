@@ -131,7 +131,7 @@ albusforge/
 │   ├── codegen/        BuildPlan → firmware: scaffold, applayer, edits, compilegate
 │   ├── fulfillment/    BOM → supplier carts; STL → print partner
 │   ├── cloudlink/      standalone device-authenticated ingest (merged); separate edge backend
-│   ├── ask/            bounded single-sensor queries and small-model intent (in progress)
+│   ├── ask/            bounded single-sensor queries and small-model intent (merged; rollout tracked below)
 │   └── marketplace/    listings, snapshots, remix, media, reviews, payouts
 ├── workers/
 │   ├── bodygen/        Python + CadQuery: layout, shell, flags, lint, export, qr
@@ -625,14 +625,14 @@ Rules: SemVer at every boundary · a CI matrix job rebuilds every driver against
 
 ### 7.6 Device ingest — HTTPS first
 
-**Sensor cloud rollout, 2026-09-13:** ingestion/storage/read APIs and the portal live UI are merged; cloudlink/processing jobs and sensor Ask are being delivered in separate infrastructure, service and gateway/portal PRs. [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) tracks ownership, observed deployed resources, dependency order and acceptance evidence. The initial Ask slice is a user-selected sensor/channel/window with a small hosted model interpreting bounded questions and deterministic code supplying the numerical answer. It does not implement the later cross-sensor agent, anomaly detectors or write tools.
+**Sensor cloud rollout, 2026-09-13:** ingestion/storage/read APIs, telemetry monitor, bounded Ask service, authenticated gateway/portal integration and sensor infrastructure are merged. Staging infrastructure has been provisioned and converged; gateway/schema and intake release workflows at `03f40c1` succeeded. Sensor runtime/job deployment and integrated acceptance are still being recorded; production has only a read-only preflight. Model calls and telemetry schedules remain disabled in the initial rollout configuration. [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) tracks ownership, observed deployed resources, dependency order and acceptance evidence. The initial Ask slice is a user-selected sensor/channel/window with a small hosted model interpreting bounded questions and deterministic code supplying the numerical answer. It does not implement the later cross-sensor agent, anomaly detectors or write tools.
 
 
 The wire envelope is the transport contract: devices upload authenticated `POST /ingest/v1` batches, and the server acknowledges only after durable storage. MQTT and its broker/bridge remain deferred to M8; see [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.
 
 **M6a implementation (merged PR #32, 2026-09-13):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
-Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. The sensor infrastructure workstream now prepares that Terraform in an isolated PR, coordinated with the existing infra owner; see the rollout ledger. No external IoT/telemetry application participates in ingestion.
+Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. The merged sensor Terraform implements this boundary; staging provisioning and production rollout gates are recorded in the rollout ledger. No external IoT/telemetry application participates in ingestion.
 
 M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued minute/hour rollups and guarded retention; see [`TELEMETRY-STORAGE.md`](TELEMETRY-STORAGE.md) for the job/rollout contract. Production BuildPlan provisioning, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 

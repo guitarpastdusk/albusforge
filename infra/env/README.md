@@ -1,6 +1,6 @@
 # infra/env/
 
-One root for every environment; the Terraform workspace selects which (`staging` or `prod`). Per-environment differences live in the `settings` map in `locals.tf` and nowhere else.
+One root for every environment; the Terraform workspace selects which (`staging` or `prod`). Sizing differences live in the `settings` map in `locals.tf`. The named rollout variable files below record the reviewed initial activation flags and measured SQL alert ceilings.
 
 Reads project IDs, DNS zones and domains from the bootstrap state, so `bootstrap/` must be applied and migrated first.
 
@@ -47,3 +47,32 @@ Use a separate key for staging and prod, with a spend limit set in the provider'
 - **LLM spend guardrail:** the log-based distribution metric `llm_cost`, built from intake's `event="llm_call"` log lines, with two alert policies (hourly and 24-hour budgets in `locals.tf`, one PromQL condition each) emailing `var.alert_email`. After apply, emit a test `llm_call` line to check the query and email delivery.
 
 Mounting an API key requires a secret version to exist; both keys have one. ADR 0005 applies to intake too once its deploy workflow exists.
+
+## Initial sensor rollout configuration
+
+`rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. They keep model calls disabled and telemetry schedules paused, with SQL connection alert thresholds 37 and 320 respectively. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
+
+Before these commands, complete the [ADR 0005 exclusion window](../../docs/adr/0005-ci-owns-images-terraform-owns-shape.md): disable all affected deployment/promotion workflows, drain their complete paginated run histories and any already-started database/telemetry job executions, and pause affected schedules. Keep the window through apply. Plans made before the drain are inspection evidence only and must not be applied.
+
+Run from `infra/env`, in a dedicated environment worktree. Initialize its backend from the existing approved `backend.hcl`; do not create a new backend or workspace to bypass a mismatch. Create a private evidence directory outside the repository first and replace `<private-evidence>` below with its absolute path.
+
+```sh
+terraform init -backend-config=backend.hcl
+terraform workspace select staging
+terraform plan -var-file=terraform.tfvars -var-file=rollout-staging.tfvars.json -out=<private-evidence>/staging.tfplan
+# Review this fresh plan, especially existing image digests and unexpected changes.
+terraform apply <private-evidence>/staging.tfplan
+```
+
+Production uses its own drained window and fresh plan:
+
+```sh
+terraform workspace select prod
+terraform plan -var-file=terraform.tfvars -var-file=rollout-prod.tfvars.json -out=<private-evidence>/prod.tfplan
+# Review this fresh plan after staging acceptance and production drain.
+terraform apply <private-evidence>/prod.tfplan
+```
+
+Apply consumes the reviewed saved plan, including both variable files; do not pass replacement variables during apply. Raw plans/JSON may contain sensitive values and must stay private. If the base file resides elsewhere, use its explicit absolute path instead of copying secrets into this checkout. These commands document operator procedure, not permission to skip review or evidence that an apply happened.
+
+Initial infrastructure creates placeholder service/job images. Promote verified immutable staging digests and establish schema readiness before invoking real processing. Root updates activation flags through a reviewed change only after the corresponding acceptance gates pass; operationally toggling schedules without updating desired configuration would introduce drift. See [the rollout ledger](../../docs/SENSOR-CLOUD-ROLLOUT.md).

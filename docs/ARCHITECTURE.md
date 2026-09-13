@@ -338,7 +338,8 @@ compat_matrix(driver_pkg, driver_ver, runtime_ver, brain_id, status)
 orders(id, build_id, kind /*parts|print|bundle*/, status, vendor_refs, total)
 
 -- market
-build_snapshots(id, project_build_id, spec, part_versions, body_ref, code_ref, pipeline_versions)
+build_snapshots(id, project_build_id, spec, part_versions, body_ref, code_ref, pipeline_versions,
+                story)   -- as confirmed at publish; never the chat transcript (PORTAL.md §3)
 listings(id, snapshot_id, creator_id, title, ask_quote, story, tags[],
          hero_media_id, parts_cost_cached, difficulty, status, safety_class)
 media(id, listing_id, kind, original_ref, variants, verified_build)
@@ -396,6 +397,7 @@ erDiagram
         jsonb part_versions "rebuildable years later"
         text body_ref
         text code_ref
+        text story "frozen at publish"
     }
     READINGS {
         uuid device_id FK
@@ -440,7 +442,7 @@ stateDiagram-v2
 
 ## 6. Gateway API contract
 
-All routes under `/v1`, zod-validated, cookie session auth (Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
+All routes under `/v1`, zod-validated, cookie session auth (6-digit email code, sessions in Postgres — [ADR 0008](adr/0008-sign-in-by-email-code.md), replacing Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
 
 ```
 POST   /v1/builds                  { ask_text } → { build_id, status }
@@ -455,6 +457,18 @@ POST   /v1/builds/:id/checkout     { fulfillment: home_print|full_ship, address?
 GET    /v1/parts?category=&q=      registry browse (active parts)
 GET    /v1/parts/:id               part page, all blocks
 
+# portal additions — PORTAL.md §3
+POST   /v1/auth/code               { email } → 204
+POST   /v1/auth/verify             { email, code } → { user, tenant } + session cookie
+POST   /v1/auth/signout            → 204
+GET    /v1/me                      → { user, tenant } | 401
+PUT    /v1/me/active-tenant        { tenant_id } → 204, membership checked
+GET    /v1/builds?status=          tenant's builds + display_status
+GET    /v1/builds/:id/messages     chat transcript
+POST   /v1/builds/:id/messages     { text } → 202, reply over events
+GET    /v1/showcase                curated public live cards
+GET    /v1/usage                   current-period usage for the tenant (M2: model calls; M6: + readings, storage)
+
 GET    /v1/listings?query=&tags=&sort=trending|built
 GET    /v1/listings/:id            listing + snapshot summary + remix tree
 POST   /v1/listings                { build_id, title, story, tags }
@@ -465,7 +479,10 @@ POST   /v1/media/uploads           { listing_id, content_type } → presigned PU
 POST   /v1/devices/claim           { build_id, claim_code } → device credentials
 GET    /v1/devices/:id/dashboard   widget config + recent readings
 PUT    /v1/devices/:id/alerts      { rules[] }
+POST   /v1/devices/:id/ask         { text } → answer; /v1/ask with device bound — PORTAL.md §3
 ```
+
+The web portal is a client of this contract and adds no API of its own. Its routes, the screens that read each endpoint, and how anonymous builds are claimed are in [`PORTAL.md`](PORTAL.md).
 
 ### 6.1 Edge and service-to-service auth
 
@@ -620,7 +637,7 @@ Why: the Pub/Sub bridge lets ingest scale to zero and brings retries, dead-lette
 
 ### 7.7 Marketplace
 
-- **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.
+- **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. The story is written and confirmed at publish time and stored on the snapshot; the private chat transcript is never readable through a listing (PORTAL.md §3). MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.
 - **Media** — presigned upload → EXIF strip with sharp → thumb/card/hero variants → storage proxy route. Moderation model and QR verified-build detection are `[LATER]`, schema fields present now.
 - **Remix** — copy snapshot → new build in `planning` → matcher runs in **pin-preserving mode**, keeping pinned versions unless retired or unavailable and proposing successors as a diff.
 - **Reviews** — gated on a `remixes` row with `outcome:"built"` for that user.
@@ -634,7 +651,7 @@ The deck adds public build/remix counts and an **earn** promise: remixes route t
 
 **The spec has no tenant concept at all.** Everything hangs off `build_id`; the deck hangs everything off a tenant.
 
-- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output.
+- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output. [ADR 0009](adr/0009-tenant-created-at-sign-up.md) keeps order-time provisioning but **takes `tenant_id` from the build, not from `h(order)`**: the tenant exists from sign-up, and checkout requires a session, so every order already has one. `/v1/devices/claim` likewise takes the tenant from the session.
 - **Multi-user tenants.** The platform slide shows twelve members and three roles (ops manager as admin; maintenance crew with alerts + acknowledge; customer auditor read-only), plus SSO, an audit log and per-tenant keys. The spec has `users`, session cookies, and anonymous builds. No organisation, membership, role, audit table, or per-tenant key material. This is a schema addition, an authorization layer across **every** route, and an SSO integration.
 - **Per-tenant app hosting** at `acme-plant.albusforge.ai` — subdomain routing and per-tenant isolation, against an LB config that assumes one public hostname.
 
@@ -742,7 +759,8 @@ This is simultaneously the strongest differentiator — it answers the complianc
 | CAD | Python 3.12 + CadQuery, containerized, queue-invoked |
 | Firmware | PlatformIO, ESP32-S3 only for MVP; compile gate in `workers/fwbuild` |
 | Device ingest | MQTT (EMQX) → ingest → partitioned Postgres |
-| Auth | Lucia session cookies + magic link; passkeys later |
+| Auth | ~~Lucia session cookies + magic link~~ — 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
+| Web portal | Next.js App Router in `apps/web`, a client of the gateway only ([`PORTAL.md`](PORTAL.md)) |
 | API style | REST + zod-to-openapi; one gateway, no GraphQL |
 | Testing | vitest, supertest, testcontainers |
 
@@ -1025,7 +1043,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | Decision | The fork |
 | --- | --- |
 | **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
-| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) recommends **tenant, from `h(order)`, added in M1** — every cloud surface it specifies is tenant-scoped |
+| ~~**Tenant or build as the root**~~ | **Resolved:** tenant created at sign-up; orders and devices take it from the build. See [ADR 0009](adr/0009-tenant-created-at-sign-up.md) |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
 | ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |
 | **Connector standard** | `hsx-3pin-v1` (invent, adapt every part) vs Qwiic/Grove (I²C-only for data, separate power convention). The solver enforces whichever is chosen |

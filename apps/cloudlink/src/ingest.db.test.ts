@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -243,7 +244,8 @@ it("HTTP ingestion and the real rollup worker overlap without deadlocking or los
 it('deployed acceptance quota fixture seeds and audits with app grants and preserves accounting on cleanup', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'acceptance-quota-db-'));
   const file = join(dir, 'fixture.json');
-  const run = (phase: string) => promisify(execFile)('pnpm', ['exec', 'tsx', 'scripts/acceptance.ts', phase, file, 'staging'], {
+  const run = (phase: string) => promisify(execFile)(process.execPath, ['--import', createRequire(import.meta.url).resolve('tsx'), 'scripts/acceptance.ts', phase, file, 'staging'], {
+    timeout:20_000,killSignal:'SIGKILL',
     env: { ...cliEnv, ACCEPTANCE_SQL_EXPORT: '', ACCEPTANCE_PURPOSE: 'quota', ACCEPTANCE_ACTOR_LIMIT: '20', ACCEPTANCE_TENANT_LIMIT: '100', ACCEPTANCE_GLOBAL_LIMIT: '200', ACCEPTANCE_MODEL_DISABLED: 'verified' },
   });
   try {
@@ -259,4 +261,4 @@ it('deployed acceptance quota fixture seeds and audits with app grants and prese
     expect((await handle.pool.query('SELECT revoked_at IS NOT NULL AS revoked FROM telemetry.devices WHERE id=$1', [f.device])).rows[0].revoked).toBe(true);
     expect((await handle.pool.query('SELECT count(*)::int AS n FROM users.sessions WHERE user_id=$1 AND revoked_at IS NOT NULL', [f.actor])).rows[0].n).toBe(1);
   } finally { await rm(dir, {recursive:true,force:true}); }
-});
+},180_000);

@@ -465,6 +465,7 @@ GET    /v1/builds?status=          tenant's builds + display_status
 GET    /v1/builds/:id/messages     chat transcript
 POST   /v1/builds/:id/messages     { text } → 202, reply over events
 GET    /v1/showcase                curated public live cards
+GET    /v1/usage                   current-period usage for the tenant (M2: model calls; M6: + readings, storage)
 
 GET    /v1/listings?query=&tags=&sort=trending|built
 GET    /v1/listings/:id            listing + snapshot summary + remix tree
@@ -634,7 +635,7 @@ Why: the Pub/Sub bridge lets ingest scale to zero and brings retries, dead-lette
 
 ### 7.7 Marketplace
 
-- **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.
+- **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. The story is written and confirmed at publish time and stored on the snapshot; the private chat transcript is never readable through a listing (PORTAL.md §3). MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.
 - **Media** — presigned upload → EXIF strip with sharp → thumb/card/hero variants → storage proxy route. Moderation model and QR verified-build detection are `[LATER]`, schema fields present now.
 - **Remix** — copy snapshot → new build in `planning` → matcher runs in **pin-preserving mode**, keeping pinned versions unless retired or unavailable and proposing successors as a diff.
 - **Reviews** — gated on a `remixes` row with `outcome:"built"` for that user.

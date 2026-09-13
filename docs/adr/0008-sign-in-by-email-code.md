@@ -14,7 +14,7 @@ A code also works in cases a link does not: the email opened on a phone while th
 ## Decision
 
 - **Email one-time code.** Six digits, valid for 10 minutes, single use, at most 5 wrong attempts per code before it is invalidated. Stored as a hash. A new request invalidates the previous code.
-- **Rate limits** on `POST /v1/auth/code` per email and per IP, in gateway, in addition to Cloud Armor.
+- **Rate limits** on `POST /v1/auth/code` per email and per IP, in gateway, in addition to Cloud Armor. On a verified internal SSR request the IP is `X-Albus-Client-IP` ([0007](0007-portal-routing.md)); otherwise every SSR call would count as web's IP.
 - **Sessions** are opaque random tokens, stored hashed in Postgres with an expiry, sent as an `httpOnly`, `Secure`, `SameSite=Lax`, **host-only** cookie ([0007](0007-portal-routing.md)). Each session carries `active_tenant_id`, and `parent_session_id` when it was created by the subdomain sign-in handoff. Sign-out revokes the whole session family ([0009](0009-tenant-created-at-sign-up.md)).
 - **Implemented in gateway** as a small auth plugin following the Lucia session guide, with `@oslojs` primitives for token generation and hashing. The tables (`users`, `sessions`, `email_codes`) live in `packages/db` like every other table.
 - A successful verify **claims anonymous builds** owned by the caller's anonymous owner cookie (PORTAL.md §5).

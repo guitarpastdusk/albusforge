@@ -12,6 +12,13 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
 - **Cloud Run service `web`** behind the same load balancer as gateway ([ADR 0007](adr/0007-portal-routing.md)): `/v1` and `/v1/*` → gateway, everything else → web, identically on the apex and on every tenant subdomain.
 - **Browser code calls relative `/v1/...`.** Same origin on every host, no CORS.
 - **Server-side rendering calls `GATEWAY_INTERNAL_URL`** (gateway's `run.app` URL over the VPC), never the public domain. A server call through the public domain exits through Cloud NAT, and Cloud Armor would then count every visitor as one IP against the 600 req/min limit.
+- **SSR forwards the visitor's host and IP through a verified contract** ([ADR 0007](adr/0007-portal-routing.md)). On a `run.app` call the `Host` header is gateway's own hostname, so without this SSR on `acme-plant.albusforge.ai` could not resolve its tenant. Every SSR call to gateway sends:
+  - `X-Albus-Internal-Auth: Bearer <ID token>`: a Google-signed ID token for web's runtime service account, with audience `GATEWAY_INTERNAL_URL`
+  - `X-Albus-Original-Host`: the host the browser requested
+  - `X-Albus-Client-IP`: the visitor's IP
+  - the session cookie only, not every cookie the browser sent
+
+  Gateway trusts the two forwarded headers **only** when the token verifies: Google signature, `aud` equal to gateway's URL, `email` equal to `SSR_SERVICE_ACCOUNT`, `email_verified`, not expired. Otherwise it ignores them and uses the real `Host` and client IP. A forwarded host that is neither `PUBLIC_DOMAIN` nor `<valid slug>.PUBLIC_DOMAIN` is `400`. The load balancer strips all three headers from public requests as defense in depth; the token check is the actual control. Terraform sets `GATEWAY_INTERNAL_URL` and `PUBLIC_DOMAIN` on web, and `SSR_SERVICE_ACCOUNT` and `PUBLIC_DOMAIN` on gateway.
 - **Session cookies are host-only** (no `Domain` attribute), because `staging.albusforge.ai` sits under the prod apex. Signing in on a tenant subdomain is a redirect handoff from the apex.
 - Web and gateway share one per-IP Cloud Armor limit, and every static asset counts toward it. A cold page load is ~15–25 requests, which is comfortable at 600/min, but it is the first thing to check if real users see 429s before assets move behind a CDN backend bucket.
 
@@ -29,6 +36,7 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
 | Project detail: resume chat, review parts, track kit | `/projects/:buildId` | required | `GET /v1/builds/:id` — **not designed yet** |
 | Live systems (fleet) | `/live` | required | `GET /v1/tenants/:id/devices` · `GET /v1/tenants/:id/stream` |
 | Device dashboard + device chat | `/live/:deviceId` | required | `GET /v1/devices/:id/dashboard` · `GET /v1/devices/:id/series` · `POST /v1/devices/:id/ask` |
+| Usage | `/usage` | required | `GET /v1/usage` — **not designed yet**; minimal in M2 |
 | Marketplace | `/marketplace` | none | `GET /v1/listings?tags=` |
 | Listing | `/marketplace/:listingId` | none; clone requires session | `GET /v1/listings/:id` · `POST /v1/listings/:id/remix` |
 | Docs, Pricing, Security pledge | `/docs` `/pricing` `/security` | none | static |
@@ -54,13 +62,17 @@ POST   /v1/builds/:id/messages     { text } → 202; the reply streams over /v1/
 
 GET    /v1/showcase                public, curated live cards for the landing carousel
 
+GET    /v1/usage                   current period for the resolved tenant: model calls and tokens per tier;
+                                   readings and storage added in M6
+
 POST   /v1/devices/:id/ask         { text } → answer + executed queries; /v1/ask with device_id bound
 ```
 
 Notes:
 
 - **`/v1/auth/*`** — see [ADR 0008](adr/0008-sign-in-by-email-code.md). Replaces the magic link.
-- **Chat messages are the intake conversation, stored.** `POST /v1/builds` still takes `{ ask_text }` and becomes the first message. Clarifying questions from intake arrive as assistant messages, and user replies are what `PATCH /v1/builds/:id/spec { answers }` receives today. The transcript needs a `build_messages` table so a refreshed tab, a resumed project and the build story shown on a marketplace listing all read the same record.
+- **Chat messages are the intake conversation, stored.** `POST /v1/builds` still takes `{ ask_text }` and becomes the first message. Clarifying questions from intake arrive as assistant messages, and user replies are what `PATCH /v1/builds/:id/spec { answers }` receives today. The transcript needs a `build_messages` table so a refreshed tab and a resumed project read the same record.
+- **`build_messages` is private to the build's tenant** (or its anonymous owner) and is never readable through a listing. A marketplace **story is written at publish time**. It can be pre-filled as a draft from the transcript, but the user edits and confirms it, it passes the same `policy.ts` `safety_class` check as the rest of the listing, and it is stored on the listing and the immutable `build_snapshot` (ARCHITECTURE.md §7.7). Chat that continues after publishing never changes it, and remix copies the snapshot, never the transcript.
 - **`/v1/showcase`** is curated and opt-in, not a live query across other people's devices. At launch it can be a static list maintained by hand. A real feed needs a per-build `showcase_opt_in` and must never expose location — the prototype shows coordinates on a fleet card, which is fine for an owner and not for the public.
 - **`/v1/devices/:id/ask`** is a thin wrapper. The tool loop is [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §7.4 unchanged, with `tenant_id` from the session and `device_id` from the path, both bound server-side. Answers the design shows ("you'll cross the 22% threshold in ~2 days — want me to alert you at 24%?") map to `compare_to_baseline` plus a proposed alert rule the user confirms — the same proposal pattern as `create_work_order`.
 
@@ -124,7 +136,7 @@ Surfaces the architecture requires that the handoff does not cover. They need de
 
 - **Project detail** — the targets of "Review parts" and "Track kit": the plan and cart, firmware and enclosure downloads, checkout, order tracking.
 - **Alert rules** — the device chat offers to set one; there is no screen to see or edit them.
-- **Signals, Inbox, Usage** ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §6.3). **Usage is not optional:** it ships with the first metered call (§9).
+- **Signals, Inbox, Usage** ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §6.3). **Usage is not optional:** it ships with the first metered call ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9). Intake's model calls are metered from M2, so a minimal Usage screen is needed by M2 even before a full design exists.
 - **Listing detail and publish** — the marketplace grid exists; the listing page, remix diff and publish flow do not.
 - **Tenant subdomain sign-in handoff** ([ADR 0007](adr/0007-portal-routing.md)), and sign-out that revokes the sessions on every host together ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).
 - **Tenant switcher** for a user in more than one tenant ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).
@@ -140,9 +152,9 @@ The portal is built against mocks from M0 and connected screen by screen as the 
 | --- | --- |
 | **M0** | workspace root, `apps/web` shell, design tokens, landing page, every route stubbed on mocks; `web` is the M0 service that proves a commit reaches staging |
 | **M1** | `tenants`, `build_messages`, `anon_owner_hash` in the schema ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)) |
-| **M2** | auth routes; build chat and the device-ready card go live against intake |
+| **M2** | auth routes; build chat and the device-ready card go live against intake; **minimal Usage screen and `GET /v1/usage`** (model calls and tokens per tier), because intake's calls are the first metered calls |
 | **M3** | device-ready card shows the real plan; Review parts |
-| **M6** | Live systems, device dashboard, Track kit; Usage screen |
+| **M6** | Live systems, device dashboard, Track kit; Usage extended with readings and storage |
 | **M6.5** | device chat; Signals and Inbox |
 | **M7** | marketplace, clone, listing pages |
 

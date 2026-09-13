@@ -21,7 +21,9 @@ The portal design adds a constraint that recommendation doesn't meet: **the Proj
 
 **The host selects a tenant; membership authorizes it.** Gateway resolves exactly one tenant per request and passes it to every query as a bound parameter:
 
-1. **Tenant subdomain.** The slug in the `Host` header selects the tenant. Gateway then checks that the session user is in `tenant_members` for that tenant. If not, `/v1` returns `403` and web redirects to the apex. An unknown slug is `404`. The Host header never grants access by itself.
+The **request host** is the `Host` header, or the verified `X-Albus-Original-Host` on an internal SSR request whose `X-Albus-Internal-Auth` ID token passes gateway's check ([0007](0007-portal-routing.md), PORTAL.md §1). On any other request the forwarded header is ignored.
+
+1. **Tenant subdomain.** The slug in the request host selects the tenant. Gateway then checks that the session user is in `tenant_members` for that tenant. If not, `/v1` returns `403` and web redirects to the apex. An unknown slug is `404`. The Host header never grants access by itself.
 2. **Apex.** The tenant is the session's `active_tenant_id`. It is set to the personal tenant at first sign-in and changed with `PUT /v1/me/active-tenant { tenant_id }`, which checks membership. The portal shows a tenant switcher only to users in more than one tenant.
 
 Role checks for each route run after this, against the resolved tenant.

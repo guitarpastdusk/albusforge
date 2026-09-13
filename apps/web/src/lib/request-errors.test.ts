@@ -77,6 +77,33 @@ describe("reportRequestError", () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 
+  it("an error object shared by two requests (a memoised rejected promise) gives each request its own entry", async () => {
+    const shared = gatewayFailure();
+    await reportRequestError(shared, requestWithTrace(TRACE_A), context);
+    await reportRequestError(shared, requestWithTrace(TRACE_B), context);
+    await reportRequestError(shared, requestWithTrace(TRACE_A), context);
+
+    expect(errorLines().map((entry) => entry["logging.googleapis.com/trace"])).toEqual([
+      traceField(TRACE_A),
+      traceField(TRACE_B),
+    ]);
+  });
+
+  it("without a trace ID, a repeated object is logged again rather than dropped", async () => {
+    const error = gatewayFailure();
+    const untraced = { path: "/projects", method: "GET", headers: {} };
+    await reportRequestError(error, untraced, context);
+    await reportRequestError(error, untraced, context);
+    expect(errorLines()).toHaveLength(2);
+  });
+
+  it("an object shared by more requests than the per-object bound still logs every request", async () => {
+    const shared = gatewayFailure();
+    const traces = Array.from({ length: 1_001 }, (_, i) => (i + 1).toString(16).padStart(32, "0"));
+    for (const trace of traces) await reportRequestError(shared, requestWithTrace(trace), context);
+    expect(errorLines()).toHaveLength(1_001);
+  });
+
   it("regression: two requests with the same digest and different traces give two entries, each with its own trace", async () => {
     await reportRequestError(gatewayFailure(), requestWithTrace(TRACE_A), context);
     await reportRequestError(gatewayFailure(), requestWithTrace(TRACE_B), context);

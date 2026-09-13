@@ -610,30 +610,15 @@ App code is part-agnostic by construction: swapping a DS18B20 for a BME280 chang
 
 Rules: SemVer at every boundary · a CI matrix job rebuilds every driver against the current runtime and **writes `compat_matrix`** (generated, never hand-maintained) · `registry/scripts/validate.ts` checks every `part.json` and confirms the footprint file exists · channels are `stable` (default pin) and `next` (CI-only in MVP) · **old builds never auto-upgrade** — upgrades are explicit build actions producing a visible diff · `status:"deprecated"` + `successor` stops matcher selection and makes the remix engine propose the successor as a diff.
 
-### 7.6 Device ingest — the one genuinely GCP-shaped rewrite
+### 7.6 Device ingest — HTTPS first
 
-Cloud Run terminates only HTTP, gRPC and WebSocket. An ESP32 speaking MQTT over TCP 8883 cannot reach it, and Pub/Sub is not MQTT.
+The wire envelope is the transport contract: devices upload authenticated `POST /ingest/v1` batches, and the server acknowledges only after durable storage. MQTT and its broker/bridge remain deferred to M8; see [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.
 
-```
-ESP32 ──MQTT/TLS:8883──► EMQX (GCE MIG, internal LB, 1 instance MVP)
-                           │ rule engine bridge
-                           ▼
-                    Pub/Sub topic hsx.telemetry.*
-                           │ push subscription (OIDC-authenticated)
-                           ▼
-                    cloudlink Cloud Run POST /internal/ingest
-                           │ validate against registry/schemas/*.json
-                           ▼
-                    Cloud SQL cloud.readings
-```
+**M6a implementation (2026-09-13, branch `m6/telemetry-ingest`, pending review/merge):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
-Why: the Pub/Sub bridge lets ingest scale to zero and brings retries, dead-lettering and backpressure for free; EMQX stays device-facing so the firmware and SDK side is untouched. Device auth is a per-device token from `/v1/devices/claim`, checked by EMQX's HTTP auth hook against `cloudlink`; mTLS is `[LATER]`.
+Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
 
-**Single EMQX instance is a real SPOF** — accepted for MVP, MIG restarts it, cluster at real device volume.
-
-**Two deck requirements this shape doesn't meet:** cellular devices (LTE-M notecard, off-grid solar) never join WiFi or reach an internal broker — they need a **second front door**, a public HTTPS or carrier ingest path. And **pre-provisioned identity** mints credentials at checkout rather than at claim (§8).
-
-> **Resolved in [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 — HTTPS first, MQTT at M8.** Since cellular forces an HTTPS front door regardless, and MQTT's real advantage is downlink that no MVP build needs, the broker is deferred: the EMQX SPOF, the rule-engine bridge and the Pub/Sub plumbing all leave M6, which stops being the heaviest milestone. **The transport is an adapter; the wire envelope is the contract**, so adding MQTT later is a front-door handler, not a rewrite. Downlink until then is piggybacked on the ingest response, which is honest for config, thresholds and OTA triggers and inadequate for real-time actuation — do not promise that before MQTT lands.
+Production BuildPlan provisioning, partitioning/retention, rollups, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 
 ### 7.7 Marketplace
 
@@ -774,7 +759,7 @@ Runtime is **Cloud Run services and jobs, no GKE**. Managed GCP wherever it exis
 | `intake`, `matcher`, `marketplace` | Cloud Run, internal ingress, scale to zero |
 | `codegen` | Cloud Run worker, min 1, CPU always allocated — the always-on BullMQ consumer |
 | `fulfillment` | Cloud Run internal; mock adapters for MVP |
-| `cloudlink` | Cloud Run; `/ingest` is a Pub/Sub push endpoint |
+| `cloudlink` | Standalone HTTPS ingest Cloud Run service (ADR 0003); small direct PostgreSQL pool, separate NEG/Armor, prod warm floor and connection-budgeted instance cap (§7.6). Terraform owned by infra; MQTT deferred |
 | `workers/bodygen` | Cloud Run Job, 2 vCPU / 4 GiB, Python + CadQuery |
 | `workers/fwbuild` | Cloud Run Job, 4 vCPU / 8 GiB, PlatformIO, cache warmed from GCS |
 | Postgres 16 | Cloud SQL, private IP, direct VPC egress, no proxy sidecar |
@@ -954,6 +939,8 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 ---
 
 ## 16. Milestones
+
+**Brought forward alongside M2:** M6a telemetry ingestion is implemented on `m6/telemetry-ingest`, pending review/merge. It uses standalone `apps/cloudlink` and PostgreSQL plus a simulator; infrastructure is coordinated with the infra owner. M6b operations, M6c dashboards and M6.5 intelligence remain next, as detailed in [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md).
 
 | M | Scope | Infra added |
 | --- | --- | --- |

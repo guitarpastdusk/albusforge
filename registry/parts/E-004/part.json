@@ -14,6 +14,7 @@
     "requires": ["power.battery"],
     "conflicts": [],
     "i2c_address": null,
+    "logic_v": null,
     "supply": { "output_v": [4.137, 4.263], "max_output_ma": 1000, "capacity_mah": null }
   },
   "mechanical": {

@@ -9,12 +9,13 @@
   "electrical": {
     "interface": "power",
     "connector": "hsx-power-2pin-v1",
-    "voltage_range": [2.75, 4.2],
+    "voltage_range": [2.5, 4.2],
     "current_draw_ma": { "idle": 0, "active": 0 },
     "requires": [],
     "conflicts": [],
     "i2c_address": null,
-    "supply": { "output_v": [2.75, 4.2], "max_output_ma": 1000, "capacity_mah": 2200 }
+    "logic_v": null,
+    "supply": { "output_v": [2.5, 4.2], "max_output_ma": 1000, "capacity_mah": 2200 }
   },
   "mechanical": {
     "footprint_file": "footprint.step",

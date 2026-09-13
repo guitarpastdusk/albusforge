@@ -8,4 +8,6 @@ Module: Adafruit BH1750, STEMMA QT (#4681). Checked 2026-09-13.
 
 Currents are chip typicals; the regulator's share isn't published.
 
+`logic_v` is 3–5 V. From the pinouts page, SCL and SDA are each "level shifted so you can use 3-5V logic".
+
 Not verified: mounting hole size and positions, so the mount is `unspecified`.

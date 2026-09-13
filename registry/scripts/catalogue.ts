@@ -77,8 +77,9 @@ export function buildCatalogue(parts: readonly PartDefinition[], options: Catalo
       parts: sorted(providers.get(capability) ?? []),
     })),
     environment_flags: sorted(chosen.flatMap((p) => p.mechanical.environment_flags)),
+    // Energy parts only: the host's regulated rail is not a way to power a build.
     power_options: chosen.flatMap((p) =>
-      p.electrical.supply
+      p.category === "energy" && p.electrical.supply
         ? [
             {
               id: p.id,

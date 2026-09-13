@@ -13,7 +13,8 @@
     "current_draw_ma": { "idle": 600, "active": 600 },
     "requires": ["gpio.pwm", "power.5v"],
     "conflicts": [],
-    "i2c_address": null
+    "i2c_address": null,
+    "logic_v": null
   },
   "mechanical": {
     "footprint_file": "footprint.step",

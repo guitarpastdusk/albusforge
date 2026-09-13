@@ -8,6 +8,10 @@ Module: DFRobot Gravity analog capacitive soil moisture sensor (SEN0193). Checke
 
 The board has no sleep mode, so idle and active are both 5 mA. The output range is disputed: the datasheet and wiki say 0–3.0 V, while the product page says 1.2–2.5 V. The driver has to calibrate either way.
 
+`logic_v` is 3.0–5.5 V. The analog output never exceeds 3.0 V under either source, so it's safe at any host IO voltage of 3.0 V or more. The upper bound is the supply maximum.
+
+In the power-path check the probe runs from the brain's 3.3 V rail. That rail's minimum (3.251 V) is below the probe's 3.3 V minimum, so the usable window is 3.3–3.349 V, which is tight.
+
 Not verified:
 - **Supplier listing.** DigiKey (403) and Mouser (captcha) wouldn't load, so `suppliers` is empty. The price comes from DFRobot's own store.
 - Board thickness, so `bounding_mm` is null. Mounting holes, so the mount is `unspecified`.

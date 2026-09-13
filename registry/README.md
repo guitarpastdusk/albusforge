@@ -10,9 +10,11 @@
 | `connectors/<id>.json` | Connector standards the parts name in `electrical.connector` |
 | `schemas/*.schema.json` | JSON Schema **generated** from the zod schemas; don't hand-edit |
 | `i2c-shared.json` | Parts that deliberately share a default I²C address, with a note on why that's safe |
+| `known-issues.json` | Cross-part problems accepted for now (today: logic-level mismatches), each saying what a build must do |
 | `scripts/validate.ts` | Checks the whole registry; exits 1 with a list of problems |
 | `scripts/catalogue.ts` | `buildCatalogue` / `renderCatalogue`: the compact, deterministic catalogue intake caches in its prompt prefix ([`ASK-TO-ENCLOSURE.md`](../docs/ASK-TO-ENCLOSURE.md) §3) |
-| `scripts/golden-builds.ts` | Capabilities the three golden builds need (§4.1) |
+| `scripts/golden-builds.ts` | Capabilities and intended power path for the three golden builds (§4.1) |
+| `scripts/lib/power.ts` | `checkPowerPath`: finds a voltage-compatible way to power a golden build |
 | `scripts/schemas.ts` | Regenerates `schemas/`; with `--check`, fails when they're stale |
 
 ## The twelve MVP parts (§4.1)
@@ -26,7 +28,7 @@
 | V-004 | HC-SR04 | `read.distance_cm` |
 | V-005 | BH1750 | `read.illuminance_lux` |
 | L-003 | HC-SR501 PIR | `read.motion_bool` |
-| C-001 | ESP32-S3-DevKitC-1, the only brain | `bus.i2c`, `bus.spi`, `bus.uart`, `gpio.digital`, `gpio.adc`, `gpio.pwm`, `net.wifi`, `net.ble` |
+| C-001 | ESP32-S3-DevKitC-1, the only brain | `bus.i2c`, `bus.spi`, `bus.uart`, `gpio.digital`, `gpio.adc`, `gpio.pwm`, `net.wifi`, `net.ble`, `power.3v3` |
 | M-001 | SG90 servo | `act.position_deg` |
 | E-001 | 18650 cell | `power.battery` |
 | E-004 | TP4056 charger | `power.charge` |
@@ -36,17 +38,34 @@
 
 `validate.ts` requires `mechanical.footprint_file` to exist for any `active` or `deprecated` part (§7.5). Footprints arrive with the fit spike, so **all twelve parts are `draft`**. Each `footprint_file` already names the path the file will have.
 
-Drafts may also leave `bounding_mm`, the mount, suppliers and `unit_cost_usd` unset where no source could be verified. Each part's `SOURCES.md` lists the gaps.
+A draft may leave unset whatever couldn't be verified, and each part's `SOURCES.md` lists the gaps:
+
+- `bounding_mm` and the mount
+- suppliers and `unit_cost_usd`
+- `logic_v` for a signal part
 
 To promote a part to `active`:
 
 1. Commit a real `parts/<ID>/footprint.step`. Never a placeholder.
 2. Fill in `bounding_mm`, a measured `mount`, at least one checked supplier and a price.
-3. Set `"status": "active"` and run `pnpm --filter @albusforge/registry validate`.
+3. Make sure a signal part has `logic_v`, and a sensor or actuator has a driver, `sdk_module`, `telemetry_schema` and a default widget.
+4. Set `"status": "active"` and run `pnpm --filter @albusforge/registry validate`.
 
-The schema and validator reject an `active` part that's missing any of these.
+The schema and validator reject a non-draft part that's missing any of these. The host and passive power parts are the one exception: they may have no driver or channel.
 
 The catalogue builder offers only `active` parts by default. Until parts are promoted, intake gets an empty menu unless it asks for drafts. That's intentional.
+
+## Electrical model
+
+- **`voltage_range`** is what the part accepts at its `connector`, including whatever the board puts in front of the chip. For C-001 that's the USB input after its protection diode and regulator, not the chip's 3.0–3.6 V VDD.
+- **`alt_inputs`** lists other rails the part can be powered from instead, such as C-001's `5v-pin` and `3v3-pin`.
+- **`supply`** is what a part feeds the assembly: an energy part's output, or the host's regulated rail.
+- **`logic_v`** is the IO voltage window a part's signal lines work with. The host declares the single voltage it drives. Every live peripheral's window must include every host's IO voltage, or the mismatch must be recorded in `known-issues.json`. The HC-SR04's 5 V echo is recorded there today.
+- **Golden-build power paths:** `scripts/golden-builds.ts` names each build's supply and the brain input it's wired to. The validator checks that path is voltage-compatible:
+  - The supply never exceeds the input's maximum, and their windows overlap.
+  - Peripherals requiring `power.5v` run from the supply; the rest run from the brain's rail.
+
+  Connector fit and current budget are still the matcher's job (§7.2).
 
 ## Vocabulary
 
@@ -55,9 +74,10 @@ The catalogue builder offers only `active` parts by default. Until parts are pro
   - The brain and energy parts provide `bus.*`, `gpio.*`, `net.*` and `power.*`, which other parts list in `electrical.requires`.
   - Every `requires` entry must be provided by a draft or active part.
 - **Environment flags** are the fixed list in `KNOWN_ENVIRONMENT_FLAGS`, plus `temp:<min>..<max>C`.
+- **Cloud:** widgets and alert templates need a `telemetry_schema`. `low_battery` needs `power.battery`, and `out_of_range` needs a numeric `read.*`.
 - **I²C:** two live parts with the same `i2c_address` fail validation unless `i2c-shared.json` has an entry for them.
 - **Currents** are typicals from the datasheet unless `SOURCES.md` says otherwise. Where no idle figure is published, idle is set equal to active so power math errs conservative.
-- **Changing a part:** a published `(id, version)` is immutable (§4). Bump the semver for any change, and use `deprecated` plus `successor` to retire a part in favour of another.
+- **Changing a part:** a published `(id, version)` is immutable (§4). Bump the semver for any change, and use `deprecated` plus `successor` to retire a part in favour of another. Versions, including pre-releases, are ordered by SemVer §11.
 
 ## Commands
 

@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import { GOLDEN_BUILDS } from "../scripts/golden-builds";
 import { loadRegistry } from "../scripts/lib/load";
 import { formatIssues, type RegistryInput, validateRegistry } from "../scripts/lib/rules";
-import { goodInput, type Json, partData } from "./fixtures";
+import { goodInput, type Json, partData, promoteProbe } from "./fixtures";
 
 const issuesOf = (input: RegistryInput) => validateRegistry(input).issues;
 const rulesOf = (input: RegistryInput) => issuesOf(input).map((i) => i.rule);
+/** Schema issue paths ("software.driver_pkg") reported for one part. */
+const schemaPathsOf = (input: RegistryInput, id: string) =>
+  issuesOf(input)
+    .filter((i) => i.rule === "schema" && i.file === `parts/${id}/part.json`)
+    .map((i) => i.message.split(":")[0]);
 
 /** A copy of the good fixture with one change applied. */
 function broken(change: (input: RegistryInput) => void): RegistryInput {
@@ -52,11 +57,15 @@ describe("validateRegistry", () => {
       ["unknown key", (p) => (p.electrical.voltage = 3.3), "electrical"],
       ["unknown environment flag", (p) => (p.mechanical.environment_flags = ["fridge"]), "mechanical.environment_flags.0"],
       ["i2c part without an address", (p) => (p.electrical.i2c_address = null), "electrical.i2c_address"],
+      ["logic_v min > max", (p) => (p.electrical.logic_v = [5, 3]), "electrical.logic_v"],
+      ["active signal part without logic_v", (p) => (p.electrical.logic_v = null), "electrical.logic_v"],
+      ["widgets without a telemetry schema", (p) => (p.cloud.telemetry_schema = null), "cloud.telemetry_schema"],
+      ["low_battery on a part with no battery", (p) => (p.cloud.alert_templates = ["low_battery"]), "cloud.alert_templates"],
+      ["out_of_range with only a boolean reading", (p) => (p.software.capabilities = ["read.motion_bool"]), "cloud.alert_templates"],
+      ["active sensor without a default widget", (p) => (p.cloud.default_widgets = []), "cloud.default_widgets"],
     ])("rejects %s", (_, change, path) => {
       const input = broken((i) => change(partData(i, "P-001")));
-      const issues = issuesOf(input);
-      expect(issues.map((i) => i.rule)).toEqual(expect.arrayContaining(["schema"]));
-      expect(issues.some((i) => i.message.startsWith(`${path}:`))).toBe(true);
+      expect(schemaPathsOf(input, "P-001")).toContain(path);
     });
 
     it("rejects an energy part without supply", () => {
@@ -69,6 +78,67 @@ describe("validateRegistry", () => {
         (i.connectors[0]!.data as Json).pins[1].n = 3;
       });
       expect(rulesOf(input)).toContain("schema");
+    });
+
+    describe("drivers and telemetry past draft", () => {
+      it("accepts the probe once it has a driver, SDK module, channel and logic level", () => {
+        expect(issuesOf(broken(promoteProbe))).toEqual([]);
+      });
+
+      it("rejects an active sensor with no driver, SDK module or telemetry", () => {
+        const input = broken((i) => {
+          const probe = promoteProbe(i);
+          probe.software = { ...probe.software, driver_pkg: null, driver_version: null, sdk_module: null };
+          probe.cloud = { telemetry_schema: null, default_widgets: [], alert_templates: [] };
+        });
+        expect(schemaPathsOf(input, "P-002")).toEqual(
+          expect.arrayContaining(["software.driver_pkg", "software.sdk_module", "cloud.telemetry_schema", "cloud.default_widgets"]),
+        );
+      });
+
+      it("rejects an active actuator with no driver", () => {
+        const input = broken((i) => {
+          const probe = promoteProbe(i);
+          probe.software = { ...probe.software, capabilities: ["read.temperature_c", "act.position_deg"], driver_pkg: null, driver_version: null };
+        });
+        expect(schemaPathsOf(input, "P-002")).toContain("software.driver_pkg");
+      });
+
+      it("lets a draft sensor leave them null", () => {
+        expect(partData(goodInput(), "P-002").software.driver_pkg).toBeNull();
+        expect(issuesOf(goodInput())).toEqual([]);
+      });
+
+      it("lets active host and power parts leave them null", () => {
+        const input = goodInput();
+        expect(partData(input, "C-001")).toMatchObject({ status: "active", software: { driver_pkg: null }, cloud: { telemetry_schema: null } });
+        expect(partData(input, "E-001")).toMatchObject({ status: "active", software: { driver_pkg: null }, cloud: { telemetry_schema: null } });
+        expect(issuesOf(input)).toEqual([]);
+      });
+
+      it("still requires a channel when a power part reads a value", () => {
+        const input = broken((i) => partData(i, "E-001").software.capabilities.push("read.voltage_v"));
+        expect(schemaPathsOf(input, "E-001")).toEqual(expect.arrayContaining(["software.driver_pkg", "cloud.telemetry_schema"]));
+      });
+    });
+
+    describe("electrical shape by interface", () => {
+      it("rejects a host with an IO voltage range instead of one voltage", () => {
+        const input = broken((i) => (partData(i, "C-001").electrical.logic_v = [3.0, 3.6]));
+        expect(schemaPathsOf(input, "C-001")).toContain("electrical.logic_v");
+      });
+
+      it("rejects a power part with a logic level", () => {
+        const input = broken((i) => (partData(i, "E-001").electrical.logic_v = [3.0, 5.0]));
+        expect(schemaPathsOf(input, "E-001")).toContain("electrical.logic_v");
+      });
+
+      it("rejects duplicate or reserved alt_inputs names", () => {
+        const dup = broken((i) => partData(i, "C-001").electrical.alt_inputs.push({ name: "5v-pin", voltage_range: [4, 5] }));
+        expect(schemaPathsOf(dup, "C-001")).toContain("electrical.alt_inputs");
+        const reserved = broken((i) => (partData(i, "C-001").electrical.alt_inputs[0].name = "primary"));
+        expect(schemaPathsOf(reserved, "C-001")).toContain("electrical.alt_inputs.0.name");
+      });
     });
   });
 
@@ -106,11 +176,9 @@ describe("validateRegistry", () => {
     it("requires it for deprecated parts too", () => {
       const input = broken((i) => {
         i.footprintExists = (dir) => dir !== "P-002";
-        Object.assign(partData(i, "P-002"), { status: "deprecated", successor: "P-001" });
-        partData(i, "P-002").mechanical.bounding_mm = [6, 6, 30];
-        partData(i, "P-002").commerce = { suppliers: [{ vendor: "adafruit", sku: "381", url: "https://www.adafruit.com/product/381" }], unit_cost_usd: 9.95 };
+        Object.assign(promoteProbe(i), { status: "deprecated", successor: "P-001" });
       });
-      expect(rulesOf(input)).toContain("footprint");
+      expect(rulesOf(input)).toEqual(["footprint"]);
     });
   });
 
@@ -181,11 +249,69 @@ describe("validateRegistry", () => {
     });
   });
 
+  describe("logic-level", () => {
+    const fiveVoltSensor = (i: RegistryInput) => (partData(i, "P-001").electrical.logic_v = [5.0, 5.0]);
+
+    it("flags a peripheral that can't work at the host's IO voltage", () => {
+      const issues = issuesOf(broken(fiveVoltSensor));
+      expect(issues).toEqual([
+        expect.objectContaining({ rule: "logic-level", file: "parts/P-001/part.json", message: expect.stringContaining("C-001 drives 3.3 V IO") }),
+      ]);
+    });
+
+    it("accepts a mismatch recorded in known-issues.json", () => {
+      const input = broken((i) => {
+        fiveVoltSensor(i);
+        i.knownIssues.data = [{ rule: "logic-level", parts: ["P-001", "C-001"], note: "divide the echo down" }];
+      });
+      expect(issuesOf(input)).toEqual([]);
+    });
+
+    it("flags a known issue that no longer matches", () => {
+      const input = broken((i) => {
+        i.knownIssues.data = [{ rule: "logic-level", parts: ["P-001", "C-001"], note: "stale" }];
+      });
+      expect(issuesOf(input)).toEqual([expect.objectContaining({ rule: "logic-level", file: "known-issues.json" })]);
+    });
+
+    it("skips a draft whose logic level isn't known yet", () => {
+      expect(partData(goodInput(), "P-002").electrical.logic_v).toBeNull();
+      expect(issuesOf(goodInput())).toEqual([]);
+    });
+  });
+
   it("golden-build: every golden-build capability must be provided", () => {
     const input = broken((i) => {
-      i.goldenBuilds = [{ id: "x", name: "Presence alert", requires: ["read.motion_bool"], optional: [] }];
+      i.goldenBuilds = [
+        { id: "x", name: "Presence alert", requires: ["read.motion_bool"], optional: [], power: { supply: "power.battery", brain_input: "5v-pin" } },
+      ];
     });
     expect(issuesOf(input)).toEqual([expect.objectContaining({ rule: "golden-build", message: expect.stringContaining("read.motion_bool") })]);
+  });
+
+  describe("power-path", () => {
+    it("flags a supply that would overvolt the brain input it's wired to", () => {
+      const input = broken((i) => (i.goldenBuilds[0]!.power = { supply: "power.battery", brain_input: "3v3-pin" }));
+      expect(issuesOf(input)).toEqual([
+        expect.objectContaining({ rule: "power-path", message: expect.stringContaining("E-001 (2.5–4.2 V) can't feed C-001 3v3-pin (3–3.6 V)") }),
+      ]);
+    });
+
+    it("flags a peripheral outside the brain's rail", () => {
+      // Both temperature parts, or the draft probe would still fit the rail.
+      const input = broken((i) => {
+        partData(i, "P-001").electrical.voltage_range = [4.5, 5.5];
+        partData(i, "P-002").electrical.voltage_range = [4.5, 5.5];
+      });
+      expect(issuesOf(input)).toEqual([
+        expect.objectContaining({ rule: "power-path", message: expect.stringContaining("no part providing read.temperature_c runs from") }),
+      ]);
+    });
+
+    it("flags an input the brain doesn't have", () => {
+      const input = broken((i) => (i.goldenBuilds[0]!.power.brain_input = "vbat-pin"));
+      expect(issuesOf(input)).toEqual([expect.objectContaining({ rule: "power-path", message: expect.stringContaining('no "vbat-pin" input') })]);
+    });
   });
 
   it("formats issues with file and rule", () => {

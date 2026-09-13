@@ -13,11 +13,12 @@
     "current_draw_ma": { "idle": 15, "active": 15 },
     "requires": ["gpio.digital", "power.5v"],
     "conflicts": [],
-    "i2c_address": null
+    "i2c_address": null,
+    "logic_v": [5.0, 5.0]
   },
   "mechanical": {
     "footprint_file": "footprint.step",
-    "bounding_mm": [45, 20, 15],
+    "bounding_mm": null,
     "mount": { "type": "unspecified" },
     "exposure": "window",
     "environment_flags": ["needs-line-of-sight"]

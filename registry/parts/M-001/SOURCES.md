@@ -18,3 +18,4 @@ Not verified:
   - SparkFun ROB-09065 (https://www.sparkfun.com/products/9065) is a generic sub-micro servo with 29.0 mm tab hole spacing and 2.0 mm holes.
   - Neither is an SG90.
 - SG90 tab hole spacing, so the mount is `unspecified`.
+- The control input's logic threshold, so `logic_v` is null. Hobby servos are often driven from 3.3 V PWM, but no SG90 sheet says so. The logic-level check skips this part until one does, and the schema rejects null once the part is past draft.

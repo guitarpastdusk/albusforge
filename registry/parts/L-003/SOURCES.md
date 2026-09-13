@@ -8,6 +8,7 @@ Module: generic HC-SR501. Checked 2026-09-13.
 Caveats:
 - The two sheets disagree on the supply range: SunFounder says 3.6–30 V. The narrower Handsontec range is used.
 - The 65 mA active figure looks high for a BISS0001 design. It's kept because it's the only published number and it errs conservative.
+- `logic_v` is [3.3, 3.3]: the output drives 3.3 V high (Handsontec), which matches the ESP32-S3's IO. Nothing is claimed for other host voltages.
 
 Not verified:
 - **Supplier listing.** There's no HC-SR501 listing on Adafruit, SparkFun, DigiKey or Mouser that loaded, so `suppliers` is empty and `unit_cost_usd` is null. Adafruit #189 (https://www.adafruit.com/product/189) is a similar BISS0001 PIR but isn't sold as an HC-SR501, and its specs differ: 5–12 V, 24.03 × 32.34 × 24.66 mm, out of stock at $9.95.

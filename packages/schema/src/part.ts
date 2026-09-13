@@ -9,8 +9,8 @@ import { z } from "zod";
  * registry/schemas/part.schema.json is generated from it.
  *
  * Cross-part rules (connectors exist, `requires` is provided, footprints exist
- * for active parts, I²C clashes) need the whole registry and live in the
- * validator, not here.
+ * for active parts, I²C clashes, logic levels, golden-build power paths) need
+ * the whole registry and live in the validator, not here.
  */
 
 const SEMVER_CORE = String.raw`(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?`;
@@ -76,18 +76,40 @@ export const I2cAddress = z
   .string()
   .regex(/^0x(0[89a-f]|[1-6][0-9a-f]|7[0-7])$/, "expected a 7-bit I2C address 0x08–0x77, lower-case hex");
 
-/** A positive number, for lengths and capacities. */
+/** A positive number, for lengths, voltages and capacities. */
 const Positive = z.number().positive();
 
+/** [min, max] volts. */
 const VoltageRange = z
   .tuple([Positive, Positive])
-  .refine(([min, max]) => min <= max, "voltage_range min must be ≤ max");
+  .refine(([min, max]) => min <= max, "range min must be ≤ max");
+
+/** A named rail a part can be powered from instead of its connector. */
+export const PowerInput = z.strictObject({
+  /** `5v-pin`, `3v3-pin`. `primary` is reserved: it names the connector input. */
+  name: z
+    .string()
+    .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "expected an input name like 5v-pin")
+    .refine((name) => name !== "primary", "primary is reserved for the connector input"),
+  voltage_range: VoltageRange,
+});
+export type PowerInput = z.infer<typeof PowerInput>;
 
 export const PartElectrical = z.strictObject({
   interface: PartInterface,
   connector: ConnectorId,
-  /** Supply voltage the part accepts. For a supply, the voltage it delivers. */
+  /**
+   * Supply voltage the part accepts at `connector`, including whatever the
+   * board puts in front of the chip (a protection diode, a regulator). For an
+   * energy part, the voltage it delivers.
+   */
   voltage_range: VoltageRange,
+  /**
+   * Other inputs the part can be powered from, each an alternative to
+   * `connector` (a dev board's 5V and 3V3 header pins). Not in §4; the §7.2
+   * voltage window needs to know which input a supply is wired to.
+   */
+  alt_inputs: z.array(PowerInput).optional(),
   /** Drawn from the assembly's rails. Energy parts that feed the rails draw 0. */
   current_draw_ma: z
     .strictObject({ idle: z.number().nonnegative(), active: z.number().nonnegative() })
@@ -96,8 +118,15 @@ export const PartElectrical = z.strictObject({
   conflicts: z.array(PartId),
   i2c_address: I2cAddress.nullable(),
   /**
-   * Not in §4's example, but the power constraint (§7.2) needs it: what the part
-   * can supply to the assembly. Required for energy parts.
+   * IO voltages the part's signal lines work with, [min, max] V. For the host,
+   * the one IO voltage it drives ([3.3, 3.3]). Null for power parts, and for a
+   * draft whose logic level isn't verified yet.
+   */
+  logic_v: VoltageRange.nullable(),
+  /**
+   * What the part supplies to the assembly: an energy part's output, or the
+   * host's regulated rail for its peripherals. Not in §4's example; the power
+   * constraint (§7.2) needs it. Required for energy parts.
    */
   supply: z
     .strictObject({
@@ -169,7 +198,10 @@ export type PartMechanical = z.infer<typeof PartMechanical>;
 
 export const PartSoftware = z
   .strictObject({
-    /** Null for parts with nothing to drive (a battery, a wall supply). */
+    /**
+     * Null only for the host and passive power parts, or while a draft has no
+     * driver yet. See the checks in PartDefinition.
+     */
     driver_pkg: z
       .string()
       .regex(/^hsx-driver-[a-z0-9-]+$/, "expected hsx-driver-<name>")
@@ -193,7 +225,7 @@ export const PartWidget = z.enum(["line-chart", "stat", "gauge", "event-timeline
 export const PartAlertTemplate = z.enum(["out_of_range", "on_event", "low_battery"]);
 
 export const PartCloud = z.strictObject({
-  /** Null for parts that produce no telemetry channel. */
+  /** Null only for parts that produce no telemetry channel; then there are no widgets or alerts either. */
   telemetry_schema: z
     .string()
     .regex(/^[a-z][a-z0-9_]*\.v\d+$/, "expected a schema id like temperature.v1")
@@ -221,6 +253,9 @@ export const PartCommerce = z.strictObject({
 });
 export type PartCommerce = z.infer<typeof PartCommerce>;
 
+/** Capabilities that carry a value (a reading or a command) and so need a driver and a channel. */
+const isValueCapability = (capability: string) => capability.startsWith("read.") || capability.startsWith("act.");
+
 export const PartDefinition = z
   .strictObject({
     /** Editor hint pointing at registry/schemas/part.schema.json; ignored by services. */
@@ -238,43 +273,61 @@ export const PartDefinition = z
     commerce: PartCommerce,
   })
   .superRefine((part, ctx) => {
+    const issue = (path: (string | number)[], message: string) => ctx.addIssue({ code: "custom", path, message });
+    const { electrical, software, cloud } = part;
+
     const prefix = PART_CATEGORY_PREFIX[part.category];
-    if (!part.id.startsWith(`${prefix}-`)) {
-      ctx.addIssue({ code: "custom", path: ["id"], message: `${part.category} part ids start with ${prefix}-` });
-    }
-    if (part.status === "deprecated" && part.successor === null) {
-      ctx.addIssue({ code: "custom", path: ["successor"], message: "a deprecated part needs a successor" });
-    }
+    if (!part.id.startsWith(`${prefix}-`)) issue(["id"], `${part.category} part ids start with ${prefix}-`);
+    if (part.status === "deprecated" && part.successor === null) issue(["successor"], "a deprecated part needs a successor");
     if ((part.status === "draft" || part.status === "active") && part.successor !== null) {
-      ctx.addIssue({ code: "custom", path: ["successor"], message: `a ${part.status} part has no successor` });
+      issue(["successor"], `a ${part.status} part has no successor`);
     }
-    if (part.successor === part.id) {
-      ctx.addIssue({ code: "custom", path: ["successor"], message: "a part can't succeed itself" });
+    if (part.successor === part.id) issue(["successor"], "a part can't succeed itself");
+    if (part.category === "energy" && electrical.supply === undefined) issue(["electrical", "supply"], "energy parts declare supply");
+    if ((electrical.interface === "i2c") !== (electrical.i2c_address !== null)) {
+      issue(["electrical", "i2c_address"], "i2c parts have an i2c_address; other parts have null");
     }
-    if (part.category === "energy" && part.electrical.supply === undefined) {
-      ctx.addIssue({ code: "custom", path: ["electrical", "supply"], message: "energy parts declare supply" });
+
+    // Electrical shape by interface.
+    const passive = electrical.interface === "power" || electrical.interface === "host";
+    if (electrical.interface === "host" && (electrical.logic_v === null || electrical.logic_v[0] !== electrical.logic_v[1])) {
+      issue(["electrical", "logic_v"], "the host declares the one IO voltage it drives, as logic_v [v, v]");
     }
-    if ((part.electrical.interface === "i2c") !== (part.electrical.i2c_address !== null)) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["electrical", "i2c_address"],
-        message: "i2c parts have an i2c_address; other parts have null",
-      });
+    if (electrical.interface === "power" && electrical.logic_v !== null) {
+      issue(["electrical", "logic_v"], "power parts have no signal lines; logic_v is null");
     }
+    const inputNames = (electrical.alt_inputs ?? []).map((input) => input.name);
+    if (new Set(inputNames).size !== inputNames.length) issue(["electrical", "alt_inputs"], "alt_inputs names are unique");
+
+    // Cloud consistency, at every status: a widget or alert needs a channel to read.
+    const valueCaps = software.capabilities.filter(isValueCapability);
+    if (cloud.telemetry_schema === null && (cloud.default_widgets.length > 0 || cloud.alert_templates.length > 0)) {
+      issue(["cloud", "telemetry_schema"], "default_widgets and alert_templates need a telemetry_schema");
+    }
+    if (cloud.alert_templates.includes("low_battery") && !software.capabilities.includes("power.battery")) {
+      issue(["cloud", "alert_templates"], "low_battery needs the power.battery capability");
+    }
+    if (cloud.alert_templates.includes("out_of_range") && !valueCaps.some((c) => c.startsWith("read.") && !c.endsWith("_bool"))) {
+      issue(["cloud", "alert_templates"], "out_of_range needs a numeric read.* capability");
+    }
+
     // A draft may be missing what can't be sourced yet; nothing past draft may.
-    if (part.status !== "draft") {
-      if (part.mechanical.mount.type === "unspecified") {
-        ctx.addIssue({ code: "custom", path: ["mechanical", "mount"], message: "only draft parts may leave mount unspecified" });
-      }
-      if (part.mechanical.bounding_mm === null) {
-        ctx.addIssue({ code: "custom", path: ["mechanical", "bounding_mm"], message: "only draft parts may leave bounding_mm null" });
-      }
-      if (part.commerce.suppliers.length === 0) {
-        ctx.addIssue({ code: "custom", path: ["commerce", "suppliers"], message: "only draft parts may have no supplier" });
-      }
-      if (part.commerce.unit_cost_usd === null) {
-        ctx.addIssue({ code: "custom", path: ["commerce", "unit_cost_usd"], message: "only draft parts may leave unit_cost_usd null" });
-      }
+    if (part.status === "draft") return;
+    const where = `a ${part.status} part`;
+    if (part.mechanical.mount.type === "unspecified") issue(["mechanical", "mount"], "only draft parts may leave mount unspecified");
+    if (part.mechanical.bounding_mm === null) issue(["mechanical", "bounding_mm"], "only draft parts may leave bounding_mm null");
+    if (part.commerce.suppliers.length === 0) issue(["commerce", "suppliers"], "only draft parts may have no supplier");
+    if (part.commerce.unit_cost_usd === null) issue(["commerce", "unit_cost_usd"], "only draft parts may leave unit_cost_usd null");
+    // The host and passive power parts may have nothing to drive. Anything on a
+    // signal bus, or anything that reads or commands a value, may not.
+    if (!passive || valueCaps.length > 0) {
+      if (software.driver_pkg === null) issue(["software", "driver_pkg"], `${where} with ${electrical.interface} or read/act capabilities needs a driver`);
+      if (software.sdk_module === null) issue(["software", "sdk_module"], `${where} with ${electrical.interface} or read/act capabilities needs an sdk_module`);
     }
+    if (valueCaps.length > 0) {
+      if (cloud.telemetry_schema === null) issue(["cloud", "telemetry_schema"], `${where} with ${valueCaps.join(", ")} needs a telemetry_schema`);
+      if (cloud.default_widgets.length === 0) issue(["cloud", "default_widgets"], `${where} with ${valueCaps.join(", ")} needs a default widget`);
+    }
+    if (!passive && electrical.logic_v === null) issue(["electrical", "logic_v"], `${where} on a signal bus declares logic_v`);
   });
 export type PartDefinition = z.infer<typeof PartDefinition>;

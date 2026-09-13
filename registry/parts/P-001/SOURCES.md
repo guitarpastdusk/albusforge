@@ -8,4 +8,6 @@ Module: Adafruit BME280 breakout, STEMMA QT (#2652). Checked 2026-09-13.
 
 Currents are chip typicals. The module's regulator adds some draw, which isn't published.
 
+`logic_v` is 3–5 V. From the pinouts page: "All pins going into the breakout have level shifting circuitry to make them 3-5V logic level safe."
+
 Not verified: mounting hole positions, so the mount is `unspecified`. SparkFun SEN-15440 is also a BME280, but its supply range is different (1.71–3.6 V, no regulator), so it isn't listed as a supplier for this definition.

@@ -86,6 +86,39 @@
           "minItems": 2,
           "maxItems": 2
         },
+        "alt_inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              },
+              "voltage_range": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "name",
+              "voltage_range"
+            ],
+            "additionalProperties": false
+          }
+        },
         "current_draw_ma": {
           "type": "object",
           "properties": {
@@ -123,6 +156,29 @@
             {
               "type": "string",
               "pattern": "^0x(0[89a-f]|[1-6][0-9a-f]|7[0-7])$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logic_v": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
             },
             {
               "type": "null"
@@ -179,7 +235,8 @@
         "current_draw_ma",
         "requires",
         "conflicts",
-        "i2c_address"
+        "i2c_address",
+        "logic_v"
       ],
       "additionalProperties": false
     },

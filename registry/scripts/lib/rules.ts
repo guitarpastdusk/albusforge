@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ConnectorDefinition, I2cAddress, PartDefinition, PartId } from "@albusforge/schema";
 import type { GoldenBuild } from "../golden-builds";
 import type { RawFile } from "./load";
+import { checkPowerPath } from "./power";
 import { capabilityUnit } from "./units";
 
 /**
@@ -17,6 +18,21 @@ export const I2cShared = z.array(
 );
 export type I2cShared = z.infer<typeof I2cShared>;
 
+/**
+ * Cross-part problems the registry accepts for now, each saying what a build
+ * has to do about it (registry/known-issues.json). Today only logic-level
+ * mismatches, as [peripheral, host]. An entry that no longer matches a real
+ * mismatch is itself an error, so the list can't rot.
+ */
+export const KnownIssues = z.array(
+  z.strictObject({
+    rule: z.literal("logic-level"),
+    parts: z.tuple([PartId, PartId]),
+    note: z.string().min(1),
+  }),
+);
+export type KnownIssues = z.infer<typeof KnownIssues>;
+
 export type RuleId =
   | "json"
   | "schema"
@@ -31,7 +47,9 @@ export type RuleId =
   | "requires-unprovided"
   | "capability-unit"
   | "i2c-clash"
-  | "golden-build";
+  | "logic-level"
+  | "golden-build"
+  | "power-path";
 
 export interface RegistryIssue {
   rule: RuleId;
@@ -43,6 +61,7 @@ export interface RegistryInput {
   parts: RawFile[];
   connectors: RawFile[];
   i2cShared: RawFile;
+  knownIssues: RawFile;
   footprintExists: (partDir: string, footprintFile: string) => boolean;
   goldenBuilds: readonly GoldenBuild[];
 }
@@ -57,11 +76,7 @@ export interface RegistryResult {
 /** Parts the matcher may still pick, or that other parts may still lean on. */
 const LIVE = new Set(["draft", "active"]);
 
-function parseFile<T>(
-  file: RawFile,
-  schema: z.ZodType<T>,
-  issues: RegistryIssue[],
-): T | undefined {
+function parseFile<T>(file: RawFile, schema: z.ZodType<T>, issues: RegistryIssue[]): T | undefined {
   if (file.parseError !== undefined) {
     issues.push({ rule: "json", file: file.path, message: `not valid JSON: ${file.parseError}` });
     return undefined;
@@ -198,11 +213,50 @@ export function validateRegistry(input: RegistryInput): RegistryResult {
     }
   }
 
+  // Every live peripheral with a known logic level must work at every live host's IO voltage.
+  const known = parseFile(input.knownIssues, KnownIssues, issues) ?? [];
+  const hosts = live.flatMap(({ part }) =>
+    part.electrical.interface === "host" && part.electrical.logic_v !== null ? [{ id: part.id, io: part.electrical.logic_v[0] }] : [],
+  );
+  const mismatched = new Set<string>();
+  for (const { file, part } of live) {
+    const range = part.electrical.logic_v;
+    if (range === null || part.electrical.interface === "host") continue;
+    for (const host of hosts) {
+      if (host.io >= range[0] && host.io <= range[1]) continue;
+      mismatched.add(`${part.id}|${host.id}`);
+      if (known.some((entry) => entry.parts[0] === part.id && entry.parts[1] === host.id)) continue;
+      issues.push({
+        rule: "logic-level",
+        file: file.path,
+        message: `signal lines work at ${range[0]}–${range[1]} V, but ${host.id} drives ${host.io} V IO; change the part, or record the level shifting a build needs in known-issues.json`,
+      });
+    }
+  }
+  for (const entry of known) {
+    if (!mismatched.has(`${entry.parts[0]}|${entry.parts[1]}`)) {
+      issues.push({
+        rule: "logic-level",
+        file: input.knownIssues.path,
+        message: `entry for ${entry.parts.join(" and ")} doesn't match a logic-level mismatch any more; remove it`,
+      });
+    }
+  }
+
+  const liveParts = live.map((p) => p.part);
   for (const build of input.goldenBuilds) {
     for (const cap of [...build.requires, ...build.optional]) {
       if (!provided.has(cap)) {
         issues.push({ rule: "golden-build", file: "scripts/golden-builds.ts", message: `${build.name} needs "${cap}", which no draft or active part provides` });
       }
+    }
+    const power = checkPowerPath(build, liveParts);
+    if (!power.ok) {
+      issues.push({
+        rule: "power-path",
+        file: "scripts/golden-builds.ts",
+        message: `${build.name} has no voltage-compatible power path: ${power.problems.join("; ")}`,
+      });
     }
   }
 

@@ -6,3 +6,5 @@ Module: Adafruit waterproof DS18B20 (#381). Checked 2026-09-13.
 - Standby 750 nA typ, converting 1 mA typ (1.5 mA max), chip range −55…125 °C: https://cdn-shop.adafruit.com/datasheets/DS18B20.pdf
 
 `bounding_mm` is the probe tube, which is what passes through the wall. The gland `d_mm` is the tube diameter; the tolerance table adds clearance. The temperature flag uses the cable's 100 °C limit rather than the chip's 125 °C.
+
+`logic_v` is 3.0–5.5 V. The DQ line is open-drain and pulled up to the host's rail, and the chip runs anywhere from 3.0 to 5.5 V (datasheet above).

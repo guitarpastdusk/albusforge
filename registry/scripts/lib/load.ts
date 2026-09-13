@@ -20,6 +20,7 @@ export interface RawRegistry {
   parts: RawFile[];
   connectors: RawFile[];
   i2cShared: RawFile;
+  knownIssues: RawFile;
   footprintExists: (partDir: string, footprintFile: string) => boolean;
 }
 
@@ -45,6 +46,7 @@ export function loadRegistry(root: string = REGISTRY_ROOT): RawRegistry {
     parts: partDirs.map((dir) => readJson(root, `parts/${dir}/part.json`, dir)),
     connectors: connectorFiles.map((f) => readJson(root, `connectors/${f}`, f.slice(0, -".json".length))),
     i2cShared: readJson(root, "i2c-shared.json", "i2c-shared"),
+    knownIssues: readJson(root, "known-issues.json", "known-issues"),
     footprintExists: (partDir, footprintFile) => existsSync(path.join(root, "parts", partDir, footprintFile)),
   };
 }

@@ -64,6 +64,13 @@
       ]
     },
     {
+      "capability": "power.3v3",
+      "unit": null,
+      "parts": [
+        "C-001"
+      ]
+    },
+    {
       "capability": "power.5v",
       "unit": null,
       "parts": [
@@ -170,7 +177,7 @@
         "power.battery"
       ],
       "output_v": [
-        2.75,
+        2.5,
         4.2
       ],
       "max_output_ma": 1000,
@@ -217,12 +224,13 @@
         "gpio.digital",
         "gpio.pwm",
         "net.ble",
-        "net.wifi"
+        "net.wifi",
+        "power.3v3"
       ],
       "requires": [],
       "voltage_range": [
-        3,
-        3.6
+        4.13,
+        5.5
       ],
       "current_draw_ma": {
         "idle": 0.007,
@@ -243,7 +251,7 @@
       ],
       "requires": [],
       "voltage_range": [
-        2.75,
+        2.5,
         4.2
       ],
       "current_draw_ma": {

@@ -1,10 +1,10 @@
 // Production streaming regression: run after pnpm --filter web build. Local stub only.
-const http = require('node:http');
-const assert = require('node:assert/strict');
-const path = require('node:path');
-const { spawn } = require('node:child_process');
-const { once } = require('node:events');
-const { performance } = require('node:perf_hooks');
+import http from 'node:http';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { performance } from 'node:perf_hooks';
 
 async function listen(server) {
   server.listen(0, '127.0.0.1');
@@ -66,7 +66,7 @@ async function probe(tree) {
   }
 }
 (async () => {
-  const result = await probe(path.resolve(__dirname, '../../..'));
+  const result = await probe(path.resolve(import.meta.dirname, '../../..'));
   console.log(JSON.stringify(result));
   assert.equal(result.status, 200);
   assert.equal(result.me_requests, 1);

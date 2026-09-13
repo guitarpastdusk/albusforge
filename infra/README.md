@@ -20,7 +20,18 @@ Decisions behind the shape: [`docs/adr/`](../docs/adr/).
 
 Project IDs are global. If any is taken, set `project_suffix` in `bootstrap/terraform.tfvars`.
 
-## First-time setup
+## Working on bootstrap
+
+Bootstrap was applied on 2026-09-13, and its state is in `gs://albusforge-ci-tfstate/bootstrap`:
+
+```sh
+cd infra/bootstrap
+terraform init -backend-config="bucket=albusforge-ci-tfstate"
+```
+
+## Rebuilding from nothing
+
+The steps below are only for a fresh setup where the state bucket doesn't exist yet. For step 1, comment out the backend block in `bootstrap/backend.tf` first.
 
 ```sh
 # 0. auth
@@ -36,7 +47,7 @@ terraform apply
 #    capture the bucket name FIRST — once the backend block is uncommented,
 #    `terraform output` fails with "Backend initialization required"
 TFSTATE_BUCKET=$(terraform output -raw tfstate_bucket)
-#    now uncomment the backend block in backend.tf, then:
+#    now restore the backend block in backend.tf, then:
 terraform init -migrate-state -backend-config="bucket=$TFSTATE_BUCKET"
 
 # 3. point GoDaddy at Cloud DNS — see "Domain" below
@@ -64,8 +75,8 @@ Keep the **registration** at GoDaddy; move only **DNS** to Cloud DNS ([ADR 0002]
 
 Deploys authenticate through WIF, with no JSON keys. The trust is bound to **GitHub environments**, not branches:
 
-- Create environments `staging` and `prod` under repo Settings → Environments.
-- Give `prod` required reviewers. That approval *is* the manual promotion step in §12.3.
+- Environments `staging` and `prod` exist (created 2026-09-13). Both accept deployments from `main` only.
+- **Prod promotion is a manual run of `promote-web.yml`** with the digest staging deployed. That run is the manual promotion step in §12.3. There is no approval gate: GitHub refused required reviewers on `prod` for this private repository's plan. See [ADR 0001](../docs/adr/0001-shared-ci-project.md).
 - A workflow job must declare `environment: staging` or `environment: prod` to get credentials. `terraform output github_actions` prints the provider and SA values for `google-github-actions/auth`.
 
 The staging deployer can push images; the prod deployer can only read them. That enforces "never build twice" in IAM, not just in convention.

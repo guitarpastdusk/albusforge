@@ -1,6 +1,6 @@
 # 0001 — Shared CI project and single-digest promotion
 
-**Status:** Accepted, 2026-09-12
+**Status:** Accepted, 2026-09-12. Amended 2026-09-13: prod promotion is a manual workflow run.
 
 ## Context
 
@@ -13,7 +13,8 @@ A third project, `albusforge-ci`, holds Artifact Registry, the Terraform state b
 - Both environments' Cloud Run service agents get `artifactregistry.reader` on the repo.
 - `deploy-staging` gets `artifactregistry.writer`, while `deploy-prod` gets `artifactregistry.reader` only. **Prod cannot build or push**, so promoting a digest is the only way anything reaches prod.
 - Tags are immutable (commit SHA).
-- Each deployer can be impersonated only from a GitHub Actions job running in the matching GitHub environment. `prod` has required reviewers, and that approval is the manual promotion step.
+- Each deployer can be impersonated only from a GitHub Actions job running in the matching GitHub environment. Both environments accept deployments from `main` only.
+- **Promotion to prod is a manual run of `promote-web.yml`** (`workflow_dispatch`), given the digest staging deployed. It never builds. GitHub refused a required reviewer on `prod` for this private repository's plan (checked 2026-09-13). If the plan changes, add one, and promotion can become an approval instead.
 
 ## Consequences
 

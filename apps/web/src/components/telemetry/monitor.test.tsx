@@ -173,3 +173,14 @@ it("exposes labelled history controls and inspectable evidence in the DOM", asyn
   );
   expect(document.querySelector("form")?.getAttribute("action")).toBeNull();
 });
+
+it("serializes one complete SVG tooltip text node for stable hydration", () => {
+  document.body.innerHTML = renderToStaticMarkup(
+    <HistoryPlot history={history} unit="C" />,
+  );
+  const title = document.querySelector("circle title");
+  expect(title?.textContent).toBe(
+    "2026-09-13T11:00:00Z: 0 C; sequence 9007199254740993, ordinal 0",
+  );
+  expect(title?.childNodes).toHaveLength(1);
+});

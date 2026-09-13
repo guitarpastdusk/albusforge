@@ -52,12 +52,11 @@ export function HistoryPlot({
             fill="currentColor"
             className="text-coral-deep"
           >
-            <title>
-              {p.t}: {p.v} {unit}
-              {"n" in p
+            <title>{`${p.t}: ${p.v} ${unit}${
+              "n" in p
                 ? `; ${p.n} samples, min ${p.min}, max ${p.max}`
-                : `; sequence ${p.seq}, ordinal ${p.ordinal}`}
-            </title>
+                : `; sequence ${p.seq}, ordinal ${p.ordinal}`
+            }`}</title>
           </circle>
         ))}
         <text x="80" y="250" fontSize="10">

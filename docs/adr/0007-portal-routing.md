@@ -57,7 +57,7 @@ A header-echo image ran briefly on staging's `web` behind the real load balancer
 | sends `X-Forwarded-For: 1.2.3.4` | `1.2.3.4,<client>,<lb-ip>` |
 | sends `X-Forwarded-For: 1.2.3.4, 5.6.7.8` | `1.2.3.4, 5.6.7.8,<client>,<lb-ip>` |
 
-- **The visitor's IP is the second-to-last `X-Forwarded-For` entry.** The global external load balancer appends `<client-ip>,<lb-ip>` after whatever the client sent, and Cloud Run adds no further entry. The request's source address is the load balancer's IP. Web reads `X-Albus-Client-IP` with `TRUSTED_PROXY_HOPS=1`, the default, so Terraform does not set it. Entries can be separated by `,` or `, `, so parsing must trim.
+- **The visitor's IP is the second-to-last `X-Forwarded-For` entry.** The global external load balancer appends `<client-ip>,<lb-ip>` after whatever the client sent, and Cloud Run adds no further entry. The request's source address is the load balancer's IP. Web reads `X-Forwarded-For` with `TRUSTED_PROXY_HOPS=1`, the default, and sends the derived visitor IP to gateway as `X-Albus-Client-IP`. Terraform does not set `TRUSTED_PROXY_HOPS`. Entries can be separated by `,` or `, `, so parsing must trim.
 - **Everything before the second-to-last entry is client-controlled** and must never be trusted.
 - **The load balancer removes `X-Albus-Internal-Auth`, `X-Albus-Original-Host` and `X-Albus-Client-IP`** sent by a client. None of the three reached the app.
 - **`Host` is preserved.** A request to `acme-plant.staging.albusforge.ai` reached `web` with that `Host`.

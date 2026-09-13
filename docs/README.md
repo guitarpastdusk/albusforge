@@ -9,6 +9,7 @@ Design and architecture documentation for Albus Forge.
 | [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) | M6a standalone ingestion, wire/storage semantics, simulator runbook, production gates and dashboard/intelligence follow-ups. |
 | [TELEMETRY-STORAGE.md](TELEMETRY-STORAGE.md) | M6b native partitions, catch-up rollups, guarded retention and background-job contract. |
 | [PORTAL.md](PORTAL.md) | The web portal: screens and routes, the API additions the design needs, derived project status, how an anonymous build is claimed at sign-up, where the design and the registry disagree, and what is not designed yet. |
+| [UI-ANALYTICS.md](UI-ANALYTICS.md) | Scoping and architectural assessment for UI usage tracking via Google Analytics (GA4) and privacy-first alternatives. |
 | [ASK-TO-ENCLOSURE.md](ASK-TO-ENCLOSURE.md) | Next build phase: the Claude requirements conversation (intake), parts determination (matcher), enclosure STL generation (bodygen), and the 360° viewer, with deliverables by milestone. |
 | [adr/](adr/) | Architecture decision records. |
 | [checkin/](checkin/) | Hackathon check-in submissions, one every 12 hours: Markdown source plus exported PDF. |

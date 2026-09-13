@@ -32,6 +32,13 @@ case "$*" in
     if [ -f "$STUB/images-${5##*/}.json" ]; then cat "$STUB/images-${5##*/}.json"; else cat "$STUB/images.json"; fi ;;
   "artifacts docker tags add"*)
     echo "Added tag." >&2 ;;
+  # Workflow-context tests (below) run whole workflows' steps.
+  "auth print-access-token"*)
+    echo "stub-token" ;;
+  "run jobs describe"*)
+    echo "$4" ;;
+  "run jobs update"* | "run jobs execute"* | "run deploy"*)
+    echo "stub: $*" >&2 ;;
   *)
     echo "stub gcloud: unexpected call: $*" >&2; exit 99 ;;
 esac
@@ -421,6 +428,117 @@ expect '[ "$code" = 1 ] && has "db-jobs@$d2 was never successfully deployed"'
 setup "same commit: a malformed argument -> refuse before calling gcloud"
 run require-same-commit.sh "gateway@$d1" "db-jobs:latest"
 expect '[ "$code" = 1 ] && ! called "artifacts"'
+
+# --- workflow context -------------------------------------------------------------------
+# The scripts' own exit codes only matter if the workflow step that calls them
+# fails too. These run a workflow's `run:` steps in order, exactly as written in
+# the YAML, each under `bash -e` (what Actions runs when no shell is set, so
+# without pipefail), stopping at the first failure as Actions does. `uses:`
+# steps are skipped.
+root="$(cd "$scripts/../.." && pwd)"
+
+# workflow_steps FILE DIR: writes each run step's script to DIR/NN.sh and its name to DIR/NN.name.
+# A step's own `env:` becomes exports at the top of its script, with
+# `${{ inputs.X }}` read from $INPUT_X; any other expression makes the step exit 97.
+workflow_steps() {
+  awk -v out="$2" '
+    function indent(s) { match(s, /[^ ]/); return RSTART - 1 }
+    function flush() {
+      if (has) { n++; f = sprintf("%s/%02d", out, n); printf "%s%s", envs, body > (f ".sh"); close(f ".sh"); print name > (f ".name"); close(f ".name") }
+      body = ""; envs = ""; has = 0; inrun = 0; inenv = 0
+    }
+    {
+      if (inrun) {
+        if ($0 ~ /^ *$/) { body = body "\n"; next }
+        if (indent($0) > runindent) {
+          if (bodyindent < 0) bodyindent = indent($0)
+          body = body substr($0, bodyindent + 1) "\n"; next
+        }
+        inrun = 0
+      }
+      if (inenv) {
+        if ($0 ~ /^ *$/) next
+        if (indent($0) > envindent) {
+          kv = $0; sub(/^ */, "", kv)
+          key = kv; sub(/:.*/, "", key)
+          val = kv; sub(/^[^:]*: */, "", val)
+          gsub(/[$][{][{] *inputs[.]/, "${INPUT_", val); gsub(/ *[}][}]/, "}", val)
+          if (val ~ /[$][{][{]/) envs = envs "echo \"unsupported expression in env " key "\" >&2; exit 97\n"
+          else envs = envs "export " key "=\"" val "\"\n"
+          next
+        }
+        inenv = 0
+      }
+      if ($0 ~ /^ *- name: /) { flush(); stepindent = indent($0); name = $0; sub(/^ *- name: /, "", name); next }
+      if ($0 ~ /^ *- uses: /) { flush(); stepindent = indent($0); name = ""; next }
+      if ($0 ~ /^ *env: *$/ && indent($0) == stepindent + 2) { inenv = 1; envindent = indent($0); next }
+      if ($0 ~ /^ *run: [|]$/) { inrun = 1; has = 1; runindent = indent($0); bodyindent = -1; next }
+      if ($0 ~ /^ *run: /) { line = $0; sub(/^ *run: /, "", line); body = line "\n"; has = 1 }
+    }
+    END { flush() }
+  ' "$1"
+}
+
+# run_workflow FILE: sets code (the failing step's status, or 0), err, and $STUB/steps (names of steps run).
+run_workflow() {
+  local dir="$STUB/workflow" step
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  : >"$STUB/steps"
+  : >"$STUB/err"
+  workflow_steps "$1" "$dir"
+  code=0
+  for step in "$dir"/*.sh; do
+    cat "${step%.sh}.name" >>"$STUB/steps"
+    (cd "$root" && bash -e "$step") >>"$STUB/out" 2>>"$STUB/err" || {
+      code=$?
+      break
+    }
+  done
+  err="$(cat "$STUB/err")"
+}
+mutated() { grep -qE '^run (jobs update|jobs execute|deploy) ' "$STUB/calls"; }
+
+# promote_gateway GATEWAY_TAGS JOBS_TAGS: prod env and inputs for promote-gateway.yml.
+promote_gateway() {
+  # Inputs reach the steps only through each step's own env:, as in Actions.
+  export SERVICE=gateway JOBS_IMAGE=db-jobs JOB_NAMES="db-migrate registry-load" PROJECT=albusforge-prod \
+    INPUT_digest="$d1" INPUT_jobs_digest="$d2" GITHUB_ACTOR=tester \
+    GITHUB_STEP_SUMMARY="$STUB/summary" GITHUB_OUTPUT="$STUB/output" DEPLOYER=deploy-prod@example.com
+  unset JOBS IMAGE DIGEST JOBS_DIGEST
+  printf '%s\n' "[{\"version\":\"$d1\",\"tags\":\"$1\"}]" >"$STUB/images-gateway.json"
+  printf '%s\n' "[{\"version\":\"$d2\",\"tags\":\"$2\"}]" >"$STUB/images-db-jobs.json"
+}
+
+setup "workflow: promote-gateway extracts its run steps"
+workflow_steps "$root/.github/workflows/promote-gateway.yml" "$STUB"
+expect '[ "$(cat "$STUB"/*.name | tr "\n" "|")" = "Validate digests|Verify GCP credentials|Require a successful staging deploy of both images|Require the Terraform-managed service and jobs|Run db-migrate|Run registry-load|Deploy gateway to prod|" ]'
+
+setup "workflow: promote-gateway with a pair staging deployed together -> runs the jobs, then deploys"
+promote_gateway "$C,staging-deployed-$C" "$C,staging-deployed-$C"
+run_workflow "$root/.github/workflows/promote-gateway.yml"
+expect '[ "$code" = 0 ] && [ "$(grep -E "^run (jobs update|jobs execute|deploy) " "$STUB/calls" | cut -d" " -f1-4 | tr "\n" "|")" = "run jobs update db-migrate|run jobs execute db-migrate|run jobs update registry-load|run jobs execute registry-load|run deploy gateway --image|" ] && called "run jobs update db-migrate --image $REPO/db-jobs@$d2" && called "run deploy gateway --image $REPO/gateway@$d1"'
+
+setup "workflow: promote-gateway with images from different staging commits -> stops before any mutation"
+# Each digest carries its own marker, so both single-image checks pass; only the pairing check fails.
+promote_gateway "$C,staging-deployed-$C" "$B,staging-deployed-$B"
+run_workflow "$root/.github/workflows/promote-gateway.yml"
+expect '[ "$code" != 0 ] && has "different commits" && [ "$(tail -n 1 "$STUB/steps")" = "Require a successful staging deploy of both images" ] && ! mutated'
+
+setup "workflow: promote-gateway with a jobs image never deployed to staging -> stops before any mutation"
+promote_gateway "$C,staging-deployed-$C" "$C"
+run_workflow "$root/.github/workflows/promote-gateway.yml"
+expect '[ "$code" != 0 ] && has "never successfully deployed to staging" && ! mutated'
+
+# A pipeline's status is its last command's unless pipefail is on, so a failing
+# check piped into head/tee/grep passes under `bash -e`. Deploy and promote
+# workflows either set `shell: bash` (which adds pipefail) or pipe nothing.
+for wf in "$root"/.github/workflows/deploy-*.yml "$root"/.github/workflows/promote-*.yml; do
+  setup "workflow: $(basename "$wf") pipes nothing, or runs with pipefail"
+  workflow_steps "$wf" "$STUB"
+  piped="$(cat "$STUB"/*.sh | grep -nE '(^|[^|])[|]([^|]|$)' || true)"
+  expect '[ -z "$piped" ] || grep -qE "^ +shell: bash$" "$wf"'
+done
 
 echo
 echo "$passed passed, $failed failed"

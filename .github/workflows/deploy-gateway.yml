@@ -34,6 +34,12 @@ on:
 permissions:
   contents: read
 
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
 env:
   REGION: us-central1
   REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge

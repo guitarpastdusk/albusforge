@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
 env:
   REGION: us-central1
   REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
@@ -97,8 +103,12 @@ jobs:
         run: |
           bash .github/scripts/require-staging-deployed.sh "$DIGEST"
           IMAGE="${JOBS_IMAGE}" bash .github/scripts/require-staging-deployed.sh "$JOBS_DIGEST"
-          commit="$(bash .github/scripts/require-same-commit.sh "${SERVICE}@${DIGEST}" "${JOBS_IMAGE}@${JOBS_DIGEST}" | head -n 1)"
-          echo "Both images were deployed to staging by ${commit}."
+          # A plain assignment, never a pipeline: `x="$(check)"` fails the step
+          # under `bash -e` when the check fails, while `x="$(check | head)"`
+          # takes head's status and carries on. .github/scripts/test/run.sh runs
+          # this step under bash -e to keep it that way.
+          commits="$(bash .github/scripts/require-same-commit.sh "${SERVICE}@${DIGEST}" "${JOBS_IMAGE}@${JOBS_DIGEST}")"
+          echo "Both images were deployed to staging by ${commits%%$'\n'*}."
 
       # gcloud run deploy creates a missing service, and deploy-prod is allowed
       # to. Services and jobs come only from Terraform (ADR 0005).

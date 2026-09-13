@@ -7,11 +7,18 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
 RUN corepack enable
 WORKDIR /repo
 
+# Every workspace manifest, and nothing else. pnpm refuses to run once
+# `COPY . .` brings in a workspace package the install didn't see, so listing
+# packages one by one breaks each time one is added. This stage reruns on any
+# change, but its output only changes with a manifest, so the install layer
+# below stays cached.
+FROM base AS manifests
+COPY . .
+RUN find . -type f ! -name package.json ! -name pnpm-lock.yaml ! -name pnpm-workspace.yaml ! -name .npmrc -delete \
+ && find . -mindepth 1 -type d -empty -delete
+
 FROM base AS build
-# Manifests first, so the dependency layer is cached until they change.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/web/package.json apps/web/
-COPY packages/schema/package.json packages/schema/
+COPY --from=manifests /repo ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile --filter web... --store-dir /pnpm-store
 COPY . .

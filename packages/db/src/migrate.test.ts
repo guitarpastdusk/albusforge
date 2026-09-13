@@ -1,0 +1,249 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { eq, sql } from "drizzle-orm";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb } from "./client.js";
+import type { DbConfig } from "./config.js";
+import { MIGRATIONS_FOLDER, runMigrations } from "./migrate.js";
+import { APP_SCHEMAS, buildMessages, builds, llmCalls, tenants } from "./schema/index.js";
+
+const MIGRATE_ROLE = { user: "albus_migrate", password: "migrate-secret" };
+const journal = JSON.parse(readFileSync(path.join(MIGRATIONS_FOLDER, "meta/_journal.json"), "utf8")) as {
+  entries: unknown[];
+};
+
+let container: StartedPostgreSqlContainer;
+let admin: pg.Client;
+let databases = 0;
+
+beforeAll(async () => {
+  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  admin = new pg.Client({ connectionString: container.getConnectionUri() });
+  await admin.connect();
+  // Stands in for the Cloud SQL owner: not a superuser, but can create roles.
+  await admin.query(`CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD '${MIGRATE_ROLE.password}'`);
+});
+
+afterAll(async () => {
+  await admin?.end();
+  await container?.stop();
+});
+
+/** An empty database owned by albus_migrate, as Terraform leaves it. */
+async function freshDatabase(): Promise<DbConfig> {
+  const database = `albus_${++databases}`;
+  await admin.query(`CREATE DATABASE ${database} OWNER albus_migrate`);
+  // Cloud SQL API users reach CREATE through cloudsqlsuperuser. Granting it to
+  // PUBLIC here gives the app role that same path, so the revoke is tested.
+  await admin.query(`GRANT CREATE ON DATABASE ${database} TO PUBLIC`);
+  return {
+    host: container.getHost(),
+    port: container.getPort(),
+    database,
+    user: MIGRATE_ROLE.user,
+    password: MIGRATE_ROLE.password,
+    ssl: "disable",
+  };
+}
+
+async function withClient<T>(config: DbConfig, fn: (client: pg.Client) => Promise<T>): Promise<T> {
+  const client = new pg.Client({ ...config, ssl: false });
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    await client.end();
+  }
+}
+
+const appliedCount = (config: DbConfig) =>
+  withClient(config, async (c) => Number((await c.query("SELECT count(*) FROM drizzle.__drizzle_migrations")).rows[0].count));
+
+/** The Postgres SQLSTATE, whether pg threw directly or Drizzle wrapped it. */
+async function sqlState(promise: Promise<unknown>): Promise<string | undefined> {
+  try {
+    await promise;
+  } catch (error) {
+    const e = error as { code?: string; cause?: { code?: string } };
+    return e.code ?? e.cause?.code;
+  }
+  return undefined;
+}
+
+describe("runMigrations", () => {
+  it("applies every migration to an empty database", async () => {
+    const config = await freshDatabase();
+    await runMigrations(config);
+
+    expect(await appliedCount(config)).toBe(journal.entries.length);
+    const schemas = await withClient(config, async (c) =>
+      (
+        await c.query(
+          `SELECT nspname FROM pg_namespace
+            WHERE nspname NOT LIKE 'pg\\_%' AND nspname NOT IN ('information_schema', 'public', 'drizzle')`,
+        )
+      ).rows.map((row) => row.nspname),
+    );
+    // Guards APP_SCHEMAS: a schema it misses would get no grants.
+    expect(schemas.sort()).toEqual([...APP_SCHEMAS].sort());
+  });
+
+  it("is a no-op when run again", async () => {
+    const config = await freshDatabase();
+    await runMigrations(config);
+    await runMigrations(config);
+    expect(await appliedCount(config)).toBe(journal.entries.length);
+  });
+
+  it("lets two concurrent runs both succeed", async () => {
+    const config = await freshDatabase();
+    await Promise.all([runMigrations(config), runMigrations(config)]);
+    expect(await appliedCount(config)).toBe(journal.entries.length);
+  });
+});
+
+describe("constraints", () => {
+  let handle: ReturnType<typeof createDb>;
+
+  beforeAll(async () => {
+    const config = await freshDatabase();
+    await runMigrations(config);
+    handle = createDb(config, { max: 2 });
+  });
+
+  afterAll(async () => {
+    await handle?.pool.end();
+  });
+
+  it("rejects a build with neither a tenant nor an anonymous owner", async () => {
+    const { db } = handle;
+    expect(await sqlState(db.insert(builds).values({ askText: "no owner" }))).toBe("23514");
+    await db.insert(builds).values({ askText: "anonymous", anonOwnerHash: "hash-a" });
+  });
+
+  it("makes client_message_id unique per build", async () => {
+    const { db } = handle;
+    const [build] = await db.insert(builds).values({ askText: "fridge", anonOwnerHash: "hash-b" }).returning();
+    const message = { buildId: build!.id, role: "user" as const, text: "hi", clientMessageId: "c-1" };
+
+    await db.insert(buildMessages).values(message);
+    expect(await sqlState(db.insert(buildMessages).values(message))).toBe("23505");
+
+    // Assistant messages carry no client id; NULLs never collide.
+    await db.insert(buildMessages).values([
+      { buildId: build!.id, role: "assistant", text: "one" },
+      { buildId: build!.id, role: "assistant", text: "two" },
+    ]);
+  });
+
+  it("keeps llm_calls when their build is deleted", async () => {
+    const { db } = handle;
+    const [build] = await db.insert(builds).values({ askText: "expired", anonOwnerHash: "hash-c" }).returning();
+    const [call] = await db
+      .insert(llmCalls)
+      .values({ buildId: build!.id, anonOwnerHash: "hash-c", stage: "intake", model: "m", costUsd: "0.012" })
+      .returning();
+
+    await db.delete(builds).where(eq(builds.id, build!.id));
+
+    const [kept] = await db.select().from(llmCalls).where(eq(llmCalls.id, call!.id));
+    expect(kept?.buildId).toBeNull();
+    expect(kept?.costUsd).toBe("0.012000");
+  });
+});
+
+describe("app role", () => {
+  let config: DbConfig;
+
+  beforeAll(async () => {
+    config = await freshDatabase();
+    await runMigrations(config, { appRole: { name: "albus_app", password: "first-secret" } });
+    // A second run updates the password in place.
+    await runMigrations(config, { appRole: { name: "albus_app", password: "app-secret" } });
+  });
+
+  const asApp = (password = "app-secret"): DbConfig => ({ ...config, user: "albus_app", password });
+
+  it("logs in with the current password only", async () => {
+    expect(await sqlState(withClient(asApp("first-secret"), async () => {}))).toBe("28P01");
+    const attrs = await withClient(asApp(), async (c) => {
+      const { rows } = await c.query(
+        "SELECT rolinherit, rolsuper, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = current_user",
+      );
+      return rows[0];
+    });
+    expect(attrs).toEqual({ rolinherit: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false });
+  });
+
+  it("reads and writes the tables", async () => {
+    const { db, pool } = createDb(asApp(), { max: 1 });
+    try {
+      const [tenant] = await db.insert(tenants).values({ name: "Personal" }).returning();
+      const [build] = await db.insert(builds).values({ askText: "greenhouse", tenantId: tenant!.id }).returning();
+      await db.update(builds).set({ status: "specifying" }).where(eq(builds.id, build!.id));
+      const [read] = await db.select().from(builds).where(eq(builds.id, build!.id));
+      expect(read?.status).toBe("specifying");
+      await db.delete(builds).where(eq(builds.id, build!.id));
+      expect(await db.select({ n: sql<number>`count(*)::int` }).from(builds)).toEqual([{ n: 0 }]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("cannot run DDL", async () => {
+    await withClient(asApp(), async (c) => {
+      for (const schema of [...APP_SCHEMAS, "public"]) {
+        expect(await sqlState(c.query(`CREATE TABLE "${schema}".sneaky (id int)`)), schema).toBe("42501");
+      }
+      expect(await sqlState(c.query("CREATE SCHEMA sneaky"))).toBe("42501");
+      expect(await sqlState(c.query("DROP TABLE builds.builds"))).toBe("42501");
+    });
+  });
+});
+
+describe("app role memberships", () => {
+  /** A database with `name` provisioned, and a NOLOGIN role that can CREATE in an app schema. */
+  async function setUp(name: string, ddlRole: string) {
+    const config = await freshDatabase();
+    await runMigrations(config, { appRole: { name, password: "app-secret" } });
+    await admin.query(`CREATE ROLE ${ddlRole} NOLOGIN`);
+    await withClient({ ...config, user: container.getUsername(), password: container.getPassword() }, (c) =>
+      c.query(`GRANT USAGE, CREATE ON SCHEMA builds TO ${ddlRole}`),
+    );
+    return { config, app: { ...config, user: name, password: "app-secret" } };
+  }
+
+  const canCreateViaSetRole = (app: DbConfig, ddlRole: string) =>
+    sqlState(withClient(app, (c) => c.query(`SET ROLE ${ddlRole}; CREATE TABLE builds.sneaky (id int)`)));
+
+  // SET-only: NOINHERIT, and INHERIT FALSE on the grant, still allow SET ROLE.
+  const setOnly = "WITH INHERIT FALSE, SET TRUE";
+
+  it("revokes a SET-only membership the migrator can revoke as its grantor", async () => {
+    const { config, app } = await setUp("albus_app_revocable", "ddl_revocable");
+    await admin.query("GRANT ddl_revocable TO albus_migrate WITH ADMIN TRUE, INHERIT FALSE, SET FALSE");
+    await admin.query(`GRANT ddl_revocable TO albus_app_revocable ${setOnly} GRANTED BY albus_migrate`);
+    // The attack works before the rerun, so the test below proves the fix.
+    expect(await canCreateViaSetRole(app, "ddl_revocable")).toBeUndefined();
+    await withClient(app, (c) => c.query("SET ROLE ddl_revocable; DROP TABLE builds.sneaky"));
+
+    await runMigrations(config, { appRole: { name: "albus_app_revocable", password: "app-secret" } });
+
+    expect(await canCreateViaSetRole(app, "ddl_revocable")).toBe("42501");
+  });
+
+  it("fails closed on a membership from a grantor it can't act for", async () => {
+    const { config, app } = await setUp("albus_app_stuck", "ddl_stuck");
+    // Granted by the bootstrap superuser, which the migrator can't act for.
+    await admin.query(`GRANT ddl_stuck TO albus_app_stuck ${setOnly}`);
+
+    await expect(
+      runMigrations(config, { appRole: { name: "albus_app_stuck", password: "app-secret" } }),
+    ).rejects.toThrow(/still a member of ddl_stuck .*login has been disabled/);
+
+    // 28000: role is not permitted to log in.
+    expect(await canCreateViaSetRole(app, "ddl_stuck")).toBe("28000");
+  });
+});

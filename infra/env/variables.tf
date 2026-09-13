@@ -12,3 +12,25 @@ variable "alert_email" {
   description = "Where LLM spend alerts go."
   type        = string
 }
+
+variable "telemetry_schedules_enabled" {
+  description = "Enable only after migration and successful manual executions of the reviewed job digest."
+  type        = bool
+  default     = false
+}
+
+variable "ask_model_enabled" {
+  description = "Enable paid narration only after selecting a model and approving its provider budget."
+  type        = bool
+  default     = false
+}
+
+variable "ask_model" {
+  description = "Provider model ID; required when Ask narration is enabled."
+  type        = string
+  default     = ""
+  validation {
+    condition     = (var.ask_model == "" && !var.ask_model_enabled) || var.ask_model == "claude-haiku-4-5"
+    error_message = "Ask supports only claude-haiku-4-5; an empty model is permitted only with narration disabled."
+  }
+}

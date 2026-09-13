@@ -34,6 +34,7 @@ module "gateway" {
     GOOGLE_CLOUD_PROJECT    = local.project_id
     DB_USER                 = local.db_app_role
     INTAKE_URL              = module.intake.uri
+    ASK_URL                 = module.ask.uri
     REGISTRY_INCLUDE_DRAFTS = tostring(local.settings.registry_include_drafts)
   })
   secret_env = {
@@ -75,12 +76,16 @@ module "edge" {
   dns_zone   = local.dns_zone
 
   services = {
-    gateway = module.gateway.name
-    web     = module.web.name
+    gateway   = module.gateway.name
+    web       = module.web.name
+    cloudlink = module.cloudlink.name
   }
-  default_backend = "web"
+  disable_request_logging   = ["cloudlink"]
+  backend_security_policies = { cloudlink = google_compute_security_policy.cloudlink.id }
+  default_backend           = "web"
   path_rules = [
     { paths = ["/v1", "/v1/*"], backend = "gateway" },
+    { paths = ["/ingest", "/ingest/*"], backend = "cloudlink" },
   ]
   strip_request_headers = local.internal_request_headers
 }

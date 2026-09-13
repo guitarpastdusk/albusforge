@@ -29,13 +29,16 @@
   | `web` | `deploy-web.yml` (staging), `promote-web.yml` (prod) |
   | `gateway`, `db-migrate` or `registry-load` | `deploy-gateway.yml` (staging), `promote-gateway.yml` (prod) |
   | `intake` | `deploy-intake.yml` (staging), `promote-intake.yml` (prod) |
-  | several, or not sure | all six for that environment |
+  | `cloudlink` | `deploy-cloudlink.yml` (staging), `promote-cloudlink.yml` (prod) |
+  | `ask` | `deploy-ask.yml` (staging), `promote-ask.yml` (prod) |
+  | `telemetry-rollup` or `telemetry-maintain` | `deploy-telemetry.yml` (staging), `promote-telemetry.yml` (prod) |
+  | several, or not sure | all listed workflow pairs for the affected environments |
 
   To keep deploys out for the whole window:
   1. Disable each workflow from the table: for example `gh workflow disable deploy-gateway.yml` for staging, `gh workflow disable promote-gateway.yml` for prod.
   2. Make sure every existing run of each of those workflows has **completed**. Disabling stops new triggers but doesn't cancel runs that already exist. Every deploy workflow uses `concurrency` with `cancel-in-progress: false`, so a run created before you disabled the workflow can still be queued, pending or waiting behind another deploy, and start during the apply. Let those runs finish or cancel them, then confirm nothing is left across each workflow's **entire** run history. (`gh run list` only returns the latest 20 runs, so it can't prove this.)
 
-     A cancelled gateway run doesn't stop a job execution it already started: `gcloud run jobs execute --wait` only waits on it. Also list the executions of `db-migrate` and `registry-load` in the project you're applying (`gcloud run jobs executions list --job <job> --project <project> --region us-central1`), and cancel or wait out any that haven't completed.
+     A cancelled gateway or telemetry release run does not stop a job execution it already started: `gcloud run jobs execute --wait` only waits on it. Also list the executions of every affected job (`db-migrate`, `registry-load`, `telemetry-rollup`, `telemetry-maintain`) in the project you're applying (`gcloud run jobs executions list --job <job> --project <project> --region us-central1`), and cancel or wait out any that haven't completed.
 
      For each workflow file, this command must exit successfully and print `0`:
      ```sh
@@ -44,7 +47,8 @@
        | jq '[.[].workflow_runs[] | select(.status != "completed")] | length'
      ```
      `gh` won't combine `--slurp` with `--jq`, so the count runs in a separate `jq`. `pipefail` makes a failed API call fail the check instead of printing a misleading `0`.
-  3. Re-plan, check the plan, and apply.
+     Before draining telemetry jobs, pause their Cloud Scheduler schedules as well; otherwise a fresh execution can start during the window. Pausing scheduling does not stop existing executions. Keep schedules paused through the reviewed apply; restore their approved Terraform setting only after post-apply checks.
+  3. Re-plan after all workflow/job queues are drained, check that current image digests remain unchanged, and apply only this fresh plan. A saved plan from before the exclusion window is inspection evidence, not an apply artifact.
   4. Re-enable each workflow with `gh workflow enable`.
 
-  While a workflow is disabled, pushes to `main` don't trigger it. If an image-changing commit landed during the window, dispatch each staging workflow you disabled once it's re-enabled — `deploy-web`, `deploy-gateway`, `deploy-intake` — so the environment catches up to `main` instead of serving the image from before the window.
+  While a workflow is disabled, pushes to `main` don't trigger it. If an image-changing commit landed during the window, dispatch each staging workflow you disabled once it's re-enabled — `deploy-web`, `deploy-gateway`, `deploy-intake`, `deploy-cloudlink`, `deploy-ask`, `deploy-telemetry` — so the environment catches up to `main` instead of serving the image from before the window.

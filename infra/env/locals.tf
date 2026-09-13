@@ -34,4 +34,13 @@ locals {
   domain     = local.bootstrap.env_domains[local.env]
   dns_zone   = local.bootstrap.dns_zones[local.env]
   name       = "albusforge-${local.env}"
+
+  # Sent by web's SSR to gateway's run.app URL; gateway trusts them only with a
+  # valid ID token from web's SA. Stripped from every public request.
+  # docs/adr/0007-portal-routing.md
+  internal_request_headers = [
+    "X-Albus-Internal-Auth",
+    "X-Albus-Original-Host",
+    "X-Albus-Client-IP",
+  ]
 }

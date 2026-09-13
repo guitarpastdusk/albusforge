@@ -135,6 +135,15 @@ resource "google_compute_url_map" "https" {
   name            = "${var.name}-https"
   default_service = google_compute_backend_service.service[var.default_backend].id
 
+  # A browser must never be able to send headers that backends trust from
+  # internal callers. The backend's own verification is the real control.
+  dynamic "header_action" {
+    for_each = length(var.strip_request_headers) > 0 ? [1] : []
+    content {
+      request_headers_to_remove = var.strip_request_headers
+    }
+  }
+
   host_rule {
     hosts        = ["*"]
     path_matcher = "all-hosts"

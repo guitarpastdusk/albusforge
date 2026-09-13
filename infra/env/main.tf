@@ -22,6 +22,11 @@ module "gateway" {
   public_invoker      = true
   min_instances       = local.settings.gateway_min_instances
   deletion_protection = local.settings.deletion_protection
+
+  env = {
+    PUBLIC_DOMAIN       = local.domain
+    SSR_SERVICE_ACCOUNT = module.web.service_account_email
+  }
 }
 
 # The portal. Serves the apex and every tenant subdomain (docs/adr/0007).
@@ -37,6 +42,11 @@ module "web" {
   public_invoker      = true
   min_instances       = local.settings.web_min_instances
   deletion_protection = local.settings.deletion_protection
+
+  env = {
+    PUBLIC_DOMAIN        = local.domain
+    GATEWAY_INTERNAL_URL = module.gateway.uri
+  }
 }
 
 module "edge" {
@@ -56,4 +66,5 @@ module "edge" {
   path_rules = [
     { paths = ["/v1", "/v1/*"], backend = "gateway" },
   ]
+  strip_request_headers = local.internal_request_headers
 }

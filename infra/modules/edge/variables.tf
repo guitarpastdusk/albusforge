@@ -55,6 +55,12 @@ variable "path_rules" {
   }
 }
 
+variable "strip_request_headers" {
+  description = "Removed from every public request before it reaches a backend. For headers a backend trusts only from internal callers."
+  type        = list(string)
+  default     = []
+}
+
 variable "rate_limit_count" {
   description = "Requests per IP per interval before Cloud Armor returns 429."
   type        = number

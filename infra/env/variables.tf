@@ -30,7 +30,7 @@ variable "ask_model" {
   type        = string
   default     = ""
   validation {
-    condition     = !var.ask_model_enabled || length(trimspace(var.ask_model)) > 0
-    error_message = "Select an explicit model before enabling Ask narration."
+    condition     = (var.ask_model == "" && !var.ask_model_enabled) || var.ask_model == "claude-haiku-4-5"
+    error_message = "Ask supports only claude-haiku-4-5; an empty model is permitted only with narration disabled."
   }
 }

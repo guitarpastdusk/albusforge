@@ -25,6 +25,22 @@ module "cloudlink" {
   secret_env = { DB_PASSWORD = { secret = module.sql.app_password_secret } }
 }
 
+locals {
+  ask_env = merge(local.db_env, {
+    DB_USER                   = local.db_app_role
+    DB_POOL_MAX               = "4"
+    ASK_MAX_CONCURRENCY       = "4"
+    ASK_DEADLINE_MS           = "20000"
+    ASK_MAX_OUTPUT_TOKENS     = "512"
+    ASK_USER_DAILY_REQUESTS   = "20"
+    ASK_TENANT_DAILY_REQUESTS = "100"
+    ASK_GLOBAL_DAILY_REQUESTS = "200"
+    ASK_MODEL_ENABLED         = tostring(var.ask_model_enabled)
+    LLM_PROVIDER              = "anthropic"
+    GOOGLE_CLOUD_PROJECT      = local.project_id
+  }, var.ask_model_enabled ? { LLM_MODEL = var.ask_model } : {})
+}
+
 module "ask" {
   source              = "../modules/run_service"
   project_id          = local.project_id
@@ -39,20 +55,7 @@ module "ask" {
   request_concurrency = 4
   request_timeout     = "30s"
   deletion_protection = local.settings.deletion_protection
-  env = merge(local.db_env, {
-    DB_USER                   = local.db_app_role
-    DB_POOL_MAX               = "4"
-    ASK_MAX_CONCURRENCY       = "4"
-    ASK_DEADLINE_MS           = "20000"
-    ASK_MAX_OUTPUT_TOKENS     = "512"
-    ASK_USER_DAILY_REQUESTS   = "20"
-    ASK_TENANT_DAILY_REQUESTS = "100"
-    ASK_GLOBAL_DAILY_REQUESTS = "200"
-    ASK_MODEL_ENABLED         = tostring(var.ask_model_enabled)
-    LLM_PROVIDER              = "anthropic"
-    LLM_MODEL                 = var.ask_model
-    GOOGLE_CLOUD_PROJECT      = local.project_id
-  })
+  env                 = local.ask_env
   secret_env = merge({ DB_PASSWORD = { secret = module.sql.app_password_secret } }, var.ask_model_enabled ? {
     ANTHROPIC_API_KEY = { secret = google_secret_manager_secret.external["anthropic-api-key"].id }
   } : {})

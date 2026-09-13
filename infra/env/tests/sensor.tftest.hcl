@@ -20,6 +20,10 @@ variables {
 run "safe_initial_rollout" {
   command = plan
   assert {
+    condition     = local.ask_env.ASK_MODEL_ENABLED == "false" && !contains(keys(local.ask_env), "LLM_MODEL")
+    error_message = "Evidence-only Ask must omit LLM_MODEL, not send the invalid empty string."
+  }
+  assert {
     condition     = alltrue([for job in google_cloud_scheduler_job.telemetry : job.paused])
     error_message = "Initial schedules must remain paused until real images and migrations are validated."
   }
@@ -40,5 +44,26 @@ run "safe_initial_rollout" {
 run "narration_requires_model" {
   command = plan
   variables { ask_model_enabled = true }
+  expect_failures = [var.ask_model]
+}
+
+run "narration_supported_model" {
+  command = plan
+  variables {
+    ask_model_enabled = true
+    ask_model         = "claude-haiku-4-5"
+  }
+  assert {
+    condition     = local.ask_env.ASK_MODEL_ENABLED == "true" && local.ask_env.LLM_MODEL == "claude-haiku-4-5"
+    error_message = "Enabled Ask must receive its supported explicit model."
+  }
+}
+
+run "narration_rejects_unsupported_model" {
+  command = plan
+  variables {
+    ask_model_enabled = true
+    ask_model         = "claude-opus-5"
+  }
   expect_failures = [var.ask_model]
 }

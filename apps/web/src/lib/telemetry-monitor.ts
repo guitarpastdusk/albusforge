@@ -26,7 +26,14 @@ export function selection(search: Search, channels: string[], now: number) {
   const to = Math.floor(end / unit) * unit;
   if (!Number.isFinite(to) || !channel || !channels.includes(channel))
     return {
+      window,
       error: "Choose a provisioned channel and a valid UTC end time.",
+    } as const;
+  if (end > now)
+    return {
+      window,
+      error:
+        "End time cannot be in the future. Choose an earlier UTC time or leave it blank for now.",
     } as const;
   const parsed = TelemetrySeriesQuery.safeParse({
     channel,
@@ -37,6 +44,7 @@ export function selection(search: Search, channels: string[], now: number) {
   });
   if (!parsed.success)
     return {
+      window,
       error:
         "Choose raw for up to 24 hours, minute averages for up to 7 days, or hourly averages for longer windows.",
     } as const;

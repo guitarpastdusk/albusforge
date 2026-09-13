@@ -184,3 +184,87 @@ it("serializes one complete SVG tooltip text node for stable hydration", () => {
   );
   expect(title?.childNodes).toHaveLength(1);
 });
+
+it.each(["raw", "1m", "1h"])(
+  "rejects explicit future end before rounding for %s",
+  (resolution) => {
+    const now = Date.parse("2026-09-13T12:30:00Z");
+    const result = selection(
+      { end: "2026-09-13T13:00", window: "hour", resolution },
+      ["temp"],
+      now,
+    );
+    expect(result.query).toBeUndefined();
+    expect(result.error).toContain("future");
+    expect(
+      selection({ end: "2026-09-13T12:30:01", resolution }, ["temp"], now)
+        .query,
+    ).toBeUndefined();
+  },
+);
+it.each([
+  [
+    "1m",
+    "2026-09-13T12:30:00Z",
+    "2026-09-13T12:30",
+    "2026-09-13T12:30:00.000Z",
+  ],
+  [
+    "1h",
+    "2026-09-13T12:00:00Z",
+    "2026-09-13T12:00",
+    "2026-09-13T12:00:00.000Z",
+  ],
+  [
+    "1h",
+    "2026-09-13T12:30:00Z",
+    "2026-09-13T12:30",
+    "2026-09-13T12:00:00.000Z",
+  ],
+])(
+  "allows exact current end while excluding open %s buckets",
+  (resolution, current, end, expected) => {
+    const result = selection(
+      { end, resolution },
+      ["temp"],
+      Date.parse(current),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.query?.to).toBe(expected);
+  },
+);
+it("preserves a valid selected window while correcting incompatible resolution", async () => {
+  mocked.get
+    .mockResolvedValueOnce({
+      device,
+      channels: { temp: { unit: "C", min: -40, max: 85 } },
+    })
+    .mockResolvedValueOnce({ device_id: id, readings: [] });
+  document.body.innerHTML = renderToStaticMarkup(
+    await DevicePage({
+      params: Promise.resolve({ deviceId: id }),
+      searchParams: Promise.resolve({ window: "week", resolution: "raw" }),
+    }),
+  );
+  expect(
+    document
+      .querySelector("select[name=window] option[selected]")
+      ?.getAttribute("value"),
+  ).toBe("week");
+  expect(document.querySelector("[role=alert]")?.textContent).toContain(
+    "7 days",
+  );
+  expect(mocked.get).toHaveBeenCalledTimes(2);
+  expect(
+    selection({ window: "week", end: "invalid" }, ["temp"], Date.now()).window,
+  ).toBe("week");
+  const corrected = selection(
+    { window: "week", resolution: "1m" },
+    ["temp"],
+    Date.now(),
+  );
+  expect(corrected.query).toBeDefined();
+  expect(
+    Date.parse(corrected.query!.to) - Date.parse(corrected.query!.from),
+  ).toBe(7 * 86400000);
+});

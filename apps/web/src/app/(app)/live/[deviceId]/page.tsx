@@ -36,7 +36,8 @@ export default async function DevicePage({
   );
   const search = await searchParams,
     channels = Object.keys(detail.channels);
-  const selected = selection(search, channels, new Date().getTime());
+  const now = new Date();
+  const selected = selection(search, channels, now.getTime());
   let history:
     | Awaited<ReturnType<typeof apiGet<typeof TelemetryHistory>>>
     | undefined;
@@ -165,6 +166,7 @@ export default async function DevicePage({
             End time (UTC, blank = now)
             <input
               type="datetime-local"
+              max={now.toISOString().slice(0, 16)}
               name="end"
               defaultValue={typeof search.end === "string" ? search.end : ""}
               className={input}

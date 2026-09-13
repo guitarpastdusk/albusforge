@@ -4,6 +4,7 @@ import { AWAITING_FIRST_READING, formatAgo } from "@/lib/format";
 
 /** The inside of a Live systems tile. The page supplies the link and accent colours. */
 export function DeviceTileBody({ device, now }: { device: DeviceTile; now: Date }) {
+  const valueAt = device.value_at === undefined ? device.last_reading_at : device.value_at;
   const neverSeen = device.status === "never_seen" || device.last_reading_at === null;
 
   return (
@@ -12,7 +13,7 @@ export function DeviceTileBody({ device, now }: { device: DeviceTile; now: Date 
         {!neverSeen && device.status === "online" ? <PulseDot size={9} /> : null}
         {device.name}
       </span>
-      {device.status === "never_seen" || device.last_reading_at === null ? (
+      {neverSeen || valueAt === null ? (
         <>
           <span className="font-mono text-[15px] leading-[29px]">{AWAITING_FIRST_READING}</span>
           <span className="text-[13px] opacity-75">{device.metric}</span>
@@ -24,7 +25,7 @@ export function DeviceTileBody({ device, now }: { device: DeviceTile; now: Date 
             {device.unit ? <span className="text-[15px] opacity-70"> {device.unit}</span> : null}
           </span>
           <span className="text-[13px] opacity-75">
-            {device.metric} · {formatAgo(device.last_reading_at, now)}
+            {device.metric} · {formatAgo(valueAt, now)}
           </span>
         </>
       )}

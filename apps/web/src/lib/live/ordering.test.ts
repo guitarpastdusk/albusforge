@@ -98,3 +98,35 @@ describe("snapshot reconciliation", () => {
     expect(merged.series[0]!.points.slice(-2)).toEqual([{ t: at(10), v: 27 }, { t: at(20), v: 27 }]);
   });
 });
+
+describe("delayed raw history", () => {
+  it("inserts delayed samples without regressing latest or presence, and retains them across refresh", () => {
+    const base = data.dashboard("bed-a")!;
+    base.series = [{ channel: "soil_vwc", bucket: "raw", points: [{ t: at(0), v: 30 }] }];
+    base.latest.soil_vwc = { t: at(0), v: 30 };
+    const newer = applyStatusToDashboard(applyReadingToDashboard(base, reading("soil_vwc", 20, 32)), status(30));
+    const delayed = applyReadingToDashboard(newer, reading("soil_vwc", 10, 31));
+    expect(delayed.latest).toBe(newer.latest);
+    expect(delayed.device).toBe(newer.device);
+    expect(delayed.series[0]!.points).toEqual([{ t: at(0), v: 30 }, { t: at(10), v: 31 }, { t: at(20), v: 32 }]);
+    expect(applyReadingToDashboard(delayed, reading("soil_vwc", 10, 99))).toBe(delayed);
+    const snapshot = structuredClone(newer);
+    snapshot.series[0]!.points[0]!.v = 29;
+    const merged = mergeDashboardSnapshot(snapshot, delayed);
+    expect(merged.series[0]!.points).toEqual([{ t: at(0), v: 29 }, { t: at(10), v: 31 }, { t: at(20), v: 32 }]);
+    expect(merged.latest.soil_vwc).toEqual({ t: at(20), v: 32 });
+    expect(merged.device.status).toBe("offline");
+  });
+
+  it("keeps delayed insertion bounded by the window and cap and leaves aggregates untouched", () => {
+    const base = data.dashboard("bed-a")!;
+    base.series = [{ channel: "soil_vwc", bucket: "raw", points: Array.from({ length: 600 }, (_, index) => ({ t: at(index + 1), v: index })) }];
+    base.latest.soil_vwc = { t: at(600), v: 599 };
+    expect(applyReadingToDashboard(base, reading("soil_vwc", 0))).toBe(base);
+    expect(applyReadingToDashboard(base, reading("soil_vwc", -86_400))).toBe(base);
+    const aggregate = { ...base, series: base.series.map((series) => ({ ...series, bucket: "1h" as const })) };
+    expect(applyReadingToDashboard(aggregate, reading("soil_vwc", 0))).toBe(aggregate);
+    const refreshed = { ...base, series: [{ ...base.series[0]!, points: [{ t: at(90_000), v: 1 }] }], latest: { soil_vwc: { t: at(90_000), v: 1 } } };
+    expect(mergeDashboardSnapshot(refreshed, base).series[0]!.points).toEqual(refreshed.series[0]!.points);
+  });
+});

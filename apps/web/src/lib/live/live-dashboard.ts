@@ -14,14 +14,16 @@ export function applyReadingToDashboard(dashboard: DeviceDashboard, event: Readi
   const channel = dashboard.channels.find((c) => c.key === event.channel);
   if (!channel || !acceptsValue(channel, event.v)) return dashboard;
   const current = dashboard.latest[event.channel];
-  if (current && Date.parse(event.t) <= Date.parse(current.t)) return dashboard;
-
-  const latest = { ...dashboard.latest, [event.channel]: { v: event.v, t: event.t } };
+  const advancesLatest = !current || Date.parse(event.t) > Date.parse(current.t);
   const v = event.v;
   const series =
     typeof v === "number"
       ? dashboard.series.map((s) => (s.channel === event.channel && s.bucket === "raw" ? appendPoint(s, event.t, v, windowFor(dashboard, event.channel)) : s))
       : dashboard.series;
+  if (!advancesLatest) {
+    return series.some((entry, index) => entry !== dashboard.series[index]) ? { ...dashboard, series } : dashboard;
+  }
+  const latest = { ...dashboard.latest, [event.channel]: { v: event.v, t: event.t } };
   const lastAt = dashboard.device.last_reading_at;
   const observed = dashboard.device.status_at ?? lastAt;
   const advancesPresence = !observed || Date.parse(event.t) > Date.parse(observed);
@@ -51,12 +53,14 @@ function windowFor(dashboard: DeviceDashboard, channel: string): number {
 
 function appendPoint(series: Series, t: string, v: number, windowSeconds: number): Series {
   const at = Date.parse(t);
-  let points = [...series.points.filter((point) => Date.parse(point.t) !== at), { t, v }]
+  if (series.points.some((point) => Date.parse(point.t) === at)) return series;
+  let points = [...series.points, { t, v }]
     .sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
   // Drop what fell out of the window; cap raw series so a long-lived tab stays bounded.
   const from = Date.parse(points.at(-1)!.t) - windowSeconds * 1000;
   points = points.filter((p) => Date.parse(p.t) >= from);
   if (points.length > RAW_CAP) points = points.slice(points.length - RAW_CAP);
+  if (points.length === series.points.length && points.every((point, index) => point === series.points[index])) return series;
   return { ...series, points };
 }
 
@@ -70,12 +74,12 @@ export function mergeDashboardSnapshot(snapshot: DeviceDashboard, current: Devic
     }
   }
   result = { ...result, series: result.series.map((series) => {
-    if (series.bucket !== "raw") return series;
+    if (series.bucket !== "raw" || !result.channels.some((channel) => channel.key === series.channel)) return series;
     const old = current.series.find((candidate) => candidate.channel === series.channel && candidate.bucket === "raw");
-    const end = snapshot.series.find((candidate) => candidate.channel === series.channel && candidate.bucket === "raw")?.points.at(-1)?.t;
     let merged = series;
     for (const point of old?.points ?? []) {
-      if (!end || Date.parse(point.t) > Date.parse(end)) merged = appendPoint(merged, point.t, point.v, windowFor(result, series.channel));
+      // Union historical samples too; snapshot values win timestamp collisions.
+      merged = appendPoint(merged, point.t, point.v, windowFor(result, series.channel));
     }
     return merged;
   }) };

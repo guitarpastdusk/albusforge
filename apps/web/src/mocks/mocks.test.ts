@@ -190,8 +190,22 @@ describe("mock closed-loop rules (ADR 0010)", () => {
     expect(created).toMatchObject({ kind: "SERVO", rule: proposal.rule, enabled: true, sync: "pending" });
     expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toEqual([created]);
 
-    // Confirmed once: the proposal is spent.
-    await expect(post(routes.devices.actions.create.path("bed-c"), DeviceAction, { proposal_id: proposal.id })).rejects.toMatchObject({ status: 404 });
+    // Confirming again (a retry after a lost response) returns the same rule and creates nothing.
+    const again = await mockTransport("POST", routes.devices.actions.create.path("bed-c"), { proposal_id: proposal.id });
+    expect(again.status).toBe(200);
+    expect(again.json).toEqual(created);
+    expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toHaveLength(1);
+    // But not on another device.
+    await expect(post(routes.devices.actions.create.path("bed-a"), DeviceAction, { proposal_id: proposal.id })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("each write bumps the rule's version; an ack flips it to synced on the next dashboard", async () => {
+    const first = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: false });
+    const second = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: true });
+    expect([first.version, second.version]).toEqual([2, 3]);
+    data.ackActions("bed-a");
+    const dashboard = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(dashboard.actions?.find((a) => a.id === "act-irrigate")).toMatchObject({ enabled: true, sync: "synced", version: 3 });
   });
 
   it("a proposal with issues is 409 on confirm; a proposal for one device can't be confirmed on another", async () => {

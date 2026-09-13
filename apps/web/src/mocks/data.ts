@@ -352,12 +352,14 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
  */
 const actionStore = new Map<string, DeviceAction[]>();
 const proposals = new Map<string, { deviceId: string; proposal: ActionProposal }>();
+/** Confirmed proposals, kept so a retried confirmation returns the rule it already created (ADR 0010). */
+const consumed = new Map<string, { deviceId: string; actionId: string; until: number }>();
 const PROPOSAL_TTL_MS = 10 * MINUTE * 1000;
 
 function actionsOf(deviceId: string): DeviceAction[] {
   let actions = actionStore.get(deviceId);
   if (!actions) {
-    actions = deviceId === "bed-a" ? BED_A_ACTIONS.map((a) => ({ ...a })) : [];
+    actions = deviceId === "bed-a" ? BED_A_ACTIONS.map((a) => ({ ...a, version: 1 })) : [];
     actionStore.set(deviceId, actions);
   }
   return actions;
@@ -378,8 +380,9 @@ export function setActionEnabled(deviceId: string, actionId: string, enabled: bo
   const action = actionsOf(deviceId).find((a) => a.id === actionId);
   if (!action) return null;
   action.enabled = enabled;
-  // The device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4).
+  // The device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4); it acks this version.
   action.sync = "pending";
+  action.version = (action.version ?? 0) + 1;
   return { ...action };
 }
 
@@ -397,18 +400,35 @@ export function proposeAction(deviceId: string, text: string): ActionProposal | 
   return proposal;
 }
 
-export type ConfirmOutcome = { ok: true; action: DeviceAction } | { ok: false; reason: "not_found" | "unresolved"; issues?: string[] };
+export type ConfirmOutcome =
+  | { ok: true; action: DeviceAction; created: boolean }
+  | { ok: false; reason: "not_found" | "unresolved"; issues?: string[] };
 
-/** POST /v1/devices/:id/actions. A proposal is confirmed once, for the device it was made for, before it expires. */
+/**
+ * POST /v1/devices/:id/actions. A proposal is confirmed for the device it was
+ * made for, before it expires. Confirming it again returns the rule it
+ * created (`created: false`), so a retry after a lost response is safe.
+ */
 export function confirmAction(deviceId: string, proposalId: string): ConfirmOutcome {
+  const done = consumed.get(proposalId);
+  if (done && done.deviceId === deviceId && done.until > Date.now()) {
+    const action = actionsOf(deviceId).find((a) => a.id === done.actionId);
+    if (action) return { ok: true, action: { ...action }, created: false };
+  }
   const held = proposals.get(proposalId);
   if (!held || held.deviceId !== deviceId || Date.parse(held.proposal.expires_at) < Date.now()) return { ok: false, reason: "not_found" };
   if (held.proposal.issues.length > 0) return { ok: false, reason: "unresolved", issues: held.proposal.issues };
   proposals.delete(proposalId);
   const { kind, rule, via } = held.proposal;
-  const action: DeviceAction = { id: `act_${Date.now().toString(36)}_${actionsOf(deviceId).length}`, kind, rule, via, enabled: true, sync: "pending" };
+  const action: DeviceAction = { id: `act_${Date.now().toString(36)}_${actionsOf(deviceId).length}`, kind, rule, via, enabled: true, sync: "pending", version: 1 };
   actionsOf(deviceId).push(action);
-  return { ok: true, action: { ...action } };
+  consumed.set(proposalId, { deviceId, actionId: action.id, until: Date.now() + PROPOSAL_TTL_MS });
+  return { ok: true, action: { ...action }, created: true };
+}
+
+/** Tests only: the device acknowledged its rules, as cloudlink will record from an ingest (ADR 0010). */
+export function ackActions(deviceId: string): void {
+  for (const action of actionsOf(deviceId)) action.sync = "synced";
 }
 
 const dashboardExists = (deviceId: string) => fleet().systems.some((s) => s.devices.some((d) => d.id === deviceId));
@@ -417,6 +437,7 @@ const dashboardExists = (deviceId: string) => fleet().systems.some((s) => s.devi
 export function resetActions(): void {
   actionStore.clear();
   proposals.clear();
+  consumed.clear();
 }
 
 // --- marketplace --------------------------------------------------------------

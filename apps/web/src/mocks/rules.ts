@@ -16,9 +16,10 @@ interface Reading {
   issues: string[];
 }
 
+/** Word forms sit behind a word boundary; the symbols don't, since "soil < 22" has no boundary before "<". */
 const COMPARATORS: Array<[RegExp, "<" | ">"]> = [
-  [/\b(below|under|less than|drops? below|falls? below|lower than|<)\s*/i, "<"],
-  [/\b(above|over|more than|exceeds?|rises? above|climbs? above|higher than|>)\s*/i, ">"],
+  [/\b(below|under|less than|drops? below|falls? below|lower than)\b|</i, "<"],
+  [/\b(above|over|more than|exceeds?|rises? above|climbs? above|higher than)\b|>/i, ">"],
 ];
 
 /** Words a person uses for a channel, matched against the device's channel keys and labels. */

@@ -43,7 +43,7 @@ export default async function DevicePage({ params }: { params: Promise<{ deviceI
           <DeviceWidgets dashboard={dashboard} />
           {/* Shown when the device has rules, or the session may add the first one. */}
           {dashboard.actions || canEdit ? (
-            <ClosedLoopActions deviceId={device.id} actions={dashboard.actions ?? []} lastAction={lastAction} canEdit={canEdit} />
+            <ClosedLoopActions key={device.id} deviceId={device.id} actions={dashboard.actions ?? []} lastAction={lastAction} canEdit={canEdit} />
           ) : null}
         </div>
         <DeviceChat

@@ -138,7 +138,7 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       const proposalId = field(body, "proposal_id");
       if (!proposalId) return badRequest("proposal_id is required");
       const outcome = data.confirmAction(id, proposalId);
-      if (outcome.ok) return jsonResponse(201, outcome.action);
+      if (outcome.ok) return jsonResponse(outcome.created ? 201 : 200, outcome.action);
       if (outcome.reason === "unresolved") {
         return jsonResponse(409, { error: { code: "unresolved_proposal", message: "Resolve the proposal's issues before confirming it.", details: outcome.issues } });
       }

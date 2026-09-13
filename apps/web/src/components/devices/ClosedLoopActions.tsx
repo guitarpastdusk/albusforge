@@ -1,40 +1,47 @@
 "use client";
 
 import type { Accent, ActionProposal, DeviceAction, DeviceActionKind } from "@albusforge/schema";
+import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { confirmAction, proposeAction, setActionEnabled } from "@/actions/device-actions";
 import { Button, Toggle } from "@/components/ui";
 import { accentClasses } from "@/lib/accent";
 import { cx } from "@/lib/cx";
-import { upsertAction, withEnabled, writeOnce } from "./closed-loop-flow";
+import { mergeRules, NO_LOCAL_RULES, reconcile, withAdded, withOverride, writeOnce, type RuleRow } from "./closed-loop-flow";
 import { CardLabel } from "./DeviceWidgets";
 
 const KIND_ACCENT: Record<DeviceActionKind, Accent> = { SERVO: "green", API: "blue", ALERT: "peach" };
 
 export const READ_ONLY_NOTE = "You can see the rules this device runs. Changing them needs an operator on this tenant.";
 export const PENDING_LABEL = "applies at next check-in";
+export const UNCONFIRMED_LABEL = "unconfirmed · refreshing";
 
 /**
  * "Closed loop · actions": the rules this device acts on, and where a person
  * changes them (PORTAL.md §3, ADR 0010).
  *
+ * The server's snapshot (`actions`) is the truth. Local changes are layered
+ * over it per rule and retired by the next snapshot (closed-loop-flow.ts):
  * - A switch flips on screen at once and is written through a Server
- *   Function. If the write fails or is refused the switch goes back and the
- *   card says why: a switch that stays changed without reaching the device
- *   would misstate what a valve or an alert is doing.
- * - A rule the device hasn't acknowledged yet is marked "applies at next
+ *   Function. A refusal (not built, wrong role) puts it back and says why.
+ *   An outcome we can't confirm (lost response) shows the server's copy with
+ *   an "unconfirmed" badge and refreshes the page, so the switch never
+ *   claims a state the device may not have.
+ * - A rule the device hasn't acknowledged is marked "applies at next
  *   check-in" (`sync: "pending"`): changes ride back on the device's next
- *   post (CLOUD-PLATFORM.md §3.4), minutes, not milliseconds.
- * - A new rule is written in plain words, read back as a proposal, and only
- *   created when the person confirms the reading. The composer never writes
- *   a rule directly.
+ *   post (CLOUD-PLATFORM.md §3.4). The badge clears when a snapshot says
+ *   `synced`.
+ * - A new rule is plain words, read back as a proposal, and only created
+ *   when the person confirms the reading. Confirming is idempotent, so a
+ *   retry after a lost response is safe and never makes a second rule.
  *
- * `canEdit` is the dashboard's `permissions.edit_actions` — operator or admin
- * on the device's tenant. Without it the card is read-only and says so.
+ * `canEdit` is the dashboard's `permissions.edit_actions`; without it the
+ * card is read-only and says so. The page keys the card by device id, so a
+ * different device starts from a clean state.
  */
 export function ClosedLoopActions({
   deviceId,
-  actions: initial,
+  actions: snapshot,
   lastAction,
   canEdit,
 }: {
@@ -43,26 +50,39 @@ export function ClosedLoopActions({
   lastAction: string | null;
   canEdit: boolean;
 }) {
-  const [actions, setActions] = useState(initial);
-  const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const router = useRouter();
+  const [local, setLocal] = useState(NO_LOCAL_RULES);
   const [error, setError] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   const noteId = useId();
 
-  const toggle = async (action: DeviceAction) => {
-    if (!canEdit || busy.has(action.id)) return;
+  // A fresh snapshot answers unknown outcomes and retires completed writes.
+  // Adjusted during render (React's pattern for state that follows a prop).
+  const [seen, setSeen] = useState(snapshot);
+  if (seen !== snapshot) {
+    setSeen(snapshot);
+    setLocal(reconcile(snapshot, local));
+  }
+
+  const rows = mergeRules(snapshot, local);
+
+  const toggle = async ({ action, status }: RuleRow) => {
+    if (!canEdit || status === "writing" || status === "unknown") return;
     const next = !action.enabled;
     setError(null);
-    setBusy((current) => new Set(current).add(action.id));
-    setActions((current) => withEnabled(current, action.id, next));
+    setLocal((current) => withOverride(current, action.id, { action: { ...action, enabled: next }, state: "writing" }));
     const outcome = await writeOnce(() => setActionEnabled(deviceId, action.id, next));
-    setActions((current) => (outcome.ok ? upsertAction(current, outcome.data) : withEnabled(current, action.id, action.enabled)));
-    if (!outcome.ok) setError(outcome.message);
-    setBusy((current) => {
-      const copy = new Set(current);
-      copy.delete(action.id);
-      return copy;
-    });
+    if (outcome.ok) {
+      setLocal((current) => withOverride(current, action.id, { action: outcome.data, state: "written" }));
+      return;
+    }
+    setError(outcome.message);
+    if (outcome.outcome === "refused") {
+      setLocal((current) => withOverride(current, action.id, null));
+    } else {
+      setLocal((current) => withOverride(current, action.id, { action, state: "unknown" }));
+      router.refresh();
+    }
   };
 
   return (
@@ -77,31 +97,36 @@ export function ClosedLoopActions({
         {lastAction ? <span className="font-mono text-[12px] text-faint">last action: {lastAction}</span> : null}
       </div>
 
-      {actions.length === 0 ? (
+      {rows.length === 0 ? (
         <p className="mt-[18px] text-[15px] font-light text-muted">
           No rules yet. {canEdit ? "The device reports; nothing acts on its readings until you add one." : ""}
         </p>
       ) : (
         <ul className="mt-[18px] flex flex-col gap-3">
-          {actions.map((action) => {
+          {rows.map((row) => {
+            const { action, status } = row;
             const { bg, fg } = accentClasses[KIND_ACCENT[action.kind]];
-            const pending = action.sync === "pending";
+            const locked = !canEdit || status === "writing" || status === "unknown";
             return (
-              <li key={action.id} className="flex items-center gap-4 rounded-2xl border border-hairline px-5 py-4">
+              <li key={action.id} className="flex items-center gap-4 rounded-2xl border border-hairline px-5 py-4" data-status={status ?? undefined}>
                 <span className={cx("flex-none whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-[12px]", bg, fg)}>{action.kind}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[15px] font-medium text-ink">{action.rule}</span>
-                    {pending ? <Badge tone="pending">{PENDING_LABEL}</Badge> : null}
+                    {status === "unknown" ? (
+                      <Badge tone="pending">{UNCONFIRMED_LABEL}</Badge>
+                    ) : action.sync === "pending" ? (
+                      <Badge tone="pending">{PENDING_LABEL}</Badge>
+                    ) : null}
                   </div>
                   <div className="mt-0.5 text-[13px] font-light text-muted">{action.via}</div>
                 </div>
                 <Toggle
                   checked={action.enabled}
                   label={action.rule}
-                  disabled={!canEdit || busy.has(action.id)}
+                  disabled={locked}
                   describedBy={canEdit ? undefined : noteId}
-                  onChange={() => void toggle(action)}
+                  onChange={() => void toggle(row)}
                 />
               </li>
             );
@@ -119,7 +144,7 @@ export function ClosedLoopActions({
         <RuleComposer
           deviceId={deviceId}
           onCreated={(action) => {
-            setActions((current) => upsertAction(current, action));
+            setLocal((current) => withAdded(current, action));
             setComposing(false);
           }}
           onCancel={() => setComposing(false)}
@@ -160,7 +185,9 @@ function Badge({ children, tone = "muted" }: { children: React.ReactNode; tone?:
 /**
  * Plain words → proposal → confirm. Two steps on purpose: the person confirms
  * the service's reading of the rule (normalized condition, what it does, any
- * issues), not the words they typed. A proposal with issues can't be confirmed.
+ * issues), not the words they typed. A proposal with issues can't be
+ * confirmed. A confirmation whose outcome is unknown keeps the proposal, since
+ * confirming the same proposal again returns the rule it already created.
  */
 export function RuleComposer({
   deviceId,
@@ -193,12 +220,14 @@ export function RuleComposer({
     setError(null);
     setPending("confirm");
     const outcome = await writeOnce(() => confirmAction(deviceId, proposal.id));
-    if (outcome.ok) onCreated(outcome.data);
-    else {
-      setError(outcome.message);
-      // An expired proposal has to be re-read; keep the words so it's one click.
-      if (/expired|gone/i.test(outcome.message)) setProposal(null);
+    if (outcome.ok) {
+      onCreated(outcome.data);
+      return;
     }
+    setError(outcome.message);
+    // Refused (expired, spent by someone else, issues): the proposal is no good; keep the words.
+    // Unknown: keep the proposal, so the retry hits the same id and can't create a second rule.
+    if (outcome.outcome === "refused") setProposal(null);
     setPending(null);
   };
 

@@ -2,11 +2,12 @@ import type { ActionProposal, DeviceAction } from "@albusforge/schema";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CONNECTION_MESSAGE } from "@/lib/safe-action";
-import { upsertAction, withEnabled, writeOnce } from "./closed-loop-flow";
+import { mergeRules, NO_LOCAL_RULES, reconcile, withAdded, withOverride, writeOnce, type LocalRules } from "./closed-loop-flow";
 import { ClosedLoopActions, PENDING_LABEL, ProposalCard, READ_ONLY_NOTE } from "./ClosedLoopActions";
 
 // The card's Server Functions are "use server" modules; the render tests never call them.
 vi.mock("@/actions/device-actions", () => ({ setActionEnabled: vi.fn(), proposeAction: vi.fn(), confirmAction: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }) }));
 
 const ACTIONS: DeviceAction[] = [
   { id: "a1", kind: "SERVO", rule: "Soil < 22% → open irrigation valve, 5 min", via: "micro-servo on GPIO 14", enabled: true },
@@ -77,20 +78,60 @@ describe("ProposalCard", () => {
 });
 
 describe("closed-loop flow helpers", () => {
-  it("writeOnce never rejects: a network failure becomes the connection message", async () => {
-    await expect(writeOnce(vi.fn().mockRejectedValue(new TypeError("Failed to fetch")))).resolves.toEqual({ ok: false, message: CONNECTION_MESSAGE });
+  it("writeOnce never rejects: a network failure is an unknown outcome, never a refusal", async () => {
+    await expect(writeOnce(vi.fn().mockRejectedValue(new TypeError("Failed to fetch")))).resolves.toEqual({
+      ok: false,
+      message: CONNECTION_MESSAGE,
+      outcome: "unknown",
+    });
   });
 
-  it("writeOnce passes a refusal's message through and a success's data", async () => {
-    await expect(writeOnce(async () => ({ ok: false, message: "Your role can’t change rules." }))).resolves.toEqual({ ok: false, message: "Your role can’t change rules." });
+  it("writeOnce passes a refusal and a success through", async () => {
+    await expect(writeOnce(async () => ({ ok: false, message: "No.", outcome: "refused" }))).resolves.toEqual({ ok: false, message: "No.", outcome: "refused" });
     await expect(writeOnce(async () => ({ ok: true, data: ACTIONS[0]! }))).resolves.toEqual({ ok: true, data: ACTIONS[0] });
   });
 
-  it("withEnabled flips one switch and upsertAction replaces by id or appends", () => {
-    expect(withEnabled(ACTIONS, "a2", true).map((a) => a.enabled)).toEqual([true, true]);
-    const synced = { ...ACTIONS[1]!, sync: "synced" as const };
-    expect(upsertAction(ACTIONS, synced)[1]).toEqual(synced);
-    const fresh: DeviceAction = { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "pending" };
-    expect(upsertAction(ACTIONS, fresh)).toHaveLength(3);
+  it("mergeRules layers writing and written overrides, shows the server copy for unknown, and appends additions", () => {
+    const flipped = { ...ACTIONS[0]!, enabled: false };
+    const added: DeviceAction = { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "pending" };
+    const rows = mergeRules(ACTIONS, {
+      overrides: { a1: { action: flipped, state: "writing" }, a2: { action: { ...ACTIONS[1]!, enabled: true }, state: "unknown" } },
+      added: [added],
+    });
+    expect(rows.map((r) => [r.action.id, r.action.enabled, r.status])).toEqual([
+      ["a1", false, "writing"],
+      ["a2", false, "unknown"],
+      ["a3", true, null],
+    ]);
+  });
+
+  it("reconcile keeps in-flight writes, retires unknown and completed ones, and drops additions the snapshot carries", () => {
+    const local: LocalRules = {
+      overrides: {
+        a1: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" },
+        a2: { action: ACTIONS[1]!, state: "unknown" },
+      },
+      added: [{ id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true }],
+    };
+    const next = reconcile([...ACTIONS, { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "synced" }], local);
+    expect(Object.keys(next.overrides)).toEqual(["a1"]);
+    expect(next.added).toEqual([]);
+  });
+
+  it("reconcile keeps a completed write when the snapshot is older by version, and retires it once the snapshot catches up", () => {
+    const written = { ...ACTIONS[0]!, enabled: false, sync: "pending" as const, version: 3 };
+    const local: LocalRules = { overrides: { a1: { action: written, state: "written" } }, added: [] };
+    expect(reconcile([{ ...ACTIONS[0]!, version: 2 }], local).overrides.a1).toEqual(local.overrides.a1);
+    expect(reconcile([{ ...ACTIONS[0]!, version: 3 }], local).overrides.a1).toBeUndefined();
+    // Without versions, the next snapshot wins.
+    expect(reconcile([ACTIONS[0]!], { overrides: { a1: { action: { ...written, version: undefined }, state: "written" } }, added: [] }).overrides.a1).toBeUndefined();
+  });
+
+  it("withOverride sets and clears; withAdded replaces by id", () => {
+    const set = withOverride(NO_LOCAL_RULES, "a1", { action: ACTIONS[0]!, state: "written" });
+    expect(Object.keys(set.overrides)).toEqual(["a1"]);
+    expect(withOverride(set, "a1", null)).toEqual(NO_LOCAL_RULES);
+    const added: DeviceAction = { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true };
+    expect(withAdded(withAdded(NO_LOCAL_RULES, added), { ...added, enabled: false }).added).toEqual([{ ...added, enabled: false }]);
   });
 });

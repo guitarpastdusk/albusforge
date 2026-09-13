@@ -16,7 +16,8 @@ Three constraints shape the answer:
 
 ### Two-step writes
 
-- **Propose, then confirm.** `POST /v1/devices/:id/actions/proposals { text }` reads a plain-words rule against the device's channels and returns an `ActionProposal`: normalized `rule`, `kind`, `via`, a `summary` in words, and `issues` (a channel the device doesn't have, a missing threshold, a value outside the channel's valid range). It writes nothing. `POST /v1/devices/:id/actions { proposal_id }` creates the rule; it is the only way a rule is created. A proposal with issues is refused with `409 unresolved_proposal`; an unknown or expired one is `404`. Proposals expire after ten minutes.
+- **Propose, then confirm.** `POST /v1/devices/:id/actions/proposals { text }` reads a plain-words rule against the device's channels and returns an `ActionProposal`: normalized `rule`, `kind`, `via`, a `summary` in words, and `issues` (a channel the device doesn't have, a missing threshold, a value outside the channel's valid range). It creates no executable action. It does persist the proposal: behind the proposal id the service keeps an immutable, structured rule — channel, comparator, value and unit, the actuator or integration target and its parameters — validated against the device's capabilities, bound to the tenant and device. Confirmation executes that record; nothing re-reads the prose. The public response stays the display shape above. `POST /v1/devices/:id/actions { proposal_id }` creates the rule; it is the only way a rule is created. A proposal with issues is refused with `409 unresolved_proposal`; an unknown or expired one is `404`. Proposals expire after ten minutes.
+- **Confirmation is idempotent.** Confirming the same proposal id again returns the rule it already created (`200`, not `201`) for as long as the proposal record is retained. A client whose confirmation lost its response retries the same id; it never reproposes, so a lost response can't produce two rules.
 - **The person confirms the reading, not the words.** The card shows the proposal exactly as the service understood it. Model output never becomes a rule without that step, matching the `create_work_order` pattern in CLOUD-PLATFORM.md §7.4.
 - **Enable and disable are direct but audited.** `PATCH /v1/devices/:id/actions/:actionId { enabled }` needs `operator` or `admin` on the device's tenant (ADR 0009), writes an `audit_log` row, and returns the rule.
 
@@ -31,7 +32,8 @@ Three constraints shape the answer:
 
 ### What the portal does
 
-- Switches change optimistically and roll back on a refused or failed write, showing the refusal. A `501` from gateway reads as "not connected for this device yet"; a `403` as a role problem.
+- **The snapshot is the truth.** The dashboard response is authoritative; the card layers per-rule local changes over it and lets the next snapshot retire them (unless that snapshot carries a lower `version` than the write returned). A rule the device acknowledged shows as synced on the next refresh; a change made elsewhere shows up too.
+- **Refused is not unknown.** A write gateway answered and refused (`501` not built, `403` role, `409` issues, `404` expired) rolls the switch back and says why. A write whose outcome is unknown (the call failed, or the response didn't parse) may have been committed: the card shows the server's copy with an "unconfirmed" badge, locks the switch, and refreshes, so the switch never asserts a state the device may not have. For a confirmation the proposal is kept so the retry hits the same id.
 - The card is shown whenever the device has rules or the session may add the first one, so a freshly provisioned device has its rules screen before its first reading (CLOUD-PLATFORM.md §6.1).
 
 ## Consequences

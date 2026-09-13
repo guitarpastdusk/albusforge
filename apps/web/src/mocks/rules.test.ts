@@ -33,6 +33,11 @@ describe("readRule (mock proposal reader)", () => {
     ]);
   });
 
+  it("reads symbolic comparators, spaced or not", () => {
+    expect(readRule("text me when soil < 22%", channels)).toMatchObject({ kind: "ALERT", rule: "Soil moisture < 22% → text me", issues: [] });
+    expect(readRule("text me when battery>90", channels)).toMatchObject({ rule: "Battery > 90% → text me", issues: [] });
+  });
+
   it("flags a threshold outside the channel's valid range", () => {
     expect(readRule("text me when soil drops below 80%", channels).issues).toEqual([expect.stringMatching(/80 is outside soil moisture's range of 0–60/)]);
   });

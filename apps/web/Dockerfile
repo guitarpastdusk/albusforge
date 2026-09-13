@@ -34,6 +34,8 @@ RUN addgroup -S app && adduser -S app -G app
 # Standalone output traced from the repo root, so server.js sits at apps/web/.
 COPY --from=build --chown=app:app /repo/apps/web/.next/standalone ./
 COPY --from=build --chown=app:app /repo/apps/web/.next/static ./apps/web/.next/static
+# Standalone output leaves out public/ (the enclosure viewer's fixture model and image).
+COPY --from=build --chown=app:app /repo/apps/web/public ./apps/web/public
 USER app
 EXPOSE 8080
 # Cloud Run sets PORT; the standalone server reads it.

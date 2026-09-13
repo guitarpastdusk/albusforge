@@ -78,7 +78,7 @@ async function main(): Promise<void> {
     },
     log,
     chat: {
-      store: createChatStore(db),
+      store: createChatStore(db, pool),
       turns: createTurnScheduler({ intake, log }),
       includeDrafts: config.registryIncludeDrafts,
       rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },

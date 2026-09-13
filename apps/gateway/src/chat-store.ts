@@ -12,6 +12,8 @@
 import { buildMessages, builds, type BuildStatus, type Db, type MessageRole, specs } from "@albusforge/db";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { sessionTenantIn } from "./auth-store";
+import type { Pool } from "pg";
+import { readSnapshot } from "./read-snapshot";
 
 /**
  * Who may read a build: the tenant of a live session, the hash of an
@@ -201,19 +203,19 @@ async function lastMessageOf(db: Queryable, buildId: string, withinS: number) {
   return row ?? null;
 }
 
-export function createChatStore(db: Queryable): ChatStore {
+export function createChatStore(db: Queryable, pool: Pool): ChatStore {
   return {
     async readEventBatch(buildId, credentials, after, lookbackMs) {
-      return db.transaction(async (tx) => {
+      return readSnapshot(pool, async (tx) => {
         const tenantId = credentials.sessionToken === undefined ? null : await sessionTenantIn(tx, credentials.sessionToken);
         const owner = { tenantId, anonHash: credentials.anonHash };
         if (owner.tenantId === null && owner.anonHash === null) return null;
-        const scoped = createChatStore(tx);
+        const scoped = createChatStore(tx, pool);
         const state = await scoped.buildState(buildId, owner);
         if (!state) return null;
         const messages = await scoped.messagesSince(buildId, owner, after, lookbackMs);
         return { state, messages };
-      }, { isolationLevel: "repeatable read", accessMode: "read only" });
+      });
     },
     async createBuild({ owner, askText, clientMessageId, admit }) {
       return db.transaction(async (tx): Promise<CreateBuildResult> => {

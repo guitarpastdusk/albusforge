@@ -8,7 +8,7 @@ import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { ApiError, BuildList, CreatedBuild, Me, MessageList, PostMessageResponse } from "@albusforge/schema";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -50,7 +50,7 @@ function makeApp(overrides: Partial<AuthOptions> = {}, chat: Partial<ChatOptions
     parts: createPartsStore(handle.db),
     ping: async () => void (await handle.pool.query("SELECT 1")),
     log,
-    chat: { store: createChatStore(handle.db), turns: createTurnScheduler({ intake: null, log }), includeDrafts: false, ...chat },
+    chat: { store: createChatStore(handle.db, handle.pool), turns: createTurnScheduler({ intake: null, log }), includeDrafts: false, ...chat },
     auth: { store: createAuthStore(handle.db, { newSessionToken }), email, ...overrides },
   });
   apps.push(app);
@@ -440,6 +440,73 @@ describe("build routes under a session", () => {
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/messages`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}` }), 404, "NOT_FOUND");
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/events`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
+  });
+});
+
+describe("event poll database leases", () => {
+  const socketOf = (client: pg.PoolClient) => (client as pg.PoolClient & { connection: { stream: Socket } }).connection.stream;
+  const pollPool = () => new pg.Pool({ ...handle.pool.options, password: "app-secret", max: 1, connectionTimeoutMillis: 1000, statement_timeout: 1000, query_timeout: 1200 });
+
+  it.each(["BEGIN", "COMMIT", "ROLLBACK"])("discards a stalled %s response and recovers pool capacity", async (phase) => {
+    const pool = pollPool();
+    pool.on("error", () => undefined);
+    let socket: Socket | undefined;
+    pool.once("acquire", (client) => {
+      socket = socketOf(client);
+      const original = client.query;
+      client.query = ((...args: unknown[]) => {
+        if (typeof args[0] === "string" && args[0].startsWith(phase)) socketOf(client).pause();
+        return Reflect.apply(original, client, args);
+      }) as typeof client.query;
+    });
+    try {
+      const store = createChatStore(handle.db, pool);
+      await expect(store.readEventBatch(randomUUID(), { anonHash: null }, undefined, 1000)).rejects.toThrow();
+      // No manual socket resume or lease release: the helper must retire it.
+      expect((await pool.query("SELECT 1 AS recovered")).rows[0].recovered).toBe(1);
+      expect(pool.totalCount).toBe(1);
+      expect(pool.idleCount).toBe(1);
+      expect(socket?.destroyed).toBe(true);
+    } finally {
+      socket?.resume();
+      await pool.end();
+    }
+  });
+
+  it("closes a real stream on checked-out socket loss without an uncaught error, then recovers", async () => {
+    const pool = pollPool();
+    pool.on("error", () => undefined);
+    const store = createChatStore(handle.db, pool);
+    const app = makeApp({}, { store, sse: { pollMs: 20, maxMs: 10_000 } });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const signedIn = await signIn(app, freshEmail());
+    const buildId = CreatedBuild.parse((await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Socket recovery" }, headers: { cookie: signedIn.cookie } })).json()).id;
+    const blocker = await handle.pool.connect();
+    let acquired: pg.PoolClient | undefined;
+    let reading: ReturnType<typeof readUntilClosed> | undefined;
+    pool.once("acquire", (client) => { acquired = client; });
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await blocker.query("LOCK TABLE builds.specs IN ACCESS EXCLUSIVE MODE");
+      reading = readUntilClosed(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/v1/builds/${buildId}/events`, signedIn.cookie);
+      await expect.poll(async () => (await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))", [pid])).rowCount, { timeout: 5000 }).toBe(1);
+      expect(acquired?.listenerCount("error")).toBeGreaterThan(0);
+      socketOf(acquired!).destroy();
+      expect((await reading).closed).toBe(true);
+      expect(lines.some((line) => line.message === "build events poll failed")).toBe(true);
+      await blocker.query("COMMIT");
+      const batch = await store.readEventBatch(buildId, { sessionToken: signedIn.token, anonHash: null }, undefined, 1000);
+      expect(batch?.messages.some((message) => message.text === "Socket recovery")).toBe(true);
+      expect(pool.totalCount).toBe(1);
+      expect(pool.idleCount).toBe(1);
+      // Vitest's uncaught/unhandled error collector remains active throughout.
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await reading;
+      await pool.end();
+    }
   });
 });
 

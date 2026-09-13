@@ -1,0 +1,47 @@
+# Sensor ingestion, processing and Ask infrastructure
+
+This change defines cloud resources and guarded release workflows. It does not apply Terraform, deploy images, activate schedules, provision a device, call a paid model or establish physical telemetry. The rollout ledger is [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md). Application contracts: [ingestion](TELEMETRY-INGEST.md), [storage](TELEMETRY-STORAGE.md), [read APIs](TELEMETRY-READ-API.md).
+
+## Runtime boundary
+
+| Runtime | Access and identity | Initial bound | Database |
+| --- | --- | --- | --- |
+| `cloudlink` | `/ingest` and `/ingest/*` on existing HTTPS edge; own backend/NEG/Armor policy; LB-only ingress; device bearer authentication in application | 2 instances, concurrency 8, 60s request timeout; staging floor 0, prod floor 1 | App role; pool 5; private IP/TLS |
+| `ask` | Internal-only ingress, gateway SA alone receives `run.invoker`; gateway gets `ASK_URL`; no public route | 2 instances, concurrency 4, 30s HTTP timeout; 20s application deadline; floor 0 | App role; pool 4; private IP/TLS |
+| `telemetry-rollup` | Dedicated job SA; Scheduler SA can invoke this job only | One task per execution, 600s timeout, one retry; every minute UTC | App role; pool 1 |
+| `telemetry-maintain` | Separate job SA with only owner password access; Scheduler invocation | One task per execution, 600s timeout, one retry; 00:05 UTC daily | Migration/owner role; pool 1 |
+
+Schedules are **paused by default** through `telemetry_schedules_enabled=false`. Cloud Run task retries handle failed execution; Scheduler does not retry API acceptance. The Run API returns before execution completes, so a successful Scheduler request is not a successful rollup. Concurrent rollup executions divide dirty markers safely; maintenance uses the application's advisory lock. No global execution-count cap is claimed: a minute schedule and ten-minute timeout can overlap approximately ten executions, plus retries, manual dispatch, startup delays and platform overshoot. Reserve capacity accordingly; tune measured batch duration before enabling the schedule.
+
+Every runtime uses its own service account, private VPC egress, existing Secret Manager DB credentials and `DB_SSL=require`. Maintenance alone receives the owner password; it receives neither app-role rotation secrets nor model keys. There is no Redis, Pub/Sub, database connector or public SQL endpoint in this change. PostgreSQL remains the durable ingestion acknowledgment and rollup work queue.
+
+## Edge protection and token privacy
+
+Cloudlink's policy throttles valid-looking bearer headers at 120 requests/minute per Authorization value. Missing/malformed headers get 60 requests/minute per IP. These are coarse protection limits, not device authentication or a distributed quota: an attacker can rotate plausible fake credentials. Cloudlink still authenticates every packet and enforces in-flight admission before DB work. Monitor abuse and add measured protection without denying a legitimate NATed fleet.
+
+Cloud Armor request logs can contain the rate-limit key. Cloudlink's **LB request logging is disabled** to avoid writing bearer values; other backends keep their existing logging. Application redacted request logs and Cloud Run platform request/error metrics remain. Do not re-enable cloudlink LB logging without changing the key strategy or proving redaction. See [Google's request logging fields](https://docs.cloud.google.com/armor/docs/request-logging) and [rate-limit contract](https://docs.cloud.google.com/armor/docs/rate-limiting-overview). Existing apex and wildcard TLS/DNS cover the path; a dedicated ingest hostname is a later routing choice.
+
+## Ask model and spend
+
+Ask starts in evidence-only mode: `ask_model_enabled=false`, no model-key secret mounted. Enabling narration requires an explicit `ask_model` and its provider key. The application currently supports `claude-haiku-4-5`; use that reviewed model ID, not the intake model. Infrastructure limits output to 512 tokens and daily SQL-backed reservations to 20/user, 100/tenant and 200/global. These bounds are independent of instance scaling and apply across the shared database; the application owns enforcement. One provider call, no retries or model fallback. Tenant/device authorization and bounded deterministic queries belong in the gateway/Ask code.
+
+Existing `llm_call` log metrics already include a `stage` label; Ask emits `stage=ask`, so existing environment-wide hourly/daily spend alerts include it without changing `observability.tf`. Alerts do not stop calls. Before enabling narration, reconcile the shared provider-key hard limit with intake spend in both environments; this change adds no new dollar allowance. Provider model availability/pricing, model-enabled acceptance and actual invoice reconciliation remain rollout checks.
+
+## Connection budget and operations
+
+Proposed service allocation with two overlapping revisions is `cloudlink 2 × 5 × 2 = 20` and `ask 2 × 4 × 2 = 16` connections. Add every concurrent job attempt (pool 1), gateway/intake pools and revisions, migrations, registry loading, administration and database reserves. This is a planning calculation, **not an approved production connection cap** or a guarantee against Cloud Run overshoot. Read `SHOW max_connections`, measure the current workload and CPU/I/O headroom, record the total reserve, and approve it before applying production resources or enabling schedules. Do not simply raise max instances when SQL is saturated.
+
+Checked-in alerts cover failed Cloud Run job executions and five cloudlink/Ask 5xx responses within five minutes, delivered through the existing notification channel. Application/platform logs remain available when LB logs are disabled. Still required before device rollout: oldest dirty-marker age/queue depth, default-partition rows, ingestion p95/503/pool-wait dashboards, missing scheduler execution/heartbeat alerts, SQL connections/CPU/I/O alerts and budgeted load/failure tests. A quiet successful job can still leave backlog; failure alerts alone do not establish processing freshness.
+
+## Release order and approval boundary
+
+1. Review Terraform plans for each workspace, including unrelated drift. Confirm shared connection and provider budgets. Apply only the approved plan; no source workflow creates infrastructure. Initial image placeholders and paused schedules are not runnable telemetry evidence.
+2. Merge application/schema dependencies. Use the existing gateway release to run owner migrations and grants. Sensor workflows never modify the shared `db-migrate` or `registry-load` jobs, preventing a second release owner from racing them.
+3. Dispatch `deploy-telemetry` on main. It builds the existing db-jobs Dockerfile as a separate `telemetry-jobs` Artifact Registry image, updates only the two telemetry jobs, executes each with `--wait`, and certifies the immutable digest only after both succeeded. This separate image namespace prevents gateway migration certification from being mistaken for rollup execution evidence.
+4. Dispatch `deploy-cloudlink` and `deploy-ask` on main after their code is merged. Validate readiness, rejected unauthenticated requests, SQL-backed simulated ingestion/retry/backfill, authorized read/Ask requests and tenant isolation in staging. Ask stays evidence-only until a separate model-enablement decision.
+5. Turn on staging schedules in Terraform only after the above executions and data checks. Verify job success, actual rollup contents and backlog health, including failures/lock contention. Turning schedules off prevents future dispatches; it does not cancel running executions.
+6. Promote the **same** staging-certified digests through `promote-telemetry`, `promote-cloudlink`, `promote-ask`, after production schema/capacity review. These workflows do not build. Then activate production schedules through reviewed Terraform and repeat acceptance. Production device-token provisioning and physical sensor-to-cloud verification remain separate gates.
+
+All six new release workflows are manual-only and main-only. Before mutation they require successful latest exact-source push CI and main ancestry; promotions recover source from immutable staging-certification tags. They also compare the migration/grant source tree against the last successful owner migration execution in the target environment. A missing migration, failed CI, split/unknown staging image or unverified digest fails closed. Existing staging freshness and immutable-tag checks prevent an older staging release from replacing newer code. Successful startup/execution establishes software deployment evidence only; workflows do not manufacture a test tenant or device credential.
+
+Cloud Run job and Scheduler configuration follow the [provider job resource](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/cloud_scheduler_job). Provider validation and mocked plans verify configuration without provisioning. Real plans include existing environment drift and must be reviewed before any apply; raw saved plans contain sensitive state and are kept outside the repository.

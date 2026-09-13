@@ -1,0 +1,32 @@
+name: infra-check
+on:
+  pull_request:
+    paths: ['infra/**', '.github/workflows/infra-check.yml']
+  push:
+    branches: [main]
+    paths: ['infra/**', '.github/workflows/infra-check.yml']
+permissions:
+  contents: read
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TF_WORKSPACE: staging
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.14.7
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive infra/env infra/modules
+      - run: terraform -chdir=infra/env init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=infra/env validate
+      # Providers and bootstrap outputs are mocked: no cloud credentials/state.
+      - run: terraform -chdir=infra/env test
+      - run: terraform -chdir=infra/env test
+        env:
+          TF_WORKSPACE: prod
+      - run: terraform -chdir=infra/modules/run_service init -backend=false -input=false
+      - run: terraform -chdir=infra/modules/run_service test

@@ -603,6 +603,45 @@ for wf in "$root"/.github/workflows/deploy-*.yml "$root"/.github/workflows/promo
   expect '[ -z "$piped" ] || grep -qE "^ +shell: bash$" "$wf"'
 done
 
+# Sensor releases do not race the shared migrator: require its last successful
+# execution's schema tree to match, even when unrelated source commits differ.
+g update-ref refs/remotes/origin/main "$C"
+setup "schema: matching successful migration tree allows release"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" = 0 ] && ! called "run jobs execute"'
+
+setup "schema: failed execution does not certify schema"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" False)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+
+g checkout -q --detach "$C"
+mkdir -p "$repo/packages/db/migrations"
+echo new-schema > "$repo/packages/db/migrations/new.sql"
+g add . && g commit -qm schema
+schema_commit="$(g rev-parse HEAD)"
+g update-ref refs/remotes/origin/main "$schema_commit"
+setup "schema: newer unapplied migration refuses release"
+export IMAGE=cloudlink GITHUB_SHA="$schema_commit"
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ] && has "Deploy gateway-owned migrations"'
+
+setup "schema: source digest without staging marker refuses promotion"
+export IMAGE=cloudlink DIGEST="$d2"
+images "[{\"version\":\"$d2\",\"tags\":\"$C\"}]"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+unset DIGEST
+
 echo
 echo "$passed passed, $failed failed"
-[ "$failed" = 0 ]
+[ "$failed" = 0 ] || exit 1
+
+bash "$root/.github/scripts/test/release-ci.sh"

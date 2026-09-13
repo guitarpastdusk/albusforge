@@ -37,3 +37,11 @@ output "jobs" {
 output "intake_service" {
   value = module.intake.name
 }
+
+output "sensor_services" {
+  value = { cloudlink = module.cloudlink.name, ask = module.ask.name }
+}
+
+output "telemetry_jobs" {
+  value = [for job in module.telemetry_jobs : job.name]
+}

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { BuildDetail, routes } from "@albusforge/schema";
 import Link from "next/link";
 import { ProjectOverview } from "@/components/build/ProjectOverview";
@@ -5,6 +6,8 @@ import { PageContainer, PageTitle } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { buildStatus } from "@/lib/build-status";
 import { requireSession } from "@/lib/session";
+
+export const metadata: Metadata = { title: "Project" };
 
 export default async function ProjectPage({ params }: { params: Promise<{ buildId: string }> }) {
   const { buildId } = await params;

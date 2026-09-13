@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import {
   TelemetryDeviceDetail,
   TelemetryDeviceParams,
@@ -18,6 +19,8 @@ import {
   windows,
   type Search,
 } from "@/lib/telemetry-monitor";
+
+export const metadata: Metadata = { title: "Device telemetry" };
 
 export default async function DevicePage({
   params,

@@ -18,15 +18,31 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository_owner_id" = "assertion.repository_owner_id"
   }
 
-  attribute_condition = "assertion.repository == '${var.github_repository}' && assertion.repository_owner_id == '${var.github_repository_owner_id}'"
+  attribute_condition = "assertion.repository == '${var.github_repository}' && assertion.repository_owner_id == '${var.github_repository_owner_id}' && assertion.repository_id == '${var.github_repository_id}'"
 
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"
   }
 }
 
+locals {
+  # This repository uses GitHub's immutable OIDC subject, which embeds the owner
+  # and repository IDs:
+  #   repo:<owner>@<owner_id>/<name>@<repo_id>:environment:<env>
+  # A binding on the plain repo:<owner>/<name> form never matches, so every
+  # impersonation is denied. Check the live format with:
+  #   gh api repos/<owner>/<name>/actions/oidc/customization/sub
+  github_subject_prefix = format(
+    "repo:%s@%s/%s@%s",
+    split("/", var.github_repository)[0],
+    var.github_repository_owner_id,
+    split("/", var.github_repository)[1],
+    var.github_repository_id,
+  )
+}
+
 # One deployer per environment, each impersonable only from a job running in
-# the matching GitHub environment (sub = repo:<repo>:environment:<env>).
+# the matching GitHub environment (sub = <github_subject_prefix>:environment:<env>).
 resource "google_service_account" "deployer" {
   for_each = local.envs
 
@@ -44,7 +60,7 @@ resource "google_service_account_iam_member" "deployer_wif" {
 
   service_account_id = google_service_account.deployer[each.key].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/repo:${var.github_repository}:environment:${each.key}"
+  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/subject/${local.github_subject_prefix}:environment:${each.key}"
 }
 
 locals {

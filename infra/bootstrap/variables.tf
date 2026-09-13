@@ -37,6 +37,11 @@ variable "github_repository_owner_id" {
   type        = string
 }
 
+variable "github_repository_id" {
+  description = "Numeric GitHub repository ID. Part of the repository's immutable OIDC subject, and pinned in the provider condition."
+  type        = string
+}
+
 variable "prod_budget_usd" {
   description = "Monthly prod budget. Alerts fire at 30/60/100% — $150 / $300 / $500 at the default."
   type        = number

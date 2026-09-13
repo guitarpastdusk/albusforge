@@ -4,8 +4,8 @@ import { settle } from "@/lib/safe-action";
 
 /*
  * Pure state for the rules card (ADR 0010). The server's snapshot is the
- * truth; the card layers per-rule local changes over it and lets the next
- * snapshot retire them. Nothing here touches React or the network.
+ * truth; the card layers per-rule local knowledge over it and the snapshot
+ * retires what it supersedes. Nothing here touches React or the network.
  */
 
 export type WriteOutcome<T> = { ok: true; data: T } | { ok: false; message: string; outcome: "refused" | "unknown" };
@@ -22,17 +22,17 @@ export async function writeOnce<T extends DeviceAction | ActionProposal>(write: 
 }
 
 /**
- * A local change to one rule, layered over the server's copy.
- * - `writing`: the switch flipped on screen; the write is in flight.
- * - `written`: the write succeeded and `action` is what the server returned.
- *   Retired by the next snapshot, unless that snapshot is older (a lower
- *   `version`) than what we were told.
- * - `unknown`: the write's outcome is unknown. The server's copy is shown
- *   with an "unconfirmed" badge until a fresh snapshot arrives.
+ * What the card knows about one rule beyond the snapshot.
+ * - `confirmed`: the last response the server accepted for this rule. Shown
+ *   instead of the snapshot's copy until a snapshot supersedes it (same or
+ *   higher `version`, or any newer snapshot when versions are absent).
+ * - `attempt`: the write in flight (`writing`, switch flipped on screen) or one
+ *   whose outcome is unknown (`unknown`, the confirmed/server copy shown with an
+ *   "unconfirmed" badge). A refusal removes only the attempt; `confirmed` stays.
  */
 export interface Override {
-  action: DeviceAction;
-  state: "writing" | "written" | "unknown";
+  confirmed?: DeviceAction;
+  attempt?: { action: DeviceAction; state: "writing" | "unknown" };
 }
 
 export interface LocalRules {
@@ -43,59 +43,93 @@ export interface LocalRules {
 
 export const NO_LOCAL_RULES: LocalRules = { overrides: {}, added: [] };
 
+export type RowStatus = "writing" | "unknown" | "written" | null;
+
 export interface RuleRow {
   action: DeviceAction;
-  status: Override["state"] | null;
+  status: RowStatus;
 }
 
-/** The rows to render: the snapshot with local changes applied, then local additions. */
-export function mergeRules(server: readonly DeviceAction[], local: LocalRules): RuleRow[] {
-  const rows: RuleRow[] = server.map((action) => {
-    const override = local.overrides[action.id];
-    if (!override) return { action, status: null };
-    // An unknown outcome shows the server's copy: the switch must not claim a change we can't confirm.
-    return override.state === "unknown" ? { action, status: "unknown" } : { action: override.action, status: override.state };
-  });
-  const seen = new Set(server.map((a) => a.id));
-  for (const action of local.added) {
-    if (seen.has(action.id)) continue;
-    const override = local.overrides[action.id];
-    rows.push(override && override.state !== "unknown" ? { action: override.action, status: override.state } : { action, status: override?.state ?? null });
-  }
-  return rows;
-}
-
-/** A snapshot is newer than a completed write unless it carries a lower version for that rule. */
-function snapshotSupersedes(server: readonly DeviceAction[], written: DeviceAction): boolean {
-  const current = server.find((a) => a.id === written.id);
-  if (!current) return false;
-  if (current.version !== undefined && written.version !== undefined) return current.version >= written.version;
+/** Whether the snapshot's copy is at least as new as a response the server gave us. */
+export function supersedes(server: DeviceAction | undefined, confirmed: DeviceAction): boolean {
+  if (!server) return false;
+  if (server.version !== undefined && confirmed.version !== undefined) return server.version >= confirmed.version;
   return true;
 }
 
-/**
- * A fresh snapshot arrived: retire what it supersedes. Writes still in flight
- * keep their optimistic state; unknown outcomes are answered by the snapshot;
- * completed writes are retired unless the snapshot is older; additions the
- * snapshot now carries are dropped.
- */
-export function reconcile(server: readonly DeviceAction[], local: LocalRules): LocalRules {
-  const overrides: Record<string, Override> = {};
-  for (const [id, override] of Object.entries(local.overrides)) {
-    if (override.state === "writing") overrides[id] = override;
-    else if (override.state === "written" && !snapshotSupersedes(server, override.action)) overrides[id] = override;
-  }
-  const ids = new Set(server.map((a) => a.id));
-  return { overrides, added: local.added.filter((a) => !ids.has(a.id)) };
+function resolve(server: DeviceAction | undefined, override: Override | undefined, fallback: DeviceAction): RuleRow {
+  const base = override?.confirmed && !supersedes(server, override.confirmed) ? override.confirmed : (server ?? fallback);
+  const attempt = override?.attempt;
+  if (attempt?.state === "writing") return { action: attempt.action, status: "writing" };
+  if (attempt?.state === "unknown") return { action: base, status: "unknown" };
+  return { action: base, status: base === override?.confirmed ? "written" : null };
 }
 
-export function withOverride(local: LocalRules, id: string, override: Override | null): LocalRules {
-  const overrides = { ...local.overrides };
-  if (override) overrides[id] = override;
-  else delete overrides[id];
-  return { ...local, overrides };
+/** The rows to render: the snapshot with local knowledge applied, then local additions. Supersession is checked here, on every render. */
+export function mergeRules(server: readonly DeviceAction[], local: LocalRules): RuleRow[] {
+  const rows = server.map((action) => resolve(action, local.overrides[action.id], action));
+  const seen = new Set(server.map((a) => a.id));
+  for (const action of local.added) if (!seen.has(action.id)) rows.push(resolve(undefined, local.overrides[action.id], action));
+  return rows;
+}
+
+/**
+ * A fresh snapshot arrived: drop what it answers. Confirmed responses it
+ * supersedes, unknown attempts (the snapshot is the answer), and additions it
+ * now carries. Writes in flight keep their optimistic state.
+ */
+export function reconcile(server: readonly DeviceAction[], local: LocalRules): LocalRules {
+  const byId = new Map(server.map((a) => [a.id, a]));
+  const overrides: Record<string, Override> = {};
+  for (const [id, override] of Object.entries(local.overrides)) {
+    const next: Override = {};
+    if (override.confirmed && !supersedes(byId.get(id), override.confirmed)) next.confirmed = override.confirmed;
+    if (override.attempt?.state === "writing") next.attempt = override.attempt;
+    if (next.confirmed || next.attempt) overrides[id] = next;
+  }
+  return { overrides, added: local.added.filter((a) => !byId.has(a.id)) };
+}
+
+/** The switch flipped; the write is in flight. */
+export function startWrite(local: LocalRules, action: DeviceAction): LocalRules {
+  return patch(local, action.id, (o) => ({ ...o, attempt: { action, state: "writing" } }));
+}
+
+/**
+ * The server accepted the write. `latest` is the snapshot at settlement and
+ * `atStart` the one when the write began: a snapshot that changed meanwhile
+ * and already supersedes the response wins, so a late response can't undo
+ * newer server state.
+ */
+export function finishWrite(local: LocalRules, data: DeviceAction, latest: readonly DeviceAction[], atStart: readonly DeviceAction[]): LocalRules {
+  const current = latest.find((a) => a.id === data.id);
+  const stale = latest !== atStart && supersedes(current, data);
+  return patch(local, data.id, (o) => {
+    const next: Override = {};
+    if (!stale) next.confirmed = data;
+    else if (o.confirmed && !supersedes(current, o.confirmed)) next.confirmed = o.confirmed;
+    return next;
+  });
+}
+
+/** The server refused: only the attempt goes; an earlier accepted response stays. */
+export function refuseWrite(local: LocalRules, id: string): LocalRules {
+  return patch(local, id, ({ confirmed }) => (confirmed ? { confirmed } : {}));
+}
+
+/** The outcome is unknown: keep what we knew, mark the rule unconfirmed until a snapshot answers. */
+export function loseWrite(local: LocalRules, action: DeviceAction): LocalRules {
+  return patch(local, action.id, (o) => ({ ...o, attempt: { action, state: "unknown" } }));
 }
 
 export function withAdded(local: LocalRules, action: DeviceAction): LocalRules {
   return { ...local, added: [...local.added.filter((a) => a.id !== action.id), action] };
+}
+
+function patch(local: LocalRules, id: string, update: (current: Override) => Override): LocalRules {
+  const overrides = { ...local.overrides };
+  const next = update(overrides[id] ?? {});
+  if (next.confirmed || next.attempt) overrides[id] = next;
+  else delete overrides[id];
+  return { ...local, overrides };
 }

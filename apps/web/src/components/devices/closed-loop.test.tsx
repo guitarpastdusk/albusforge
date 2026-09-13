@@ -2,7 +2,7 @@ import type { ActionProposal, DeviceAction } from "@albusforge/schema";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { CONNECTION_MESSAGE } from "@/lib/safe-action";
-import { mergeRules, NO_LOCAL_RULES, reconcile, withAdded, withOverride, writeOnce, type LocalRules } from "./closed-loop-flow";
+import { finishWrite, loseWrite, mergeRules, NO_LOCAL_RULES, reconcile, refuseWrite, startWrite, supersedes, withAdded, writeOnce, type LocalRules } from "./closed-loop-flow";
 import { ClosedLoopActions, PENDING_LABEL, ProposalCard, READ_ONLY_NOTE } from "./ClosedLoopActions";
 
 // The card's Server Functions are "use server" modules; the render tests never call them.
@@ -78,6 +78,9 @@ describe("ProposalCard", () => {
 });
 
 describe("closed-loop flow helpers", () => {
+  const disabled2: DeviceAction = { ...ACTIONS[0]!, enabled: false, sync: "pending", version: 2 };
+  const v1: DeviceAction = { ...ACTIONS[0]!, version: 1 };
+
   it("writeOnce never rejects: a network failure is an unknown outcome, never a refusal", async () => {
     await expect(writeOnce(vi.fn().mockRejectedValue(new TypeError("Failed to fetch")))).resolves.toEqual({
       ok: false,
@@ -91,46 +94,68 @@ describe("closed-loop flow helpers", () => {
     await expect(writeOnce(async () => ({ ok: true, data: ACTIONS[0]! }))).resolves.toEqual({ ok: true, data: ACTIONS[0] });
   });
 
-  it("mergeRules layers writing and written overrides, shows the server copy for unknown, and appends additions", () => {
-    const flipped = { ...ACTIONS[0]!, enabled: false };
+  it("supersedes: same or higher version wins; without versions the snapshot wins; a missing rule never does", () => {
+    expect(supersedes({ ...v1, version: 2 }, disabled2)).toBe(true);
+    expect(supersedes(v1, disabled2)).toBe(false);
+    expect(supersedes(ACTIONS[0], { ...disabled2, version: undefined })).toBe(true);
+    expect(supersedes(undefined, disabled2)).toBe(false);
+  });
+
+  it("mergeRules: a confirmed response shows over an older snapshot, not over a newer one", () => {
+    const local: LocalRules = { overrides: { a1: { confirmed: disabled2 } }, added: [] };
+    expect(mergeRules([v1], local)[0]).toEqual({ action: disabled2, status: "written" });
+    const newer = { ...v1, version: 3 };
+    expect(mergeRules([newer], local)[0]).toEqual({ action: newer, status: null });
+  });
+
+  it("mergeRules: writing shows the attempt; unknown shows the confirmed or server copy; additions append", () => {
     const added: DeviceAction = { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "pending" };
-    const rows = mergeRules(ACTIONS, {
-      overrides: { a1: { action: flipped, state: "writing" }, a2: { action: { ...ACTIONS[1]!, enabled: true }, state: "unknown" } },
+    const rows = mergeRules([ACTIONS[0]!, { ...ACTIONS[1]!, version: 1 }], {
+      overrides: {
+        a1: { attempt: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" } },
+        a2: { confirmed: { ...ACTIONS[1]!, enabled: true, version: 5 }, attempt: { action: ACTIONS[1]!, state: "unknown" } },
+      },
       added: [added],
     });
     expect(rows.map((r) => [r.action.id, r.action.enabled, r.status])).toEqual([
       ["a1", false, "writing"],
-      ["a2", false, "unknown"],
+      ["a2", true, "unknown"],
       ["a3", true, null],
     ]);
   });
 
-  it("reconcile keeps in-flight writes, retires unknown and completed ones, and drops additions the snapshot carries", () => {
+  it("reconcile keeps in-flight writes and unsuperseded confirmations, drops unknown attempts and carried additions", () => {
     const local: LocalRules = {
       overrides: {
-        a1: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" },
-        a2: { action: ACTIONS[1]!, state: "unknown" },
+        a1: { attempt: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" } },
+        a2: { confirmed: { ...ACTIONS[1]!, version: 2 }, attempt: { action: ACTIONS[1]!, state: "unknown" } },
       },
       added: [{ id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true }],
     };
-    const next = reconcile([...ACTIONS, { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "synced" }], local);
-    expect(Object.keys(next.overrides)).toEqual(["a1"]);
+    const next = reconcile([...ACTIONS.map((a) => ({ ...a, version: 1 })), { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "synced" }], local);
+    expect(next.overrides).toEqual({ a1: local.overrides.a1, a2: { confirmed: local.overrides.a2!.confirmed } });
     expect(next.added).toEqual([]);
+    expect(reconcile([{ ...ACTIONS[1]!, version: 2 }], next).overrides).toEqual({ a1: local.overrides.a1 });
   });
 
-  it("reconcile keeps a completed write when the snapshot is older by version, and retires it once the snapshot catches up", () => {
-    const written = { ...ACTIONS[0]!, enabled: false, sync: "pending" as const, version: 3 };
-    const local: LocalRules = { overrides: { a1: { action: written, state: "written" } }, added: [] };
-    expect(reconcile([{ ...ACTIONS[0]!, version: 2 }], local).overrides.a1).toEqual(local.overrides.a1);
-    expect(reconcile([{ ...ACTIONS[0]!, version: 3 }], local).overrides.a1).toBeUndefined();
-    // Without versions, the next snapshot wins.
-    expect(reconcile([ACTIONS[0]!], { overrides: { a1: { action: { ...written, version: undefined }, state: "written" } }, added: [] }).overrides.a1).toBeUndefined();
+  it("finishWrite installs the response unless a snapshot that changed meanwhile already supersedes it", () => {
+    const started = startWrite(NO_LOCAL_RULES, { ...v1, enabled: false });
+    expect(finishWrite(started, disabled2, [v1], [v1]).overrides.a1).toEqual({ confirmed: disabled2 });
+    const newer = [{ ...v1, version: 3, sync: "synced" as const }];
+    expect(finishWrite(started, disabled2, newer, [v1]).overrides.a1).toBeUndefined();
+    // Same version, acked: the snapshot's synced copy wins over the response's pending one.
+    expect(finishWrite(started, disabled2, [{ ...disabled2, sync: "synced" }], [v1]).overrides.a1).toBeUndefined();
   });
 
-  it("withOverride sets and clears; withAdded replaces by id", () => {
-    const set = withOverride(NO_LOCAL_RULES, "a1", { action: ACTIONS[0]!, state: "written" });
-    expect(Object.keys(set.overrides)).toEqual(["a1"]);
-    expect(withOverride(set, "a1", null)).toEqual(NO_LOCAL_RULES);
+  it("refuseWrite drops only the attempt; loseWrite keeps the confirmation and marks unknown", () => {
+    const confirmed: LocalRules = { overrides: { a1: { confirmed: disabled2 } }, added: [] };
+    const attempting = startWrite(confirmed, { ...disabled2, enabled: true });
+    expect(refuseWrite(attempting, "a1")).toEqual(confirmed);
+    expect(refuseWrite(startWrite(NO_LOCAL_RULES, v1), "a1")).toEqual(NO_LOCAL_RULES);
+    expect(loseWrite(attempting, disabled2).overrides.a1).toEqual({ confirmed: disabled2, attempt: { action: disabled2, state: "unknown" } });
+  });
+
+  it("withAdded replaces by id", () => {
     const added: DeviceAction = { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true };
     expect(withAdded(withAdded(NO_LOCAL_RULES, added), { ...added, enabled: false }).added).toEqual([{ ...added, enabled: false }]);
   });

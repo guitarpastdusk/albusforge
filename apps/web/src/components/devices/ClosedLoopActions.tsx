@@ -2,12 +2,12 @@
 
 import type { Accent, ActionProposal, DeviceAction, DeviceActionKind } from "@albusforge/schema";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { confirmAction, proposeAction, setActionEnabled } from "@/actions/device-actions";
 import { Button, Toggle } from "@/components/ui";
 import { accentClasses } from "@/lib/accent";
 import { cx } from "@/lib/cx";
-import { mergeRules, NO_LOCAL_RULES, reconcile, withAdded, withOverride, writeOnce, type RuleRow } from "./closed-loop-flow";
+import { finishWrite, loseWrite, mergeRules, NO_LOCAL_RULES, reconcile, refuseWrite, startWrite, withAdded, writeOnce, type RuleRow } from "./closed-loop-flow";
 import { CardLabel } from "./DeviceWidgets";
 
 const KIND_ACCENT: Record<DeviceActionKind, Accent> = { SERVO: "green", API: "blue", ALERT: "peach" };
@@ -20,8 +20,11 @@ export const UNCONFIRMED_LABEL = "unconfirmed · refreshing";
  * "Closed loop · actions": the rules this device acts on, and where a person
  * changes them (PORTAL.md §3, ADR 0010).
  *
- * The server's snapshot (`actions`) is the truth. Local changes are layered
- * over it per rule and retired by the next snapshot (closed-loop-flow.ts):
+ * The server's snapshot (`actions`) is the truth. Per rule, the card keeps
+ * the last response the server accepted and the attempt in flight, layered
+ * over the snapshot; a snapshot that is as new or newer wins, checked on
+ * every render, so a late response can't undo newer server state and a
+ * refused second click can't erase an accepted first one (closed-loop-flow.ts):
  * - A switch flips on screen at once and is written through a Server
  *   Function. A refusal (not built, wrong role) puts it back and says why.
  *   An outcome we can't confirm (lost response) shows the server's copy with
@@ -63,24 +66,30 @@ export function ClosedLoopActions({
     setSeen(snapshot);
     setLocal(reconcile(snapshot, local));
   }
+  // The snapshot as of the latest render, read by a write that settles after a refresh.
+  const latest = useRef(snapshot);
+  useEffect(() => {
+    latest.current = snapshot;
+  }, [snapshot]);
 
   const rows = mergeRules(snapshot, local);
 
   const toggle = async ({ action, status }: RuleRow) => {
     if (!canEdit || status === "writing" || status === "unknown") return;
     const next = !action.enabled;
+    const atStart = latest.current;
     setError(null);
-    setLocal((current) => withOverride(current, action.id, { action: { ...action, enabled: next }, state: "writing" }));
+    setLocal((current) => startWrite(current, { ...action, enabled: next }));
     const outcome = await writeOnce(() => setActionEnabled(deviceId, action.id, next));
     if (outcome.ok) {
-      setLocal((current) => withOverride(current, action.id, { action: outcome.data, state: "written" }));
+      setLocal((current) => finishWrite(current, outcome.data, latest.current, atStart));
       return;
     }
     setError(outcome.message);
     if (outcome.outcome === "refused") {
-      setLocal((current) => withOverride(current, action.id, null));
+      setLocal((current) => refuseWrite(current, action.id));
     } else {
-      setLocal((current) => withOverride(current, action.id, { action, state: "unknown" }));
+      setLocal((current) => loseWrite(current, action));
       router.refresh();
     }
   };

@@ -30,7 +30,6 @@ let root: Root;
 
 const render = (actions: DeviceAction[], canEdit = true) =>
   act(async () => root.render(<ClosedLoopActions deviceId="bed-a" actions={actions} lastAction={null} canEdit={canEdit} />));
-const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`li[data-status], li`)!.closest("ul")!.querySelector<HTMLButtonElement>(`li:nth-child(${id}) button[role="switch"]`)!;
 const firstSwitch = () => container.querySelector<HTMLButtonElement>('button[role="switch"]')!;
 const text = () => container.textContent ?? "";
 const click = (el: HTMLElement) => act(async () => el.click());
@@ -87,7 +86,40 @@ describe("ClosedLoopActions: the snapshot is the truth", () => {
     expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
     await render([{ ...RULE, enabled: false, version: 2 }]);
     expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
-    expect(switchFor).toBeTypeOf("function");
+  });
+
+  it("a newer snapshot that arrives while a write is pending wins over the late response", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof setActionEnabled>>>();
+    write.mockReturnValue(pending.promise);
+    await render([RULE]);
+    await click(firstSwitch()); // disable
+    await render([{ ...RULE, enabled: true, sync: "synced", version: 3 }]); // someone else re-enabled, and the device acked
+    await act(async () => pending.resolve({ ok: true, data: { ...RULE, enabled: false, sync: "pending", version: 2 } }));
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(text()).not.toContain(PENDING_LABEL);
+  });
+
+  it("a same-version acknowledgement that arrives before the response is not regressed to pending", async () => {
+    const pending = deferred<Awaited<ReturnType<typeof setActionEnabled>>>();
+    write.mockReturnValue(pending.promise);
+    await render([RULE]);
+    await click(firstSwitch());
+    await render([{ ...RULE, enabled: false, sync: "synced", version: 2 }]);
+    await act(async () => pending.resolve({ ok: true, data: { ...RULE, enabled: false, sync: "pending", version: 2 } }));
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(text()).not.toContain(PENDING_LABEL);
+  });
+
+  it("a refused second click keeps the accepted first write, with no refresh in between", async () => {
+    write.mockResolvedValueOnce({ ok: true, data: { ...RULE, enabled: false, sync: "pending", version: 2 } });
+    write.mockResolvedValueOnce({ ok: false, message: "Not now.", outcome: "refused" });
+    await render([RULE]);
+    await click(firstSwitch());
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
+    await click(firstSwitch());
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(text()).toContain(PENDING_LABEL);
+    expect(container.querySelector('[role="alert"]')!.textContent).toBe("Not now.");
   });
 
   it("a refused write rolls the switch back and says why", async () => {

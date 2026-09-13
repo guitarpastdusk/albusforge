@@ -122,6 +122,32 @@ export function isRetryable(error: unknown): boolean {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Runs `work` with one deadline over all of it, credential acquisition
+ * included: the Google metadata client has no timeout of its own on Cloud Run,
+ * so the abort signal reaching fetch isn't enough. On the deadline the signal
+ * aborts and the returned promise rejects with a TimeoutError at once; a late
+ * result or rejection from `work` is dropped.
+ */
+export async function withDeadline<T>(work: (signal: AbortSignal) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new DOMException(`intake turn exceeded ${ms} ms`, "TimeoutError");
+      controller.abort(error);
+      reject(error);
+    }, ms);
+  });
+  const running = work(controller.signal);
+  running.catch(() => undefined);
+  try {
+    return await Promise.race([running, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * One turn per build at a time on this instance. A trigger that arrives while
  * a turn for the same build is running queues exactly one more run after it,
  * so a message stored mid-turn still gets a turn (intake answers `noop` when
@@ -147,7 +173,7 @@ export function createTurnScheduler({
     const started = Date.now();
     for (let attempt = 1; ; attempt++) {
       try {
-        const result = await intake.turn(buildId, AbortSignal.timeout(timeoutMs));
+        const result = await withDeadline((signal) => intake.turn(buildId, signal), timeoutMs);
         log("INFO", "intake turn completed", {
           trace: context.trace,
           fields: {

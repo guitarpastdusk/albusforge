@@ -12,6 +12,7 @@ import {
 import Fastify, { type FastifyInstance } from "fastify";
 import { type ChatOptions, registerBuildRoutes } from "./build-routes";
 import { isDatabaseUnavailable } from "./db-errors";
+import { describeError } from "./db-log";
 import { HttpError, parse, pathOf, sendError } from "./http";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
@@ -113,10 +114,19 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
       return sendError(reply, 503, "UNAVAILABLE", "Database unavailable", { request_id: request.id });
     }
 
+    // Any other database error: only its SQLSTATE and location (db-log.ts),
+    // never Drizzle's message, which carries the query parameters.
+    const described = describeError(error);
     log("ERROR", "request failed", {
-      error,
+      error: described.error,
       trace: request.trace,
-      fields: { requestId: request.id, method: request.method, route: request.routeOptions.url ?? null, path: pathOf(request.url) },
+      fields: {
+        requestId: request.id,
+        method: request.method,
+        route: request.routeOptions.url ?? null,
+        path: pathOf(request.url),
+        ...described.fields,
+      },
     });
     // The message stays in the log; the client gets the request id to quote.
     return sendError(reply, 500, "INTERNAL", "Internal server error", { request_id: request.id });

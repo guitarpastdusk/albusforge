@@ -3,15 +3,16 @@
  * server standing in for POST /v1/turns. No network beyond localhost.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
-import { buildMessages, builds, createDb, type DbConfig, specs } from "@albusforge/db";
+import net, { type AddressInfo } from "node:net";
+import { buildMessages, builds, createDb, type DbConfig, specs, tenants } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { ApiError, BuildDetail, BuildUpdatedEvent, CreatedBuild, MessageCreatedEvent, MessageList, PostMessageResponse } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -20,7 +21,8 @@ import type { ChatOptions } from "./build-routes";
 import { createChatStore } from "./chat-store";
 import { createTurnScheduler, httpIntakeClient, type TurnScheduler } from "./intake";
 import { createLogger } from "./log";
-import { createPartsStore } from "./parts";
+import { newAnonToken } from "./owner";
+import { createPartsStore, type PartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
 
 let container: StartedPostgreSqlContainer;
@@ -41,7 +43,7 @@ const log = createLogger({
 
 const apps: FastifyInstance[] = [];
 
-function makeApp(overrides: Partial<ChatOptions> = {}): { app: FastifyInstance; turns: TurnScheduler } {
+function makeApp(overrides: Partial<ChatOptions> = {}, parts?: PartsStore): { app: FastifyInstance; turns: TurnScheduler } {
   const turns = createTurnScheduler({
     intake: httpIntakeClient({ url: intakeUrl, authHeader: async () => undefined }),
     log,
@@ -49,13 +51,24 @@ function makeApp(overrides: Partial<ChatOptions> = {}): { app: FastifyInstance; 
     retryDelayMs: 10,
   });
   const app = buildApp({
-    parts: createPartsStore(handle.db),
+    parts: parts ?? createPartsStore(handle.db),
     ping: async () => void (await handle.pool.query("SELECT 1")),
     log,
-    chat: { store: createChatStore(handle.db), turns, includeDrafts: false, sse: { pollMs: 50, heartbeatMs: 200, maxMs: 10_000 }, ...overrides },
+    chat: {
+      store: createChatStore(handle.db),
+      turns,
+      includeDrafts: false,
+      ...overrides,
+      sse: { pollMs: 50, heartbeatMs: 200, maxMs: 10_000, ...overrides.sse },
+    },
   });
   apps.push(app);
   return { app, turns };
+}
+
+async function listen(app: FastifyInstance): Promise<string> {
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  return `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
 }
 
 beforeAll(async () => {
@@ -74,7 +87,7 @@ beforeAll(async () => {
     ssl: "disable",
   };
   await runMigrations(migrate, { appRole: { name: "albus_app", password: "app-secret" } });
-  handle = createDb({ ...migrate, user: "albus_app", password: "app-secret" }, { max: 5 });
+  handle = createDb({ ...migrate, user: "albus_app", password: "app-secret" }, { max: 10 });
   await loadParts(handle.db, readValidatedParts(REGISTRY_ROOT));
 
   intake = http.createServer((req, res) => {
@@ -126,6 +139,8 @@ const expectError = (response: { statusCode: number; json: () => unknown }, stat
   expect(response.statusCode).toBe(status);
   expect(ApiError.parse(response.json()).error.code).toBe(code);
 };
+
+const sorted = (values: number[]) => [...values].sort((a, b) => a - b);
 
 describe("POST /v1/builds", () => {
   it("issues the anonymous owner cookie, stores its hash, inserts the first message and starts a turn", async () => {
@@ -191,11 +206,40 @@ describe("POST /v1/builds", () => {
     expect(CreatedBuild.parse(replay.json()).id).toBe(CreatedBuild.parse(first.json()).id);
   });
 
-  it.each([{}, { ask_text: " " }, { ask_text: "x".repeat(2001) }, { ask_text: "ok", client_message_id: "not-a-uuid" }])("rejects %j", async (payload) => {
+  it("creates exactly one build for concurrent requests with the same cookie and client_message_id", async () => {
+    const { app, turns } = makeApp();
+    const { cookie } = await createBuild(app, "an existing build for this owner");
+    const clientMessageId = randomUUID();
+    const responses = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        app.inject({ method: "POST", url: "/v1/builds", headers: { cookie }, payload: { ask_text: "Same ask", client_message_id: clientMessageId } }),
+      ),
+    );
+    expect(sorted(responses.map((r) => r.statusCode))).toEqual([200, 200, 200, 200, 200, 201]);
+    expect(new Set(responses.map((r) => CreatedBuild.parse(r.json()).id)).size).toBe(1);
+    const stored = await handle.db.select({ id: buildMessages.id }).from(buildMessages).where(eq(buildMessages.clientMessageId, clientMessageId));
+    expect(stored).toHaveLength(1);
+    await turns.idle();
+  });
+
+  it.each([
+    {},
+    { ask_text: " " },
+    { ask_text: "x".repeat(2001) },
+    { ask_text: "ok", client_message_id: "not-a-uuid" },
+    { ask_text: "PRIVATE_TRANSCRIPT_MARKER\u0000" },
+    { ask_text: "PRIVATE_TRANSCRIPT_MARKER\u0007 bell" },
+  ])("rejects %j without logging the text", async (payload) => {
     const { app } = makeApp();
     const response = await app.inject({ method: "POST", url: "/v1/builds", payload });
     expectError(response, 400, "BAD_REQUEST");
     expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(rawLines.join("")).not.toContain("PRIVATE_TRANSCRIPT_MARKER");
+  });
+
+  it("accepts tabs and newlines in the ask", async () => {
+    const { app } = makeApp();
+    await createBuild(app, "Line one\n\tLine two\r\n");
   });
 
   it("rate-limits new builds per anonymous owner", async () => {
@@ -209,12 +253,13 @@ describe("POST /v1/builds", () => {
     await createBuild(app, "someone else");
   });
 
-  it("caps build creation without a cookie across the instance, warning once per window", async () => {
+  it("caps new anonymous owners per instance, counting missing and unknown rotating cookies, warning once per window", async () => {
     const { app } = makeApp({ rateLimits: { anonOwners: new RateLimiter(2, 60 * 60_000) } });
-    const { cookie } = await createBuild(app, "one");
-    await createBuild(app, "two");
-    for (let i = 0; i < 3; i++) {
-      const limited = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "more" } });
+    const rotating = () => `__Host-albus_anon=${newAnonToken()}`;
+    const { cookie } = await createBuild(app, "one"); // no cookie: a new owner
+    await createBuild(app, "two", rotating()); // well formed but unknown: also a new owner
+    for (const headers of [{}, { cookie: rotating() }, { cookie: rotating() }]) {
+      const limited = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "more" }, headers });
       expectError(limited, 429, "RATE_LIMITED");
       expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
       expect(limited.headers["set-cookie"]).toBeUndefined();
@@ -222,7 +267,7 @@ describe("POST /v1/builds", () => {
     expect(lines.filter((l) => l.message === "anonymous build cap reached on this instance")).toEqual([
       expect.objectContaining({ severity: "WARNING", limit: 2, windowMs: 3_600_000 }),
     ]);
-    // A visitor who already holds a cookie isn't counted against the cap.
+    // An owner who already has a build isn't counted against the cap.
     await createBuild(app, "returning visitor", cookie);
   });
 });
@@ -260,6 +305,9 @@ describe("ownership", () => {
 });
 
 describe("messages", () => {
+  const post = (app: FastifyInstance, buildId: string, cookie: string, text: string, clientMessageId = randomUUID()) =>
+    app.inject({ method: "POST", url: `/v1/builds/${buildId}/messages`, headers: { cookie }, payload: { text, client_message_id: clientMessageId } });
+
   it("lists the transcript oldest first", async () => {
     const { app } = makeApp();
     const { body, cookie } = await createBuild(app, "First ask");
@@ -280,14 +328,12 @@ describe("messages", () => {
     intakeCalls.length = 0;
 
     const clientMessageId = randomUUID();
-    const post = () =>
-      app.inject({ method: "POST", url: `/v1/builds/${body.id}/messages`, headers: { cookie }, payload: { text: "Indoors", client_message_id: clientMessageId } });
-    const first = await post();
+    const first = await post(app, body.id, cookie, "Indoors", clientMessageId);
     expect(first.statusCode).toBe(202);
     const { message } = PostMessageResponse.parse(first.json());
     expect(message).toMatchObject({ role: "user", text: "Indoors", client_message_id: clientMessageId });
 
-    const again = await post();
+    const again = await post(app, body.id, cookie, "Indoors", clientMessageId);
     expect(again.statusCode).toBe(200);
     expect(PostMessageResponse.parse(again.json()).message.id).toBe(message.id);
 
@@ -297,35 +343,69 @@ describe("messages", () => {
     expect(stored.filter((m) => m.clientMessageId === clientMessageId)).toHaveLength(1);
   });
 
-  it("requires a uuid client_message_id and bounded text", async () => {
+  it("answers concurrent retries of one client_message_id with the stored message, never 409", async () => {
+    const { app, turns } = makeApp();
+    const { body, cookie } = await createBuild(app);
+    await turns.idle();
+    await reply(body.id);
+    intakeCalls.length = 0;
+
+    const clientMessageId = randomUUID();
+    const responses = await Promise.all(Array.from({ length: 6 }, () => post(app, body.id, cookie, "Indoors", clientMessageId)));
+    expect(sorted(responses.map((r) => r.statusCode))).toEqual([200, 200, 200, 200, 200, 202]);
+    expect(new Set(responses.map((r) => PostMessageResponse.parse(r.json()).message.id)).size).toBe(1);
+    await turns.idle();
+    expect(intakeCalls).toEqual([{ build_id: body.id }]);
+  });
+
+  it("admits one of several concurrent messages with different client ids; the others get 409", async () => {
+    const { app, turns } = makeApp();
+    const { body, cookie } = await createBuild(app);
+    await turns.idle();
+    await reply(body.id);
+
+    const responses = await Promise.all(Array.from({ length: 6 }, (_, i) => post(app, body.id, cookie, `message ${i}`)));
+    expect(sorted(responses.map((r) => r.statusCode))).toEqual([202, 409, 409, 409, 409, 409]);
+    for (const response of responses.filter((r) => r.statusCode === 409)) expectError(response, 409, "TURN_IN_PROGRESS");
+    const users = await handle.db
+      .select({ id: buildMessages.id })
+      .from(buildMessages)
+      .where(and(eq(buildMessages.buildId, body.id), eq(buildMessages.role, "user")));
+    expect(users).toHaveLength(2); // the ask and the one admitted message
+    await turns.idle();
+  });
+
+  it("requires a uuid client_message_id and bounded, printable text", async () => {
     const { app } = makeApp();
     const { body, cookie } = await createBuild(app);
-    for (const payload of [{ text: "hi" }, { text: "hi", client_message_id: "x" }, { text: "x".repeat(4001), client_message_id: randomUUID() }]) {
+    for (const payload of [
+      { text: "hi" },
+      { text: "hi", client_message_id: "x" },
+      { text: "x".repeat(4001), client_message_id: randomUUID() },
+      { text: "PRIVATE_TRANSCRIPT_MARKER\u0000", client_message_id: randomUUID() },
+    ]) {
       expectError(await app.inject({ method: "POST", url: `/v1/builds/${body.id}/messages`, headers: { cookie }, payload }), 400, "BAD_REQUEST");
     }
+    expect(rawLines.join("")).not.toContain("PRIVATE_TRANSCRIPT_MARKER");
   });
 
   it("answers 409 TURN_IN_PROGRESS while the last user message is recent and unanswered", async () => {
     const { app } = makeApp();
     const { body, cookie } = await createBuild(app);
-    const send = () =>
-      app.inject({ method: "POST", url: `/v1/builds/${body.id}/messages`, headers: { cookie }, payload: { text: "hello?", client_message_id: randomUUID() } });
-    expectError(await send(), 409, "TURN_IN_PROGRESS");
+    expectError(await post(app, body.id, cookie, "hello?"), 409, "TURN_IN_PROGRESS");
 
     // Unanswered but older than 60 s: accepted, so a lost turn can be retried.
     await handle.pool.query(`UPDATE builds.build_messages SET created_at = now() - interval '61 seconds' WHERE build_id = $1`, [body.id]);
-    expect((await send()).statusCode).toBe(202);
+    expect((await post(app, body.id, cookie, "hello?")).statusCode).toBe(202);
   });
 
   it("rate-limits messages per anonymous owner", async () => {
     const { app } = makeApp({ rateLimits: { messages: new RateLimiter(1, 60_000) } });
     const { body, cookie } = await createBuild(app);
     await reply(body.id);
-    const send = () =>
-      app.inject({ method: "POST", url: `/v1/builds/${body.id}/messages`, headers: { cookie }, payload: { text: "yes", client_message_id: randomUUID() } });
-    expect((await send()).statusCode).toBe(202);
+    expect((await post(app, body.id, cookie, "yes")).statusCode).toBe(202);
     await reply(body.id);
-    expectError(await send(), 429, "RATE_LIMITED");
+    expectError(await post(app, body.id, cookie, "yes again"), 429, "RATE_LIMITED");
   });
 
   it("retries a 5xx once, then logs a WARNING, and keeps serving", async () => {
@@ -340,7 +420,7 @@ describe("messages", () => {
     expect((await app.inject({ method: "GET", url: `/v1/builds/${body.id}`, headers: { cookie } })).statusCode).toBe(200);
   });
 
-  it("recovers a lost turn when the transcript is refetched, once per build per minute however many reads arrive", async () => {
+  it("recovers a lost turn for the stored message when the transcript is refetched, once per build per minute", async () => {
     const { app, turns } = makeApp();
     const { body, cookie } = await createBuild(app);
     await turns.idle();
@@ -367,6 +447,9 @@ describe("messages", () => {
     await burst();
     await turns.idle();
     expect(intakeCalls).toHaveLength(1);
+    // Nothing was resent: the transcript still holds just the one stored ask.
+    const transcript = MessageList.parse((await app.inject({ method: "GET", url: `/v1/builds/${body.id}/messages`, headers: { cookie } })).json());
+    expect(transcript.messages.map((m) => m.role)).toEqual(["user"]);
   });
 
   it("doesn't recover a build whose newest message is the assistant's", async () => {
@@ -379,6 +462,26 @@ describe("messages", () => {
     await app.inject({ method: "GET", url: `/v1/builds/${body.id}`, headers: { cookie } });
     await turns.idle();
     expect(intakeCalls).toEqual([]);
+  });
+
+  it("logs a real database error's metadata, never its query parameters", async () => {
+    const { body } = await createBuild(makeApp().app, "for a real database error");
+    const dbError = await handle.db
+      .insert(buildMessages)
+      .values({ buildId: body.id, role: "user", text: "PRIVATE_TRANSCRIPT_MARKER\u0000" })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(dbError).toBeInstanceOf(Error);
+    const failing: PartsStore = { latest: async () => Promise.reject(dbError) };
+    const { app } = makeApp({}, failing);
+    lines.length = 0;
+    rawLines.length = 0;
+
+    expectError(await app.inject({ method: "GET", url: "/v1/parts" }), 500, "INTERNAL");
+    expect(rawLines.join("")).not.toContain("PRIVATE_TRANSCRIPT_MARKER");
+    expect(lines).toContainEqual(expect.objectContaining({ severity: "ERROR", message: "request failed", database: expect.objectContaining({ code: "22021" }) }));
   });
 });
 
@@ -405,49 +508,6 @@ describe("GET /v1/builds/:id", () => {
   });
 });
 
-type EventCheck = (events: SseEvent[], text: string) => boolean;
-
-/**
- * Reads an event stream until `until` holds, or fails after `timeoutMs` (the
- * abort also interrupts a pending read). `then.run` executes once, as soon as
- * `then.when` holds, so a test can change the database at a known point in the
- * stream instead of after a guessed delay.
- */
-async function readEvents(url: string, headers: Record<string, string>, until: EventCheck, then?: { when: EventCheck; run: () => Promise<void> }, timeoutMs = 10_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let text = "";
-  try {
-    const response = await fetch(url, { headers, signal: controller.signal });
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/);
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let ran = false;
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      text += decoder.decode(value, { stream: true });
-      const events = parseEvents(text);
-      if (then && !ran && then.when(events, text)) {
-        ran = true;
-        await then.run();
-      }
-      if (until(events, text)) return { events, text };
-    }
-    throw new Error(`stream ended without the expected events:\n${text}`);
-  } catch (error) {
-    if (controller.signal.aborted) throw new Error(`timed out after ${timeoutMs} ms waiting for events:\n${text}`);
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    controller.abort();
-  }
-}
-
-const messageTexts = (events: SseEvent[]) => events.filter((e) => e.event === "message.created").map((e) => MessageCreatedEvent.parse(e.data).message.text);
-const buildUpdates = (events: SseEvent[]) => events.filter((e) => e.event === "build.updated").map((e) => BuildUpdatedEvent.parse(e.data));
-
 interface SseEvent {
   id?: string;
   event?: string;
@@ -470,24 +530,78 @@ function parseEvents(text: string): SseEvent[] {
     .filter((event) => event.event !== undefined);
 }
 
+type EventCheck = (events: SseEvent[], text: string) => boolean;
+
+/**
+ * Reads an event stream until every `until` check holds (or, with "closed",
+ * until the server ends it), failing after `timeoutMs`; the abort also
+ * interrupts a pending read. `then.run` executes once, as soon as `then.when`
+ * holds, so a test changes the database at a known point in the stream rather
+ * than after a guessed delay.
+ */
+async function readEvents(
+  url: string,
+  headers: Record<string, string>,
+  until: EventCheck[] | "closed",
+  then?: { when: EventCheck; run: () => Promise<void> },
+  timeoutMs = 10_000,
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let text = "";
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let ran = false;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        if (until === "closed") return { events: parseEvents(text), text };
+        break;
+      }
+      text += decoder.decode(value, { stream: true });
+      const events = parseEvents(text);
+      if (then && !ran && then.when(events, text)) {
+        ran = true;
+        await then.run();
+      }
+      if (until !== "closed" && until.every((check) => check(events, text))) return { events, text };
+    }
+    throw new Error(`stream ended without the expected events:\n${text}`);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`timed out after ${timeoutMs} ms waiting for events:\n${text}`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+const messageTexts = (events: SseEvent[]) => events.filter((e) => e.event === "message.created").map((e) => MessageCreatedEvent.parse(e.data).message.text);
+const buildUpdates = (events: SseEvent[]) => events.filter((e) => e.event === "build.updated").map((e) => BuildUpdatedEvent.parse(e.data));
+
 describe("GET /v1/builds/:id/events", () => {
   let base: string;
   let app: FastifyInstance;
 
   beforeAll(async () => {
     app = makeApp().app;
-    await app.listen({ port: 0, host: "127.0.0.1" });
-    base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    base = await listen(app);
   });
 
-  it("starts with build.updated, replays the transcript, then streams later messages and status changes", async () => {
+  it("opens with build.updated and the transcript, then streams a later message and a status change", async () => {
     const ask = "A temperature sensor for my greenhouse";
     const { body, cookie } = await createBuild(app, ask);
     const { events } = await readEvents(
       `${base}/v1/builds/${body.id}/events`,
       { cookie },
-      (events) =>
-        messageTexts(events).includes("Inserted after connect") && buildUpdates(events).some((u) => u.status === "specifying" && u.spec_version === 1),
+      [
+        (events) => messageTexts(events).includes("Inserted after connect"),
+        (events) => buildUpdates(events).some((u) => u.status === "specifying" && u.spec_version === 1),
+      ],
       {
         // Only once the connect-time events are in, so the changes below can't fold into them.
         when: (events) => messageTexts(events).includes(ask),
@@ -501,50 +615,121 @@ describe("GET /v1/builds/:id/events", () => {
       },
     );
 
-    // The contract: build.updated is the first event, then the transcript oldest first.
+    // Guaranteed by the first poll: build.updated first, then the transcript.
     expect(events[0]).toEqual({ event: "build.updated", data: { status: "asking", spec_version: null } });
-    expect(events[1]).toMatchObject({ event: "message.created", data: { message: { role: "user", text: ask } } });
+    expect(events[1]).toMatchObject({ id: expect.stringMatching(/^\d+\.[0-9a-f-]{36}$/), event: "message.created", data: { message: { role: "user", text: ask } } });
+    // Written independently afterwards: both arrive, in no promised order relative to each other.
     expect(messageTexts(events)).toEqual([ask, "Inserted after connect"]);
-    expect(buildUpdates(events)).toEqual([
-      { status: "asking", spec_version: null },
-      { status: "specifying", spec_version: 1 },
-    ]);
-    // Message events carry a cursor id; build.updated repeats the latest one.
-    const ids = events.map((e) => e.id);
-    expect(ids[1]).toMatch(/^\d+\.[0-9a-f-]{36}$/);
-    expect(ids.slice(1).every((id) => id !== undefined)).toBe(true);
+    expect(buildUpdates(events)).toContainEqual({ status: "specifying", spec_version: 1 });
   });
 
   it("sends a heartbeat comment at the configured interval", async () => {
     // makeApp's heartbeat is 200 ms; production's is 15 s.
     const { body, cookie } = await createBuild(app);
-    const { text } = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie }, (_events, text) => text.includes(": ping\n\n"), undefined, 3000);
+    const { text } = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie }, [(_events, text) => text.includes(": ping\n\n")], undefined, 3000);
     expect(text).toContain(": ping");
   });
 
   it("resumes after Last-Event-ID", async () => {
     const { body, cookie } = await createBuild(app, "Resume me");
     await reply(body.id, "second");
-    const first = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie }, (events) => events.filter((e) => e.event === "message.created").length === 2);
+    const first = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie }, [(events) => messageTexts(events).length === 2]);
     const firstMessage = first.events.find((e) => e.event === "message.created")!;
     expect(firstMessage.id).toMatch(/^\d+\.[0-9a-f-]{36}$/);
 
     await reply(body.id, "third");
-    const resumed = await readEvents(
-      `${base}/v1/builds/${body.id}/events`,
-      { cookie, "last-event-id": firstMessage.id! },
-      (events) => events.filter((e) => e.event === "message.created").length === 2,
-    );
-    expect(resumed.events[0]?.event).toBe("build.updated");
+    const resumed = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie, "last-event-id": firstMessage.id! }, [
+      (events) => messageTexts(events).length === 2,
+      (events) => buildUpdates(events).length >= 1,
+    ]);
     expect(messageTexts(resumed.events)).toEqual(["second", "third"]);
+  });
+
+  it("closes an open stream when the build is claimed, and sends nothing written after the claim", async () => {
+    const ask = "Claim me mid-stream";
+    const { body, cookie } = await createBuild(app, ask);
+    const { events } = await readEvents(`${base}/v1/builds/${body.id}/events`, { cookie }, "closed", {
+      when: (events) => messageTexts(events).includes(ask),
+      run: async () => {
+        // The sign-in claim (PORTAL.md §5): tenant set, hash cleared. Then a private reply.
+        const [tenant] = await handle.db.insert(tenants).values({ name: "Personal" }).returning({ id: tenants.id });
+        await handle.db.update(builds).set({ tenantId: tenant!.id, anonOwnerHash: null }).where(eq(builds.id, body.id));
+        await reply(body.id, "PRIVATE_AFTER_CLAIM");
+      },
+    });
+    expect(messageTexts(events)).toEqual([ask]);
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${body.id}/events`, headers: { cookie } }), 404, "NOT_FOUND");
+  });
+
+  it("limits open streams per owner and per instance, and releases a slot on disconnect", async () => {
+    const limited = makeApp({ streamLimits: { perOwner: 2, perInstance: 3 } }).app;
+    const origin = await listen(limited);
+    const [a, b, c] = [await createBuild(limited, "owner a"), await createBuild(limited, "owner b"), await createBuild(limited, "owner c")];
+    const open = async (build: { body: { id: string }; cookie: string }) => {
+      const controller = new AbortController();
+      const response = await fetch(`${origin}/v1/builds/${build.body.id}/events`, { headers: { cookie: build.cookie }, signal: controller.signal });
+      return { response, controller };
+    };
+    const refused = async (attempt: Awaited<ReturnType<typeof open>>) => {
+      expect(attempt.response.status).toBe(429);
+      expect(Number(attempt.response.headers.get("retry-after"))).toBeGreaterThan(0);
+      expect(ApiError.parse(await attempt.response.json()).error.code).toBe("RATE_LIMITED");
+    };
+
+    const a1 = await open(a);
+    const a2 = await open(a);
+    expect([a1.response.status, a2.response.status]).toEqual([200, 200]);
+    await refused(await open(a)); // the owner is at 2
+    const b1 = await open(b);
+    expect(b1.response.status).toBe(200);
+    await refused(await open(c)); // the instance is at 3
+
+    a1.controller.abort();
+    await expect
+      .poll(
+        async () => {
+          const attempt = await open(c);
+          if (attempt.response.status === 200) attempt.controller.abort();
+          else await attempt.response.text();
+          return attempt.response.status;
+        },
+        { timeout: 5000, interval: 100 },
+      )
+      .toBe(200);
+    a2.controller.abort();
+    b1.controller.abort();
+  });
+
+  it("drops a client that stops reading once its unsent buffer passes the bound, and frees its slot", async () => {
+    const slow = makeApp({ sse: { maxBufferedBytes: 64 * 1024, drainTimeoutMs: 1000 }, streamLimits: { perOwner: 1, perInstance: 10 } }).app;
+    const origin = await listen(slow);
+    const port = (slow.server.address() as AddressInfo).port;
+    const { body, cookie } = await createBuild(slow, "slow reader");
+    await handle.pool.query(
+      `INSERT INTO builds.build_messages (build_id, role, text) SELECT $1, 'assistant', repeat('x', 4000) FROM generate_series(1, 2500)`,
+      [body.id],
+    );
+
+    const socket = net.connect(port, "127.0.0.1");
+    socket.on("error", () => {});
+    await once(socket, "connect");
+    socket.pause(); // never reads
+    socket.write(`GET /v1/builds/${body.id}/events HTTP/1.1\r\nHost: localhost\r\nCookie: ${cookie}\r\n\r\n`);
+
+    await expect.poll(() => lines.some((l) => l.message === "closing slow event stream" && l.buildId === body.id), { timeout: 15_000 }).toBe(true);
+    // Its lease is released: the same owner (limit 1) can open a stream again.
+    const again = await fetch(`${origin}/v1/builds/${body.id}/events`, { headers: { cookie } });
+    expect(again.status).toBe(200);
+    await again.body?.cancel();
+    socket.destroy();
   });
 
   it("ends the stream after maxMs", async () => {
     const short = makeApp({ sse: { pollMs: 50, heartbeatMs: 1000, maxMs: 300 } }).app;
     const { body, cookie } = await createBuild(short);
-    await short.listen({ port: 0, host: "127.0.0.1" });
+    const origin = await listen(short);
     const started = Date.now();
-    const response = await fetch(`http://127.0.0.1:${(short.server.address() as AddressInfo).port}/v1/builds/${body.id}/events`, { headers: { cookie } });
+    const response = await fetch(`${origin}/v1/builds/${body.id}/events`, { headers: { cookie } });
     await response.text();
     expect(Date.now() - started).toBeLessThan(5000);
   });

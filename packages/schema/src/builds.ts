@@ -8,6 +8,19 @@ import { PartSummary } from "./parts";
  * order status together — the portal never reconstructs it.
  */
 export const DisplayStatus = z.enum(["designing", "parts_picked", "kit_shipped", "live"]);
+
+/**
+ * Text a person types: trimmed, non-empty, at most `max` characters, and free
+ * of control characters other than tab, newline and carriage return (NUL can't
+ * be stored in Postgres text at all).
+ */
+const PersonText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .regex(/^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]*$/, "must not contain control characters other than tab and newline");
 export type DisplayStatus = z.infer<typeof DisplayStatus>;
 
 /** The build status machine (ARCHITECTURE.md §5), as stored in `builds.builds.status`. */
@@ -73,7 +86,7 @@ export const BuildDetail = BuildSummary.extend({
 export type BuildDetail = z.infer<typeof BuildDetail>;
 
 export const CreateBuildRequest = z.object({
-  ask_text: z.string().trim().min(1).max(2000),
+  ask_text: PersonText(2000),
   /**
    * Client-generated, stored on the first message. Resending the same id with
    * the same anonymous owner cookie returns the build already created (200)
@@ -116,7 +129,7 @@ export const MessageList = z.object({
 export type MessageList = z.infer<typeof MessageList>;
 
 export const PostMessageRequest = z.object({
-  text: z.string().trim().min(1).max(4000),
+  text: PersonText(4000),
   /**
    * Client-generated per message, so a double submit is idempotent: the same
    * id for the same build returns the stored message (200) and starts no new

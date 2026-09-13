@@ -49,7 +49,7 @@ SSR server actions call gateway on the visitor's behalf, so web has to relay the
 
 After storing the first message (`POST /v1/builds`) or a new user message, gateway answers the client and then calls intake in the background: `POST {INTAKE_URL}/v1/turns { build_id }`. Intake writes the assistant message, spec versions, build status and `llm_calls` itself. Gateway runs with CPU always allocated, so the call outlives the response.
 
-- Each attempt has a 50 s timeout; intake's own deadline is 45 s.
+- Each attempt has one 50 s deadline covering the ID token and the HTTP call together; intake's own deadline is 45 s. The Google metadata client has no timeout of its own on Cloud Run. When the deadline passes, the scheduler releases the build at once, and a token or answer that arrives late is dropped.
 - A network error or a 5xx is retried **once**, after 5 s, and logs `intake turn attempt failed; retrying` at WARNING. A 4xx, a malformed answer or a timeout isn't retried: after a timeout intake may still be running that turn. A turn that still fails logs `intake turn failed` at WARNING. Nothing from a background turn can crash the process.
 - **Recovery.** When `GET /v1/builds/:id` or `GET /v1/builds/:id/messages` finds that the newest message is a user message unanswered for more than 60 s, it starts a background turn and logs `recovering an unanswered turn`. This happens at most once per build per 60 s on each instance, tracked in memory, and never while a turn for that build is running there. So the portal's "Check for a reply" refetch recovers a lost turn without a resend. Intake is idempotent and answers `noop` if the reply was only slow.
 - One turn per build runs at a time per instance. A trigger that arrives mid-turn queues exactly one more run.
@@ -58,26 +58,35 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
 
 ### Messages
 
-- `client_message_id` (a UUID) is required. A repeat for the same build returns the stored message with `200` and starts no turn, including when two requests race on the unique constraint.
-- `409 TURN_IN_PROGRESS` (`details: { pending_message_id, retry_after_s }`) when the build's newest message is a user message less than 60 s old, by the database clock. After 60 s a new message is accepted, so a lost turn can be recovered. The portal's "Check for a reply" refetches messages and never resends.
-- On `POST /v1/builds`, a `client_message_id` sent with an existing cookie returns the build already created from it (`200`).
+- `client_message_id` (a UUID) is required. `text` (≤ 4000) and `ask_text` (≤ 2000) are trimmed and may not contain control characters other than tab, newline and carriage return (`400`).
+- **Admission is one transaction per build.** It locks the build row with `SELECT … FOR UPDATE`, which also re-checks ownership and unclaimed state, then decides in order:
+  - a repeated `client_message_id` → the stored message, `200`, no turn;
+  - the newest message is a user message under 60 s old, by the database clock → `409 TURN_IN_PROGRESS` (`details: { pending_message_id, retry_after_s }`);
+  - otherwise the rate limit, then insert → `202`.
+
+  Concurrent requests on any instance therefore agree: one of several different messages gets `202` and the rest `409`, and retries of one `client_message_id` all get that message, never `409`.
+- After 60 s a new message is accepted, but the portal never needs to resend: see recovery under Turns. Its "Check for a reply" is a refetch.
+- On `POST /v1/builds`, a `client_message_id` sent with an existing cookie returns the build already created from it (`200`). The create transaction holds an advisory lock on (owner hash, client message id) and re-checks for that build inside it, so concurrent requests create one build, even across instances.
 
 ### Events
 
 `GET /v1/builds/:id/events` polls Postgres every second; there's no Redis yet.
 
-- **The order is fixed.** The first event of every stream is `build.updated` `{ status, spec_version }`, followed by `message.created` `{ message }` for each message after `Last-Event-ID`, oldest first. On each later poll, `build.updated` comes first if status or spec version changed since the last one sent, then that poll's new messages. States that come and go between two polls aren't sent.
+- The first event of every stream is `build.updated` `{ status, spec_version }`, followed by `message.created` `{ message }` for each message after `Last-Event-ID`, oldest first. Later, `build.updated` is sent whenever status or spec version changed since the last one sent; states that come and go between two polls aren't sent. Messages are always oldest first, but **clients must not rely on an order between a status change and a message written independently**.
 - Without a valid `Last-Event-ID` the whole transcript is replayed, so clients dedupe by message id.
 - **Event ids** are message cursors, `<created_at in integer microseconds since the Unix epoch>.<message uuid>`, ordered like `(created_at, id)`. Treat them as opaque. A `build.updated` repeats the latest cursor sent, so it never moves the resume position.
 - Each poll re-reads a 5 s lookback window and skips messages this connection has already sent. That catches a message whose transaction committed after a later one was delivered. Across a reconnect only messages strictly after the cursor are sent, so a `GET …/messages` after reconnecting stays the source of truth.
 - A `: ping` comment every 15 s and `retry: 3000`. The stream ends after 10 minutes and the client reconnects with `Last-Event-ID`. Shutdown ends every open stream first.
-- A failed poll logs `build events poll failed` at WARNING and ends the stream.
+- A failed poll logs `build events poll failed` at WARNING, with database metadata only, and ends the stream.
+- **Authorization holds for the life of the stream.** Both poll queries are scoped to the owner hash the stream opened with and to an unclaimed build. The stream ends at the first poll after the build is claimed (`tenant_id` set, hash cleared), deleted or re-owned, and a message written after a claim is never sent.
+- **Admission is bounded.** At most `SSE_MAX_STREAMS_PER_OWNER` (3) open streams per anonymous owner and `SSE_MAX_STREAMS` (100) per instance. Beyond that the answer is `429 RATE_LIMITED` with `Retry-After: 5`, before the stream opens. A slot is released when the client disconnects, the stream ends, or on shutdown.
+- **Slow clients are dropped.** While a write waits for `drain`, polling and heartbeats pause. A client that doesn't drain within 30 s, or whose unsent buffer passes 1 MiB, is disconnected, and `closing slow event stream` is logged at INFO.
 
 ### Rate limits
 
 These are held in memory per instance, keyed by the anonymous owner hash: 10 new builds an hour and 30 messages in 10 minutes. Beyond that: `429 RATE_LIMITED` with `Retry-After` and `details.retry_after_s`. They are **defence in depth behind Cloud Armor**. Each instance counts separately and a restart forgets. A replayed `client_message_id` doesn't count.
 
-A request without a cookie always gets a fresh hash, so the per-owner limits can't bound it. As a spend backstop, build creation **without a valid cookie** is also capped for the whole instance at `ANON_BUILDS_PER_HOUR` (default 60) in a sliding hour. Beyond the cap it answers the same `429 RATE_LIMITED` with `Retry-After`, and logs `anonymous build cap reached on this instance` at WARNING once per window. Visitors who already hold a cookie aren't counted. A per-IP limit waits for the SSR contract to give gateway a trustworthy client IP.
+A request without a cookie always gets a fresh hash, so the per-owner limits can't bound it. As a spend backstop, builds that create a **new anonymous owner** are also capped for the whole instance at `ANON_BUILDS_PER_HOUR` (default 60) in a sliding hour. A new owner is one whose hash no stored build carries yet. That covers a missing cookie and a well-formed but unknown one, so rotating made-up cookies doesn't escape the cap. Beyond the cap it answers the same `429 RATE_LIMITED` with `Retry-After`, and logs `anonymous build cap reached on this instance` at WARNING once per window. An owner who already has a build isn't counted. A per-IP limit waits for the SSR contract to give gateway a trustworthy client IP.
 
 ## Run it
 
@@ -109,7 +118,9 @@ Browsers only send `__Host-` cookies over HTTPS, but curl doesn't enforce that l
 | `INTAKE_URL` | unset | intake's `run.app` URL (internal ingress, reached over direct VPC egress). Unset: messages are stored, turns are skipped with a WARNING |
 | `INTAKE_AUTH` | `google` | `google`: an ID token for audience `INTAKE_URL` from the metadata server. `none`: no `Authorization` header (local, tests) |
 | `REGISTRY_INCLUDE_DRAFTS` | `false` | `true`: `candidate_parts` considers draft parts as well as active ones |
-| `ANON_BUILDS_PER_HOUR` | `60` | builds created without a valid anonymous owner cookie, per instance per sliding hour |
+| `ANON_BUILDS_PER_HOUR` | `60` | builds that create a new anonymous owner (no stored build has its hash), per instance per sliding hour |
+| `SSE_MAX_STREAMS_PER_OWNER` | `3` | open event streams per anonymous owner, per instance |
+| `SSE_MAX_STREAMS` | `100` | open event streams per instance |
 
 An empty variable counts as unset.
 
@@ -135,7 +146,8 @@ One JSON object per line on stdout, in the shape Cloud Logging parses, with the 
 - `request failed` at `ERROR` for every 500, with the serialized error.
 - `intake turn completed` (INFO) or `intake turn failed` (WARNING), with `buildId`, `requestId`, `durationMs` and, on failure, `intakeStatus`.
 - Request ids are always generated (UUID) and returned as `X-Request-Id`; an incoming `X-Request-Id` is ignored.
-- Never logged: headers, cookies (including the anonymous owner token), query values, bodies, message text, `DB_PASSWORD`.
+- A database error that isn't an availability failure logs `request failed` at `ERROR` with only a `database` object: SQLSTATE `code`, `severity`, and where available `schema`, `table`, `column`, `constraint`, `routine`. Its message and stack aren't logged, because Drizzle's wrapper carries the SQL parameters and pg's message can quote input (`src/db-log.ts`).
+- Never logged: headers, cookies (including the anonymous owner token), query values, bodies, message text, SQL parameters, `DB_PASSWORD`.
 
 ## Shutdown
 

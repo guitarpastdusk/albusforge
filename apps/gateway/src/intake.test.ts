@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient, IntakeError, isRetryable } from "./intake";
+import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient, IntakeError, isRetryable, withDeadline } from "./intake";
 import { createLogger } from "./log";
 
 type Handler = (body: unknown, req: http.IncomingMessage, res: http.ServerResponse) => void;
@@ -160,6 +160,36 @@ describe("createTurnScheduler", () => {
       expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, intakeStatus: 400 }),
       expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, error: expect.objectContaining({ name: "TimeoutError" }) }),
     ]);
+  });
+
+  it("bounds the whole turn, token acquisition included, and frees the build for the next trigger", async () => {
+    const stub = await stubIntake((_body, _req, res) => json(res, 200, { noop: true }));
+    const { lines, log } = capture();
+    let lateToken: (value: string) => void = () => {};
+    const stalledAuth = () => new Promise<string>((resolve) => (lateToken = resolve));
+    const turns = createTurnScheduler({ intake: httpIntakeClient({ url: stub.url, authHeader: stalledAuth }), log, timeoutMs: 50, retryDelayMs: 10 });
+
+    const started = Date.now();
+    turns.trigger(BUILD);
+    await turns.idle();
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(turns.isRunning(BUILD)).toBe(false);
+    expect(lines).toEqual([
+      expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, error: expect.objectContaining({ name: "TimeoutError" }) }),
+    ]);
+
+    // The token arriving after the deadline goes nowhere: the aborted fetch never reaches intake.
+    lateToken("Bearer late");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stub.calls).toHaveLength(0);
+  });
+
+  it("drops a late rejection after the deadline", async () => {
+    let fail: (error: Error) => void = () => {};
+    const work = () => new Promise<never>((_, reject) => (fail = reject));
+    await expect(withDeadline(work, 20)).rejects.toMatchObject({ name: "TimeoutError" });
+    fail(new Error("too late")); // must not surface as an unhandled rejection
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
   it("classifies retryable errors", () => {

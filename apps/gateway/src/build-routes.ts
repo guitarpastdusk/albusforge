@@ -25,7 +25,7 @@ import type { Log } from "./log";
 import { anonOwnerSetCookie, anonTokenFromCookieHeader, hashAnonToken, newAnonToken } from "./owner";
 import type { PartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
-import { createStreamRegistry, DEFAULT_SSE, type SseOptions, streamBuildEvents, toChatMessage } from "./sse";
+import { createStreamRegistry, DEFAULT_SSE, DEFAULT_STREAM_LIMITS, type SseOptions, type StreamLimits, streamBuildEvents, toChatMessage } from "./sse";
 
 export interface ChatOptions {
   store: ChatStore;
@@ -34,11 +34,14 @@ export interface ChatOptions {
   includeDrafts: boolean;
   /**
    * builds and messages are per anonymous owner (defaults: 10 builds an hour,
-   * 30 messages in 10 minutes). anonOwners caps build creation without a valid
-   * cookie across this whole instance (ANON_BUILDS_PER_HOUR, default 60), as a
-   * spend backstop: each such request would otherwise be a fresh owner.
+   * 30 messages in 10 minutes). anonOwners caps, across this whole instance,
+   * builds that create a new anonymous owner, meaning no stored build carries
+   * the hash yet, whether the cookie was missing or a well-formed but unknown
+   * one (ANON_BUILDS_PER_HOUR, default 60). A spend backstop.
    */
   rateLimits?: { builds?: RateLimiter; messages?: RateLimiter; anonOwners?: RateLimiter };
+  /** Open event streams (SSE_MAX_STREAMS_PER_OWNER, SSE_MAX_STREAMS). Defaults: 3 per owner, 100 per instance. */
+  streamLimits?: StreamLimits;
   sse?: Partial<SseOptions>;
 }
 
@@ -47,6 +50,9 @@ export const TURN_IN_PROGRESS_S = 60;
 
 /** A user message unanswered for longer than this counts as a lost turn; recovery runs at most this often per build. */
 export const RECOVERY_INTERVAL_MS = 60_000;
+
+/** Retry-After for a refused event stream. */
+const STREAM_RETRY_S = 5;
 
 const ANON_OWNERS_KEY = "instance";
 
@@ -74,8 +80,9 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
   const { store, turns, includeDrafts } = chat;
   const buildLimiter = chat.rateLimits?.builds ?? new RateLimiter(10, 60 * 60_000);
   const messageLimiter = chat.rateLimits?.messages ?? new RateLimiter(30, 10 * 60_000);
+  const anonOwnerLimiter = chat.rateLimits?.anonOwners ?? new RateLimiter(60, 60 * 60_000);
   const sse: SseOptions = { ...DEFAULT_SSE, ...chat.sse };
-  const streams = createStreamRegistry();
+  const streams = createStreamRegistry(chat.streamLimits ?? DEFAULT_STREAM_LIMITS);
   const candidateStatuses: PartStatus[] = includeDrafts ? ["active", "draft"] : ["active"];
 
   app.addHook("preClose", async () => streams.closeAll());
@@ -117,17 +124,16 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
 
   const turnContext = (request: FastifyRequest) => ({ trace: request.trace, requestId: request.id });
 
-  const anonOwnerLimiter = chat.rateLimits?.anonOwners ?? new RateLimiter(60, 60 * 60_000);
   /** When the instance-wide cap last logged, so it warns once per window rather than per request. */
   let anonCapWarnedAt = Number.NEGATIVE_INFINITY;
 
   /**
    * Lost-turn recovery: a read that finds the newest message is a user message
-   * unanswered for more than a minute starts a background turn, at most once
-   * per build per RECOVERY_INTERVAL_MS on this instance and never while a turn
-   * for it is running here. So the portal's "Check for a reply" refetch
-   * recovers a lost turn without a resend. Intake answers `noop` if the reply
-   * was only slow.
+   * unanswered for more than a minute starts a background turn for that stored
+   * message (intake reads the transcript; nothing is resent), at most once per
+   * build per RECOVERY_INTERVAL_MS on this instance and never while a turn for
+   * it is running here. So the portal's "Check for a reply" refetch recovers a
+   * lost turn. Intake answers `noop` if the reply was only slow.
    */
   const recoveredAt = new Map<string, number>();
   const recoverLostTurn = async (request: FastifyRequest, buildId: string) => {
@@ -155,33 +161,37 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
     const token = existingToken ?? newAnonToken();
     const hash = hashAnonToken(token);
 
-    if (existingToken !== undefined && body.client_message_id !== undefined) {
-      const replayed = await store.findBuildByFirstMessage(hash, body.client_message_id);
-      if (replayed) {
-        const built = await detail(replayed);
-        return reply.code(200).send(CreatedBuild.parse({ ...built, build_id: built.id, status: replayed.status }));
-      }
-    }
-
-    if (existingToken === undefined) {
-      const capRetryMs = anonOwnerLimiter.take(ANON_OWNERS_KEY);
-      if (capRetryMs > 0) {
-        const now = anonOwnerLimiter.now();
-        if (now - anonCapWarnedAt >= anonOwnerLimiter.windowMs) {
-          anonCapWarnedAt = now;
-          log("WARNING", "anonymous build cap reached on this instance", {
-            trace: request.trace,
-            fields: { requestId: request.id, limit: anonOwnerLimiter.limit, windowMs: anonOwnerLimiter.windowMs },
-          });
+    const result = await store.createBuild({
+      ownerHash: hash,
+      askText: body.ask_text,
+      clientMessageId: body.client_message_id ?? null,
+      // Runs inside the create transaction, after the replay check: a replay is never limited.
+      admit: ({ isNewOwner }) => {
+        if (isNewOwner) {
+          const capRetryMs = anonOwnerLimiter.take(ANON_OWNERS_KEY);
+          if (capRetryMs > 0) {
+            const now = anonOwnerLimiter.now();
+            if (now - anonCapWarnedAt >= anonOwnerLimiter.windowMs) {
+              anonCapWarnedAt = now;
+              log("WARNING", "anonymous build cap reached on this instance", {
+                trace: request.trace,
+                fields: { requestId: request.id, limit: anonOwnerLimiter.limit, windowMs: anonOwnerLimiter.windowMs },
+              });
+            }
+            throw rateLimited(capRetryMs, "new builds");
+          }
         }
-        throw rateLimited(capRetryMs, "new builds");
-      }
+        const retryMs = buildLimiter.take(hash);
+        if (retryMs > 0) throw rateLimited(retryMs, "new builds");
+      },
+    });
+
+    if (result.kind === "replayed") {
+      const built = await detail(result.build);
+      return reply.code(200).send(CreatedBuild.parse({ ...built, build_id: built.id, status: result.build.status }));
     }
 
-    const retryMs = buildLimiter.take(hash);
-    if (retryMs > 0) throw rateLimited(retryMs, "new builds");
-
-    const { build } = await store.createBuild({ ownerHash: hash, askText: body.ask_text, clientMessageId: body.client_message_id ?? null });
+    const { build } = result;
     if (existingToken === undefined) reply.header("set-cookie", anonOwnerSetCookie(token));
     turns.trigger(build.id, turnContext(request));
 
@@ -196,9 +206,9 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
   });
 
   app.get(routes.builds.messages.pattern, async (request) => {
-    const { build } = await ownedBuild(request);
+    const { build, hash } = await ownedBuild(request);
     await recoverLostTurn(request, build.id);
-    const rows = await store.listMessages(build.id);
+    const rows = await store.listMessages(build.id, hash);
     return MessageList.parse({ messages: rows.map(toChatMessage) });
   });
 
@@ -206,30 +216,48 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
     const { build, hash } = await ownedBuild(request);
     const body = parse(PostMessageBody, request.body, "request body");
 
-    const replayed = await store.findMessageByClientId(build.id, body.client_message_id);
-    if (replayed) return reply.code(200).send(PostMessageResponse.parse({ message: toChatMessage(replayed) }));
+    const result = await store.submitUserMessage({
+      buildId: build.id,
+      ownerHash: hash,
+      text: body.text,
+      clientMessageId: body.client_message_id,
+      pendingWithinS: TURN_IN_PROGRESS_S,
+      // Inside the transaction, after the replay and pending checks: neither counts.
+      admit: () => {
+        const retryMs = messageLimiter.take(hash);
+        if (retryMs > 0) throw rateLimited(retryMs, "messages");
+      },
+    });
 
-    const retryMs = messageLimiter.take(hash);
-    if (retryMs > 0) throw rateLimited(retryMs, "messages");
-
-    const last = await store.lastMessage(build.id, TURN_IN_PROGRESS_S);
-    if (last && last.role === "user" && last.recent) {
-      throw new HttpError(409, "TURN_IN_PROGRESS", "The previous message hasn't been answered yet", {
-        pending_message_id: last.id,
-        retry_after_s: TURN_IN_PROGRESS_S,
-      });
+    switch (result.kind) {
+      case "not_found":
+        throw notFound(build.id);
+      case "replayed":
+        return reply.code(200).send(PostMessageResponse.parse({ message: toChatMessage(result.message) }));
+      case "pending":
+        throw new HttpError(409, "TURN_IN_PROGRESS", "The previous message is still waiting for a reply; refetch the messages instead of resending", {
+          pending_message_id: result.pendingMessageId,
+          retry_after_s: TURN_IN_PROGRESS_S,
+        });
+      case "created":
+        turns.trigger(build.id, turnContext(request));
+        return reply.code(202).send(PostMessageResponse.parse({ message: toChatMessage(result.message) }));
     }
-
-    const { message, created } = await store.insertUserMessage(build.id, body.text, body.client_message_id);
-    // Lost a race with the same client_message_id: the other request started the turn.
-    if (!created) return reply.code(200).send(PostMessageResponse.parse({ message: toChatMessage(message) }));
-
-    turns.trigger(build.id, turnContext(request));
-    return reply.code(202).send(PostMessageResponse.parse({ message: toChatMessage(message) }));
   });
 
   app.get(routes.builds.events.pattern, async (request, reply) => {
-    const { build } = await ownedBuild(request);
-    streamBuildEvents({ request, reply, buildId: build.id, store, log, options: sse, registry: streams });
+    const { build, hash } = await ownedBuild(request);
+    const lease = streams.reserve(hash);
+    if (!lease) {
+      throw new HttpError(429, "RATE_LIMITED", "Too many open event streams; close one or try again later", { retry_after_s: STREAM_RETRY_S }, {
+        "retry-after": String(STREAM_RETRY_S),
+      });
+    }
+    try {
+      streamBuildEvents({ request, reply, buildId: build.id, ownerHash: hash, store, log, options: sse, lease });
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
   });
 }

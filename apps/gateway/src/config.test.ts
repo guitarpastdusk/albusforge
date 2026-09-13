@@ -12,6 +12,7 @@ describe("configFromEnv", () => {
       intake: { url: null, auth: "google" },
       registryIncludeDrafts: false,
       anonBuildsPerHour: 60,
+      sseStreamLimits: { perOwner: 3, perInstance: 100 },
     });
   });
 
@@ -26,6 +27,7 @@ describe("configFromEnv", () => {
     expect(config.intake).toEqual({ url: "https://intake-abc-uc.a.run.app", auth: "none" });
     expect(config.registryIncludeDrafts).toBe(true);
     expect(config.anonBuildsPerHour).toBe(250);
+    expect(configFromEnv({ ...DB, SSE_MAX_STREAMS_PER_OWNER: "5", SSE_MAX_STREAMS: "400" }).sseStreamLimits).toEqual({ perOwner: 5, perInstance: 400 });
     expect(configFromEnv({ ...DB, INTAKE_URL: "" }).intake.url).toBeNull();
   });
 
@@ -35,6 +37,8 @@ describe("configFromEnv", () => {
     ["REGISTRY_INCLUDE_DRAFTS", "yes"],
     ["ANON_BUILDS_PER_HOUR", "0"],
     ["ANON_BUILDS_PER_HOUR", "lots"],
+    ["SSE_MAX_STREAMS_PER_OWNER", "0"],
+    ["SSE_MAX_STREAMS", "many"],
   ])("rejects a bad %s", (name, value) => {
     expect(() => configFromEnv({ ...DB, [name]: value })).toThrow(new RegExp(name));
   });

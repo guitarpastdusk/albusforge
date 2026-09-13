@@ -67,6 +67,7 @@ async function main(): Promise<void> {
       turns: createTurnScheduler({ intake, log }),
       includeDrafts: config.registryIncludeDrafts,
       rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },
+      streamLimits: config.sseStreamLimits,
     },
   });
 

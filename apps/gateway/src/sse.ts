@@ -4,8 +4,8 @@
  * Event ids are message cursors (chat-store.ts `Cursor`):
  * `<created_at microseconds>.<message uuid>`.
  *
- * Order is fixed: every poll writes `build.updated` (if due) before that
- * poll's `message.created` events, which are oldest first.
+ * Order: every poll writes `build.updated` (if due) before that poll's
+ * `message.created` events, which are oldest first.
  *
  * - The first poll, on connect, always writes `build.updated` with the current
  *   status and spec version, so it is the first event of every stream.
@@ -13,10 +13,20 @@
  *   (valid) Last-Event-ID, every message is replayed; clients dedupe by id.
  * - Later polls: `build.updated` when (status, spec_version) changed since the
  *   last one sent (intermediate states between two polls are not replayed),
- *   then new messages. A `build.updated` carries the latest cursor sent as its
- *   id, so it never moves a reconnect's position.
+ *   then new messages. Clients must not assume an order between a status
+ *   change and a message written independently. A `build.updated` carries the
+ *   latest cursor sent as its id, so it never moves a reconnect's position.
  * - A `: ping` comment every heartbeat; the stream ends after maxMs and the
  *   client reconnects with Last-Event-ID.
+ *
+ * Authorization is re-checked by every poll: both queries are scoped to the
+ * owner hash the stream was opened with and to an unclaimed build, and the
+ * stream ends as soon as the build is claimed, deleted or re-owned.
+ *
+ * Admission is bounded per owner and per instance (StreamRegistry). A client
+ * that stops reading is dropped: polling pauses while a write is waiting for
+ * `drain`, and the stream is destroyed when the wait passes drainTimeoutMs or
+ * the unsent buffer passes maxBufferedBytes.
  *
  * A message committed after a later one was already polled (two writers
  * racing) would sort before the cursor. Each poll therefore re-reads a short
@@ -27,6 +37,7 @@
 import { BUILD_EVENT, type BuildUpdatedEvent, type ChatMessage, type MessageCreatedEvent } from "@albusforge/schema";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { type BuildState, type ChatStore, compareCursors, type Cursor, type MessageRow, parseCursor } from "./chat-store";
+import { describeError } from "./db-log";
 import type { Log } from "./log";
 
 export interface SseOptions {
@@ -34,27 +45,80 @@ export interface SseOptions {
   heartbeatMs: number;
   maxMs: number;
   lookbackMs: number;
+  /** Unsent bytes buffered for one client before it is dropped. */
+  maxBufferedBytes: number;
+  /** How long a client may leave a write undrained before it is dropped. */
+  drainTimeoutMs: number;
 }
 
-export const DEFAULT_SSE: SseOptions = { pollMs: 1000, heartbeatMs: 15_000, maxMs: 10 * 60_000, lookbackMs: 5000 };
+export const DEFAULT_SSE: SseOptions = {
+  pollMs: 1000,
+  heartbeatMs: 15_000,
+  maxMs: 10 * 60_000,
+  lookbackMs: 5000,
+  maxBufferedBytes: 1024 * 1024,
+  drainTimeoutMs: 30_000,
+};
+
+export interface StreamLimits {
+  perOwner: number;
+  perInstance: number;
+}
+
+export const DEFAULT_STREAM_LIMITS: StreamLimits = { perOwner: 3, perInstance: 100 };
 
 export function toChatMessage(row: MessageRow): ChatMessage {
   return { id: row.id, role: row.role, text: row.text, created_at: row.createdAt.toISOString(), client_message_id: row.clientMessageId };
 }
 
-export interface StreamRegistry {
-  /** Ends every open stream (Fastify preClose), so shutdown doesn't wait for maxMs. */
-  closeAll(): void;
-  add(close: () => void): () => void;
+/** One admitted stream. Released exactly once, however the stream ends. */
+export interface StreamLease {
+  /** Registers how to end this stream from closeAll. */
+  onClose(close: () => void): void;
+  release(): void;
 }
 
-export function createStreamRegistry(): StreamRegistry {
-  const open = new Set<() => void>();
+export interface StreamRegistry {
+  /** A lease, or null when the owner or the instance is at its limit. */
+  reserve(ownerHash: string): StreamLease | null;
+  /** Ends every open stream (Fastify preClose), so shutdown doesn't wait for maxMs. */
+  closeAll(): void;
+  readonly size: number;
+}
+
+export function createStreamRegistry(limits: StreamLimits = DEFAULT_STREAM_LIMITS): StreamRegistry {
+  const perOwner = new Map<string, number>();
+  const closers = new Set<() => void>();
+  let total = 0;
   return {
-    closeAll: () => [...open].forEach((close) => close()),
-    add(close) {
-      open.add(close);
-      return () => open.delete(close);
+    get size() {
+      return total;
+    },
+    reserve(ownerHash) {
+      const owned = perOwner.get(ownerHash) ?? 0;
+      if (owned >= limits.perOwner || total >= limits.perInstance) return null;
+      perOwner.set(ownerHash, owned + 1);
+      total++;
+      let released = false;
+      let closer: (() => void) | undefined;
+      return {
+        onClose(close) {
+          closer = close;
+          closers.add(close);
+        },
+        release() {
+          if (released) return;
+          released = true;
+          total--;
+          const left = (perOwner.get(ownerHash) ?? 1) - 1;
+          if (left <= 0) perOwner.delete(ownerHash);
+          else perOwner.set(ownerHash, left);
+          if (closer) closers.delete(closer);
+        },
+      };
+    },
+    closeAll() {
+      [...closers].forEach((close) => close());
     },
   };
 }
@@ -63,17 +127,54 @@ export function streamBuildEvents(input: {
   request: FastifyRequest;
   reply: FastifyReply;
   buildId: string;
+  ownerHash: string;
   store: ChatStore;
   log: Log;
   options: SseOptions;
-  registry: StreamRegistry;
+  lease: StreamLease;
 }): void {
-  const { request, reply, buildId, store, log, options, registry } = input;
+  const { request, reply, buildId, ownerHash, store, log, options, lease } = input;
   const lastEventId = request.headers["last-event-id"];
   const resumeFrom = parseCursor(Array.isArray(lastEventId) ? lastEventId[0] : lastEventId);
+  const logFields = { requestId: request.id, buildId };
 
   reply.hijack();
   const raw = reply.raw;
+
+  let closed = false;
+  let waitingForDrain = false;
+  let cursor: Cursor | undefined = resumeFrom;
+  let lastState: BuildState | undefined;
+  const sent = new Map<string, bigint>();
+  let pollTimer: NodeJS.Timeout | undefined;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+  const maxTimer: NodeJS.Timeout = setTimeout(() => close(), options.maxMs);
+
+  const close = (how: "end" | "destroy" = "end") => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(pollTimer);
+    clearTimeout(heartbeatTimer);
+    clearTimeout(maxTimer);
+    lease.release();
+    if (how === "destroy") raw.destroy();
+    else raw.end();
+  };
+  lease.onClose(() => close());
+  request.raw.on("close", () => close());
+  raw.on("close", () => close());
+
+  const dropSlowClient = (reason: string) => {
+    log("INFO", "closing slow event stream", { trace: request.trace, fields: { ...logFields, reason, bufferedBytes: raw.writableLength } });
+    close("destroy");
+  };
+
+  const send = (chunk: string) => {
+    if (closed) return;
+    if (!raw.write(chunk)) waitingForDrain = true;
+    if (raw.writableLength > options.maxBufferedBytes) dropSlowClient("buffer");
+  };
+
   raw.writeHead(200, {
     ...(reply.getHeaders() as Record<string, string>),
     "content-type": "text/event-stream; charset=utf-8",
@@ -82,48 +183,32 @@ export function streamBuildEvents(input: {
     // Stops buffering proxies from holding events back.
     "x-accel-buffering": "no",
   });
-  raw.write("retry: 3000\n\n");
+  send("retry: 3000\n\n");
 
-  let closed = false;
-  let cursor: Cursor | undefined = resumeFrom;
-  let lastState: BuildState | undefined;
-  const sent = new Map<string, bigint>();
-  const timers: NodeJS.Timeout[] = [];
-
-  const close = () => {
-    if (closed) return;
-    closed = true;
-    timers.forEach(clearTimeout);
-    unregister();
-    raw.end();
-  };
-  const unregister = registry.add(close);
-  request.raw.on("close", close);
-
-  const write = (event: string, data: unknown, id: Cursor | undefined) => {
-    if (closed) return;
+  const event = (name: string, data: unknown, id: Cursor | undefined) => {
     const idLine = id ? `id: ${id.micros}.${id.id}\n` : "";
-    raw.write(`${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    send(`${idLine}event: ${name}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
   const poll = async () => {
-    const state = await store.buildState(buildId);
-    if (!state) return close(); // deleted (expired) under us
+    const state = await store.buildState(buildId, ownerHash);
+    if (!state) return close(); // deleted, claimed or re-owned: this cookie may no longer read it
     if (!lastState || state.status !== lastState.status || state.specVersion !== lastState.specVersion) {
       const payload: BuildUpdatedEvent = { status: state.status, spec_version: state.specVersion };
-      write(BUILD_EVENT.buildUpdated, payload, cursor);
+      event(BUILD_EVENT.buildUpdated, payload, cursor);
       lastState = state;
     }
 
-    const rows = await store.messagesSince(buildId, cursor, options.lookbackMs);
+    const rows = await store.messagesSince(buildId, ownerHash, cursor, options.lookbackMs);
     for (const row of rows) {
+      if (closed) return;
       const position = parseCursor(row.cursor);
       if (!position || sent.has(row.id)) continue;
       if (resumeFrom && compareCursors(position, resumeFrom) <= 0) continue;
       sent.set(row.id, position.micros);
       if (!cursor || compareCursors(position, cursor) > 0) cursor = position;
       const payload: MessageCreatedEvent = { message: toChatMessage(row) };
-      write(BUILD_EVENT.messageCreated, payload, position);
+      event(BUILD_EVENT.messageCreated, payload, position);
     }
     // Forget ids that have left the lookback window.
     if (cursor) {
@@ -132,23 +217,42 @@ export function streamBuildEvents(input: {
     }
   };
 
+  const drained = () =>
+    new Promise<boolean>((resolve) => {
+      const onDrain = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        raw.off("drain", onDrain);
+        resolve(false);
+      }, options.drainTimeoutMs);
+      raw.once("drain", onDrain);
+    });
+
   const loop = async () => {
+    if (closed) return;
+    if (waitingForDrain) {
+      const ok = await drained();
+      if (closed) return;
+      if (!ok) return dropSlowClient("drain timeout");
+      waitingForDrain = false;
+    }
     try {
       await poll();
     } catch (error) {
-      log("WARNING", "build events poll failed", { error, trace: request.trace, fields: { requestId: request.id, buildId } });
+      log("WARNING", "build events poll failed", { ...describeError(error), trace: request.trace, fields: logFields });
       return close();
     }
-    if (!closed) timers.push(setTimeout(() => void loop(), options.pollMs));
+    if (!closed) pollTimer = setTimeout(() => void loop(), options.pollMs);
   };
 
   const heartbeat = () => {
     if (closed) return;
-    raw.write(": ping\n\n");
-    timers.push(setTimeout(heartbeat, options.heartbeatMs));
+    if (!waitingForDrain) send(": ping\n\n");
+    heartbeatTimer = setTimeout(heartbeat, options.heartbeatMs);
   };
 
-  timers.push(setTimeout(heartbeat, options.heartbeatMs));
-  timers.push(setTimeout(close, options.maxMs));
+  heartbeatTimer = setTimeout(heartbeat, options.heartbeatMs);
   void loop();
 }

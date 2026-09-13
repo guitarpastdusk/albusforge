@@ -23,10 +23,22 @@ ran="$(printf '%s' "$executions" | jq -er '
     then error("Unknown migration order") else . end
   | if any(.[]; completion != ["True"] and completion != ["False"])
     then error("A migration is running or has unknown completion") else . end
-  | sort_by(.metadata.creationTimestamp[0:19])
+  # Require complete terminal intervals. Completion order does not establish
+  # SQL/grant ordering inside overlapping executions. A fresh matching success
+  # must start strictly after every other observed execution has completed.
+  | map(. + {
+      created: (.metadata.creationTimestamp[0:19] + "Z" | fromdateiso8601),
+      finished: (if (.status.completionTime | type) == "string" and
+        (.status.completionTime | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"))
+        then (.status.completionTime[0:19] + "Z" | fromdateiso8601)
+        else error("Missing or invalid migration completion time") end)
+    })
+  | if any(.[]; .finished < .created) then error("Invalid migration interval") else . end
+  | sort_by(.created)
   | . as $all | last as $latest
-  | if ([$all[] | select(.metadata.creationTimestamp[0:19] == $latest.metadata.creationTimestamp[0:19])] | length) != 1
-    then error("Ambiguous latest migration order") else $latest end
+  | if any($all[0:-1][]; .finished >= $latest.created)
+    then error("Overlapping or ambiguous migration history; require fresh non-overlapping recovery")
+    else $latest end
   | if completion != ["True"] then error("Latest migration did not succeed") else . end
   | .spec.template.spec.containers[0].image
   | select(type == "string" and length > 0)

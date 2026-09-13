@@ -276,9 +276,9 @@ gateway_jobs() {
   export JOBS="db-migrate registry-load" IMAGE=db-jobs
   unset SERVICE
 }
-# execution NAME CREATED IMAGE SUCCEEDED(True|False): one Cloud Run execution, as JSON.
+# execution NAME CREATED IMAGE SUCCEEDED(True|False) [COMPLETED]: terminal fixture interval.
 execution() {
-  printf '{"metadata":{"name":"%s","creationTimestamp":"%s"},"spec":{"template":{"spec":{"containers":[{"image":"%s"}]}}},"status":{"conditions":[{"type":"Completed","status":"%s"}]}}' "$1" "$2" "$3" "$4"
+  printf '{"metadata":{"name":"%s","creationTimestamp":"%s"},"spec":{"template":{"spec":{"containers":[{"image":"%s"}]}}},"status":{"conditions":[{"type":"Completed","status":"%s"}],"completionTime":"%s"}}' "$1" "$2" "$3" "$4" "${5:-$2}"
 }
 # executions JOB EXECUTION...: the job's execution list.
 executions() {
@@ -650,6 +650,36 @@ images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
 executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)" "$(execution db-migrate-b 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" False)"
 run require-schema-release.sh
 expect '[ "$code" != 0 ]'
+
+# Completion order cannot determine which overlapping execution changed SQL last.
+for outcome in False True; do
+  for finish in 2026-09-01T00:10:00Z 2026-09-01T00:03:00Z; do
+    setup "schema: earlier-created $outcome overlapping migration ending $finish blocks success"
+    export IMAGE=cloudlink
+    images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+    older="$(execution older 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" "$outcome" "$finish")"
+    newer="$(execution newer 2026-09-01T00:01:00Z "$REPO/db-jobs@$d1" True 2026-09-01T00:05:00Z)"
+    executions db-migrate "$older" "$newer"
+    run require-schema-release.sh
+    expect '[ "$code" != 0 ]'
+  done
+done
+setup "schema: fresh matching recovery after all overlapping attempts ended succeeds"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$older" "$newer" "$(execution recovery 2026-09-01T00:11:00Z "$REPO/db-jobs@$d1" True 2026-09-01T00:12:00Z)"
+run require-schema-release.sh
+expect '[ "$code" = 0 ]'
+
+for finish in null '"invalid"' '"2026-08-31T23:59:59Z"' '"2026-09-01T00:01:00.100Z"'; do
+  setup "schema: uncertain earlier completion $finish refuses release"
+  export IMAGE=cloudlink
+  images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+  uncertain="$(printf '%s' "$older" | jq --argjson finish "$finish" '.status.completionTime=$finish')"
+  executions db-migrate "$uncertain" "$newer"
+  run require-schema-release.sh
+  expect '[ "$code" != 0 ]'
+done
 
 g checkout -q --detach "$C"
 mkdir -p "$repo/packages/db/migrations"

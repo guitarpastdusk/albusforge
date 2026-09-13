@@ -21,7 +21,8 @@ partner cloud) should be settled before M0 lays down the workspace.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full system architecture
 - [`docs/CLOUD-PLATFORM.md`](docs/CLOUD-PLATFORM.md) — ingestion, storage, the dashboard, and the intelligence layer
-- `docs/adr/` — architecture decision records (as decisions are made)
+- [`docs/adr/`](docs/adr/) — architecture decision records
+- [`infra/`](infra/) — Terraform for GCP (M0 scope today)
 
 ## Convention
 

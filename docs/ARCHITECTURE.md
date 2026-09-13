@@ -636,7 +636,7 @@ The deck adds public build/remix counts and an **earn** promise: remixes route t
 
 - **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output.
 - **Multi-user tenants.** The platform slide shows twelve members and three roles (ops manager as admin; maintenance crew with alerts + acknowledge; customer auditor read-only), plus SSO, an audit log and per-tenant keys. The spec has `users`, session cookies, and anonymous builds. No organisation, membership, role, audit table, or per-tenant key material. This is a schema addition, an authorization layer across **every** route, and an SSO integration.
-- **Per-tenant app hosting** at `acme-plant.albusforge.app` — subdomain routing and per-tenant isolation, against an LB config that assumes one public hostname.
+- **Per-tenant app hosting** at `acme-plant.albusforge.ai` — subdomain routing and per-tenant isolation, against an LB config that assumes one public hostname.
 
 > Deciding tenant-vs-build as the root is cheap now and expensive across seven services later. This is the highest-regret item on the open list.
 

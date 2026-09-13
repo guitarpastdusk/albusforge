@@ -1,11 +1,12 @@
 import "server-only";
 import { cookies, headers } from "next/headers";
-import { notFound } from "next/navigation";
+import { notFound, unstable_rethrow } from "next/navigation";
 import { connection } from "next/server";
 import type { z } from "zod";
 import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { ApiRequestError, fetchTransport, request, type Transport } from "./core";
 import { nextCookieWriter } from "./cookies";
+import { credentialCookieHeader } from "./credential-cookies";
 import { gatewayHeaders } from "./gateway-headers.server";
 import { idToken } from "./id-token.server";
 import { createSessionClient, type SessionClient } from "./session-client";
@@ -54,8 +55,23 @@ async function transportFor(cookieHeader: string | null): Promise<Transport> {
   );
 }
 
+/**
+ * The credentials to forward, from the current `cookies()` store rather than
+ * the request's Cookie header: during a Server Action's re-render (the header
+ * after verify) the store already holds the session the action just set.
+ * Falls back to the request header only where the store can't be read.
+ */
+async function credentials(): Promise<string | null> {
+  try {
+    return credentialCookieHeader(await cookies());
+  } catch (error) {
+    unstable_rethrow(error);
+    return (await headers()).get("cookie");
+  }
+}
+
 async function transport(): Promise<Transport> {
-  return transportFor((await headers()).get("cookie"));
+  return transportFor(await credentials());
 }
 
 export async function apiGet<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>> {
@@ -72,10 +88,9 @@ export async function apiPost<S extends z.ZodType>(path: string, schema: S, body
  * and use them for the client's own follow-up calls. See lib/api/README.md.
  */
 export async function sessionClient(): Promise<SessionClient> {
-  const incoming = await headers();
   return createSessionClient({
     transportFor,
-    cookieHeader: incoming.get("cookie"),
+    cookieHeader: await credentials(),
     writer: nextCookieWriter(await cookies()),
   });
 }

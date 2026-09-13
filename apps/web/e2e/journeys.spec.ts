@@ -86,16 +86,21 @@ test("anonymous build → real email-code claim → project/Usage/telemetry → 
     await verify(other, stack, "stranger@example.test");
     await expect(other).toHaveURL(`${stack.webUrl}/usage`);
     await expect(other.getByRole("heading", { name: "No model calls recorded this month", exact: true })).toBeVisible();
-    const foreignBuild = await other.goto(`${stack.webUrl}/projects/${buildId}`);
-    expect(foreignBuild?.status()).toBe(404);
-    await other.goto(`${stack.webUrl}/live/${deviceId}`);
-    // Next's loading boundary may already have streamed HTTP200 before notFound.
-    // Assert the refusal UI and the underlying gateway's authoritative status.
-    await expect(other.getByRole("heading", { name: "404", exact: true })).toBeVisible();
-    await expect(other.getByText("23.25 C", { exact: true })).toHaveCount(0);
     const session = (await stranger.cookies()).find(cookie => cookie.name === "__Host-albus_session")!;
-    const denied = await fetch(`${stack.gatewayUrl}/v1/telemetry/devices/${deviceId}`, { headers: { cookie: `${session.name}=${session.value}` } });
-    expect(denied.status).toBe(404);
+    for (const [uiPath, apiPath, refusal] of [
+      [`/projects/${buildId}`, `/v1/builds/${buildId}`, /^(404|Project unavailable)$/],
+      [`/live/${deviceId}`, `/v1/telemetry/devices/${deviceId}`, /^(404|Device unavailable)$/],
+    ] as const) {
+      await other.goto(`${stack.webUrl}${uiPath}`);
+      // A loading boundary can stream HTTP200 before rendering an opaque refusal.
+      // Assert missing-resource UI and the gateway's authoritative status for both routes.
+      await expect(other.getByRole("heading", { name: refusal })).toBeVisible();
+      await expect(other.getByRole("heading", { name: "Shape your device", exact: true })).toHaveCount(0);
+      await expect(other.getByText("Browser acceptance greenhouse monitor", { exact: true })).toHaveCount(0);
+      await expect(other.getByText("23.25 C", { exact: true })).toHaveCount(0);
+      const denied = await fetch(`${stack.gatewayUrl}${apiPath}`, { headers: { cookie: `${session.name}=${session.value}` } });
+      expect(denied.status).toBe(404);
+    }
   } finally { await stranger.close(); }
 
   await page.getByRole("button", { name: "Sign out", exact: true }).click();

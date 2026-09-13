@@ -19,11 +19,22 @@ import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
 
 const MAX = 2;
-const CONNECT_MS = 300;
-const STATEMENT_MS = 500;
-const READ_MS = 800;
+/*
+ * Budgets are generous on purpose. Every test ends by proving the pool is
+ * usable again, and that recovery request opens a fresh connection and runs a
+ * real query through the proxy. On a loaded CI runner that alone has taken
+ * more than the 300 ms / 500 ms these once were, turning a recovered pool into
+ * a 503 (three different assertions in this file failed that way on main in one
+ * afternoon). The stall tests measure elapsed time relative to these values,
+ * so widening them costs a few seconds, not correctness. READ_MS stays well
+ * above STATEMENT_MS so the server's cancel (57014) wins over the client's
+ * read timeout, which would report a terminated connection instead.
+ */
+const CONNECT_MS = 1500;
+const STATEMENT_MS = 1500;
+const READ_MS = 3500;
 /** Slack for CI. Unbounded waits would hang until the test timeout instead. */
-const SLACK_MS = 2500;
+const SLACK_MS = 4000;
 
 type Mode = "forward" | "stall" | "blackhole";
 

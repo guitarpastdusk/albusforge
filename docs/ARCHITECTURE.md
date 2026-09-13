@@ -484,6 +484,8 @@ POST   /v1/devices/:id/ask         { text } → answer; /v1/ask with device boun
 
 The web portal is a client of this contract and adds no API of its own. Its routes, the screens that read each endpoint, and how anonymous builds are claimed are in [`PORTAL.md`](PORTAL.md).
 
+**Public guides implemented:** `/docs` is a server-rendered guide with accessible in-page navigation for the build conversation, preparation for flashing, telemetry semantics and troubleshooting. `/security` describes code-backed session, tenant-read and ingestion controls, separately from pending production verification and policy commitments. These pages make no API calls; guided flashing, production onboarding, signed OTA and approved legal/pricing copy remain separate work. Scope and evidence are recorded in [`PUBLIC-GUIDES.md`](PUBLIC-GUIDES.md).
+
 ### 6.1 Edge and service-to-service auth
 
 - Global External HTTPS LB → serverless NEG → gateway, with Cloud Armor rate-limit rules. The in-app rate-limit plugin stays as defense in depth.

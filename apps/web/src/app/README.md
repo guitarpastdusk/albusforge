@@ -15,4 +15,6 @@ Routes (Next.js App Router). Route-segment folders don't carry their own README 
 | `/marketplace`, `/marketplace/[listingId]` | Community builds | public | stub |
 | `(static)/docs`, `pricing`, `security` | Footer pages | public | placeholder |
 
+`error.tsx` is the root error boundary: it renders `ServiceUnavailable` inside the root layout (header and footer stay) for any page below it. `global-error.tsx` replaces the layout if the layout itself fails. `fonts.ts` holds the next/font loaders both use.
+
 `(app)/layout.tsx` is where the session guard goes. Every page that fetches is rendered per request (the API client calls `connection()`), so no data is baked in at build time.

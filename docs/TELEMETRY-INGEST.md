@@ -53,13 +53,13 @@ Success: `202 {"ok":2,"next_s":300,"cmd":[]}`. `ok` is accepted reading count, `
 | --- | --- |
 | `devices` | Tenant ownership, hashed credential and revocation, channel/source snapshot, upload interval, last-seen/sequence/status |
 | `packets` | `(device_id, seq)` receipt, payload fingerprint and original acknowledgment |
-| `readings` | Append-only samples keyed by device, sequence and ordinal; indexed by device/channel/time |
+| `readings` | Samples keyed by device, sequence, ordinal and timestamp, partitioned by UTC day; indexed by device/channel/time |
 | `latest` | Latest sample per device/channel |
 | `usage` | UTC receipt-month accepted-reading count and canonical JSON payload bytes per device |
 
 Tenant attribution for readings and usage is through the device FK. Future user-facing queries must constrain that join using authenticated tenant membership; this slice exposes no read API. Channel/source snapshots are provisioned once by the local tool; the database app role is trusted and can modify them. Production provisioning must pin a BuildPlan and enforce lifecycle/immutability rules.
 
-Raw storage is ordinary PostgreSQL tables for this bounded development slice. **Partitioning, retention deletion, rollups, Redis, event fan-out and a durable event outbox are not implemented.** Receipts are retained indefinitely; do not add the proposed 48-hour receipt TTL without resolving replay handling across the 90-day backfill window. Payload bytes measure canonical UTF-8 JSON accepted, not physical database size or compressed wire bytes. Identical channel timestamps from different sequences remain distinct raw samples; firmware must retain a sequence for retries.
+[M6b storage](TELEMETRY-STORAGE.md) now adds native daily partitions, durable dirty-hour markers, minute/hour rollups and guarded retention on `m6/telemetry-storage` (pending review/merge). Redis, event fan-out and a durable event outbox remain pending. Receipts are retained indefinitely; do not add the proposed 48-hour receipt TTL without resolving replay handling across the backfill window. Payload bytes measure canonical UTF-8 JSON accepted, not physical database size or compressed wire bytes. Identical channel timestamps from different sequences remain distinct raw samples; firmware must retain a sequence for retries.
 
 ## Service contract and production scaling
 
@@ -117,7 +117,7 @@ The simulator posts one packet twice, expecting `202` both times. It allows only
 The integration suite runs actual PostgreSQL 16, the committed migrations and the restricted application role. It checks concurrent retries, credential isolation/revocation, spoofed tenant fields, normalization and ranges, backfill/latest ordering, rollback after a late storage failure, usage accounting and request limits. Separate gateway regression tests verify its existing API. The `docker-cloudlink` CI job builds the image, applies migrations, provisions an isolated fixture, exercises authenticated ingestion/retry/conflict over HTTP, checks the stored row count and verifies graceful shutdown.
 
 1. **M6a review/integration:** review this slice and reconcile migration numbering with concurrent backend branches before merge. The local simulator workflow is covered by the integration suite.
-2. **M6b durable operations:** production BuildPlan provisioning/token lifecycle, the separate production service and edge route/rate limiting, partitioning/retention, catch-up-safe rollups and durable events. Add load/failure testing before live devices.
+2. **M6b durable operations:** production BuildPlan provisioning/token lifecycle, the separate production service and edge route/rate limiting, roll out the [partitioning/retention/rollup jobs](TELEMETRY-STORAGE.md), and implement durable events. Add load/failure testing before live devices.
 3. **M6c dashboard:** session- and tenant-bound fleet/series/latest APIs, SSE with reconnect/backfill, portal live/history screens and offline alerts. This depends on M2 authentication and M6b event handling.
 4. **M6.5 intelligence:** deterministic threshold/gap/drift detectors first; then the anomaly inbox, model narration and Ask using typed tenant-bound SQL tools and the M2 model/usage infrastructure.
 5. **M4 hardware bridge, in parallel:** emit this envelope from the chosen firmware, persist sequence state, retry acknowledgments, and prove a physical sensor-to-database path.

@@ -85,6 +85,7 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       // Discard on every unexpected failure, even if ROLLBACK appears to succeed.
       discard = !(error instanceof IngestError);
       try { await client.query("ROLLBACK"); } catch { discard = true; }
+      if ((error as { constraint?: string }).constraint === "telemetry_retention_bound") throw new IngestError(422, "timestamp_out_of_range");
       throw error;
     } finally {
       client.release(discard);

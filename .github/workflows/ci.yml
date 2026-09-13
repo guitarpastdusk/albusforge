@@ -282,6 +282,17 @@ jobs:
           [ "$count" = 1 ]
           docker stop --time 10 cloudlink
           [ "$(docker inspect --format '{{.State.ExitCode}}' cloudlink)" = 0 ]
+      - name: Smoke-test telemetry jobs from the migration image
+        run: |
+          for attempt in 1 2; do
+            docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+              -e DB_USER=albus_app -e DB_PASSWORD=app-secret db-jobs:ci telemetry-rollup
+          done
+          docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+            -e DB_USER=albus_migrate -e DB_PASSWORD=migrate-secret db-jobs:ci telemetry-maintain
+          count=$(docker run --rm --network host -e PGPASSWORD=app-secret postgres:16-alpine \
+            psql -h 127.0.0.1 -U albus_app -d albus -Atc "SELECT sum(n) FROM telemetry.rollups WHERE resolution='1h'")
+          [ "$count" = 1 ]
       - name: Container logs
         if: failure()
         run: docker logs cloudlink || true

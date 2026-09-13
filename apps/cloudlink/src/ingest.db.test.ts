@@ -167,3 +167,13 @@ it("deduplicates retries across independent service instances and SQL pools", as
     expect((await handle.pool.query("SELECT readings_in FROM telemetry.usage WHERE device_id=$1", [f.dev])).rows[0].readings_in).toBe("2");
   } finally { await second.close(); await secondDb.pool.end(); }
 });
+
+it("rejects data behind the storage retention boundary without a receipt or partial writes", async () => {
+  const f = await fixture();
+  await owner.query("UPDATE telemetry.retention_state SET raw_before=$1 WHERE id=1", [new Date((epoch + 1) * 1000)]);
+  try {
+    expect((await f.send()).statusCode).toBe(422);
+    expect(await count(f.dev, "packets")).toBe(0);
+    expect(await count(f.dev, "readings")).toBe(0);
+  } finally { await owner.query("UPDATE telemetry.retention_state SET raw_before='1970-01-01 00:00:00+00' WHERE id=1"); }
+});

@@ -239,3 +239,24 @@ it("HTTP ingestion and the real rollup worker overlap without deadlocking or los
     worker.release();
   }
 });
+
+it('deployed acceptance quota fixture seeds and audits with app grants and preserves accounting on cleanup', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'acceptance-quota-db-'));
+  const file = join(dir, 'fixture.json');
+  const run = (phase: string) => promisify(execFile)('pnpm', ['exec', 'tsx', 'scripts/acceptance.ts', phase, file, 'staging'], {
+    env: { ...cliEnv, ACCEPTANCE_SQL_EXPORT: '', ACCEPTANCE_PURPOSE: 'quota', ACCEPTANCE_ACTOR_LIMIT: '20', ACCEPTANCE_MODEL_DISABLED: 'verified' },
+  });
+  try {
+    await run('provision');
+    const f = JSON.parse(await readFile(file, 'utf8'));
+    await run('quota-seed');
+    await run('quota-audit');
+    await expect(run('quota-seed')).rejects.toThrow();
+    await handle.pool.query('UPDATE telemetry.sensor_ask_requests SET model_attempted=true WHERE actor_id=$1', [f.actor]);
+    await expect(run('quota-audit')).rejects.toThrow();
+    await run('cleanup');
+    expect((await handle.pool.query('SELECT count(*)::int AS n FROM telemetry.sensor_ask_requests WHERE actor_id=$1', [f.actor])).rows[0].n).toBe(20);
+    expect((await handle.pool.query('SELECT revoked_at IS NOT NULL AS revoked FROM telemetry.devices WHERE id=$1', [f.device])).rows[0].revoked).toBe(true);
+    expect((await handle.pool.query('SELECT count(*)::int AS n FROM users.sessions WHERE user_id=$1 AND revoked_at IS NOT NULL', [f.actor])).rows[0].n).toBe(1);
+  } finally { await rm(dir, {recursive:true,force:true}); }
+});

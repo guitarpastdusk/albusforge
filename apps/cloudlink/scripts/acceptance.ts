@@ -5,15 +5,16 @@ import { createDb, dbConfigFromEnv } from '@albusforge/db';
 import { SESSION_COOKIE } from '@albusforge/schema';
 import { z } from 'zod';
 
-const Fixture = z.strictObject({ environment: z.enum(['staging','prod']), origin: z.enum(['https://staging.albusforge.ai','https://albusforge.ai']), run: z.uuid(), tenant: z.uuid(), otherTenant: z.uuid(), actor: z.uuid(), otherActor: z.uuid(), device: z.uuid(), token: z.string().regex(/^[\w-]{43}$/), session: z.string().regex(/^[\w-]{43}$/), otherSession: z.string().regex(/^[\w-]{43}$/), ts: z.number().int() });
+const Fixture = z.strictObject({ purpose: z.enum(['pipeline','quota']).default('pipeline'), environment: z.enum(['staging','prod']), origin: z.enum(['https://staging.albusforge.ai','https://albusforge.ai']), run: z.uuid(), tenant: z.uuid(), otherTenant: z.uuid(), actor: z.uuid(), otherActor: z.uuid(), device: z.uuid(), token: z.string().regex(/^[\w-]{43}$/), session: z.string().regex(/^[\w-]{43}$/), otherSession: z.string().regex(/^[\w-]{43}$/), ts: z.number().int() });
 const [phase, file, environment] = process.argv.slice(2);
-if (!file || !['provision','ingest','verify','ask','audit','cleanup'].includes(phase ?? '')) throw new Error('Usage: acceptance.ts provision|ingest|verify|ask|audit|cleanup /private/path/fixture.json staging|prod');
+if (!file || !['provision','ingest','verify','ask','audit','cleanup','quota-seed','quota-check','quota-audit','load','verify-cleanup'].includes(phase ?? '')) throw new Error('Usage: acceptance.ts provision|ingest|verify|ask|audit|cleanup|quota-seed|quota-check|quota-audit|load|verify-cleanup /private/path/fixture.json staging|prod');
 if (!['staging','prod'].includes(environment ?? '')) throw new Error('Explicit staging or prod is required');
+if (process.env.ACCEPTANCE_SQL_EXPORT && !['provision','cleanup','quota-seed','quota-audit'].includes(phase!)) throw new Error('SQL export cannot be combined with HTTP or audit phases');
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
 async function database<T>(work: (client: import('pg').PoolClient) => Promise<T>): Promise<T> {
   if (process.env.ACCEPTANCE_SQL_EXPORT) {
-    if (!['provision','cleanup'].includes(phase!)) throw new Error('SQL export only supports provision/cleanup');
+    if (!['provision','cleanup','quota-seed','quota-audit'].includes(phase!)) throw new Error('SQL export only supports fixture mutations and quota audit');
     const statements: { text: string; values: unknown[] }[] = [];
     const result = await work({ query: async (text: string, values: unknown[] = []) => { statements.push({text,values}); return {rows:[],rowCount:0}; } } as unknown as import('pg').PoolClient);
     const handle = await open(process.env.ACCEPTANCE_SQL_EXPORT,'wx',0o600);
@@ -27,7 +28,8 @@ async function database<T>(work: (client: import('pg').PoolClient) => Promise<T>
 }
 try {
 if (phase === 'provision') {
-  const f = Fixture.parse({ environment, origin: environment === 'staging' ? 'https://staging.albusforge.ai' : 'https://albusforge.ai', run: randomUUID(), tenant: randomUUID(), otherTenant: randomUUID(), actor: randomUUID(), otherActor: randomUUID(), device: randomUUID(), token: secret(), session: secret(), otherSession: secret(), ts: Math.floor(Date.now()/60000)*60 });
+  const f = Fixture.parse({ purpose:process.env.ACCEPTANCE_PURPOSE??'pipeline', environment, origin: environment === 'staging' ? 'https://staging.albusforge.ai' : 'https://albusforge.ai', run: randomUUID(), tenant: randomUUID(), otherTenant: randomUUID(), actor: randomUUID(), otherActor: randomUUID(), device: randomUUID(), token: secret(), session: secret(), otherSession: secret(), ts: Math.floor(Date.now()/60000)*60 });
+  if(f.purpose==='quota' && f.environment!=='staging') throw new Error('Quota fixture is staging only');
   // Persist first so even an uncertain COMMIT can be recovered/revoked using this manifest.
   const handle = await open(file,'wx',0o600); try { await handle.writeFile(JSON.stringify(f)); await handle.sync(); } finally { await handle.close(); }
   await database(async c => { await c.query('BEGIN'); try {
@@ -44,17 +46,34 @@ if (phase === 'provision') {
 } else {
   const info = await stat(file); if ((info.mode & 0o077)!==0) throw new Error('Manifest must be private (0600)');
   const f = Fixture.parse(JSON.parse(await readFile(file,'utf8'))); if (f.environment !== environment || f.origin !== (environment==='staging'?'https://staging.albusforge.ai':'https://albusforge.ai')) throw new Error('Environment mismatch');
-  async function request(path: string, expected: number, body?: unknown, auth = f.session, deviceAuth = false) {
+  const statusCounts:Record<string,number>={};
+  async function request(path: string, expected: number | number[], body?: unknown, auth = f.session, deviceAuth = false) {
     const r = await fetch(new URL(path,f.origin),{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json',...(auth ? deviceAuth?{authorization:`Bearer ${auth}`}:{cookie:`${SESSION_COOKIE}=${auth}`} : {})},body:body===undefined?undefined:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(40000)});
-    if (r.status!==expected) { await r.body?.cancel(); throw new Error(`HTTP status mismatch: expected ${expected}, received ${r.status}`); }
+    statusCounts[r.status]=(statusCounts[r.status]??0)+1;
+    if (!(Array.isArray(expected)?expected:[expected]).includes(r.status)) { await r.body?.cancel(); throw new Error(`HTTP status mismatch: expected ${expected}, received ${r.status}`); }
     const reader=r.body?.getReader(); if (!reader) return null;
     const chunks: Uint8Array[]=[]; let size=0;
     try { for (;;) { const {done,value}=await reader.read(); if(done) break; size+=value.length; if(size>65536) throw new Error('Oversized response'); chunks.push(value); } } finally { await reader.cancel().catch(()=>{}); }
     const text=Buffer.concat(chunks).toString('utf8'); return text?JSON.parse(text):null;
   }
+  if ((phase!.startsWith('quota-') && (f.environment!=='staging' || f.purpose!=='quota')) || (['ask','load','ingest','verify'].includes(phase!) && f.purpose!=='pipeline')) throw new Error('Wrong fixture purpose');
   const from = new Date((f.ts-180)*1000).toISOString(), to = new Date(f.ts*1000).toISOString();
   const series = `/v1/telemetry/devices/${f.device}/series?${new URLSearchParams({channel:'temperature_c',from,to,resolution:'raw'})}`;
-  if (phase==='ingest') {
+  if (phase==='load') {
+    if (f.environment!=='staging') throw new Error('Load is staging only');
+    // Ten concurrent, thirty total; repeat accepted packets, never generate load on the model.
+    for (let batch=0;batch<3;batch++) {
+      const outcomes=await Promise.allSettled(Array.from({length:10},()=>request('/ingest/v1',[batch===1?401:202,429,503],{v:1,dev:f.device,seq:batch===2?2:1,ts:f.ts,r:[{c:'temperature_c',t:batch===2?-120:-60,v:batch===2?10:20}],st:{rssi:-62,up_s:60,health:['OK']}},batch===1?secret():f.token,true)));
+      if (outcomes.some(r=>r.status==='rejected')) throw new Error('Unexpected load response');
+    }
+    if (!((statusCounts['202']??0)>0) || !((statusCounts['401']??0)>0)) throw new Error('No useful load evidence');
+    console.log(JSON.stringify({concurrency:10,total:30,statusCounts}));
+  } else if (phase==='verify-cleanup') {
+    await request(series,401); await request(series,401,undefined,f.otherSession);
+    await request('/ingest/v1',401,{v:1,dev:f.device,seq:1,ts:f.ts,r:[{c:'temperature_c',t:-60,v:20}],st:{rssi:-62,up_s:60,health:['OK']}},f.token,true);
+  } else if (phase==='quota-check') {
+    await request(`/v1/devices/${f.device}/ask`,429,{text:'What is the average temperature?',channel:'temperature_c',from,to});
+  } else if (phase==='ingest') {
     for (const [seq,t,v] of [[1,-60,20],[1,-60,20],[2,-120,10]]) await request('/ingest/v1',202,{v:1,dev:f.device,seq,ts:f.ts,r:[{c:'temperature_c',t,v}],st:{rssi:-62,up_s:60,health:['OK']}},f.token,true);
     await request('/ingest/v1',401,{v:1,dev:f.device,seq:3,ts:f.ts,r:[{c:'temperature_c',t:-60,v:99}],st:{rssi:-62,up_s:60,health:['OK']}},secret(),true);
   } else if (phase==='verify') {
@@ -65,11 +84,25 @@ if (phase === 'provision') {
   } else if (phase==='ask') {
     const path = `/v1/devices/${f.device}/ask`, body = {text:'What is the average temperature?',channel:'temperature_c',from,to};
     await request(path,401,body,''); await request(path,404,body,f.otherSession);
-    const result = await request(path,200,body); if (!result.message?.text?.includes('15') || !result.message.text.includes('2 readings')) throw new Error('Ask numerical evidence mismatch');
+    const result = await request(path,200,body); if (!result.message?.text?.includes('sample mean 15°C.') || !result.message.text.includes('2 readings')) throw new Error('Ask numerical evidence mismatch');
     // Print only correlation ID; inspect provider mode/usage through the scoped ledger audit.
     console.log(JSON.stringify({request_id:result.message.id}));
   } else await database(async c => {
-    if (phase==='audit') {
+    if (phase==='quota-seed' || phase==='quota-audit') {
+      const limit=z.coerce.number().int().min(1).max(20).parse(process.env.ACCEPTANCE_ACTOR_LIMIT);
+      if (process.env.ACCEPTANCE_MODEL_DISABLED!=='verified') throw new Error('Coordinator must verify deployed model disabled');
+      await c.query('BEGIN'); try {
+        if (phase==='quota-seed') {
+          // Must be an unused isolated actor: no existing reservations or model activity.
+          await c.query('SELECT 1/(CASE WHEN EXISTS(SELECT 1 FROM telemetry.sensor_ask_requests WHERE actor_id=$1) THEN 0 ELSE 1 END)',[f.actor]);
+          for(let i=0;i<limit;i++) await c.query("INSERT INTO telemetry.sensor_ask_requests(request_id,tenant_id,actor_id,device_id,outcome,usage_known,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cost_usd) VALUES($1,$2,$3,$4,'failed',true,0,0,0,0,0)",[randomUUID(),f.tenant,f.actor,f.device]);
+        } else {
+          // Executed after the one denied HTTP call: no extra reservation/provider attempt permitted.
+          await c.query('SELECT 1/(CASE WHEN count(*)=$4 AND count(*) FILTER(WHERE model_attempted OR NOT usage_known OR outcome<>\'failed\' OR cost_usd IS DISTINCT FROM 0 OR model IS NOT NULL OR input_tokens IS DISTINCT FROM 0 OR output_tokens IS DISTINCT FROM 0 OR cache_read_tokens IS DISTINCT FROM 0 OR cache_creation_tokens IS DISTINCT FROM 0 OR tenant_id<>$2 OR device_id<>$3)=0 THEN 1 ELSE 0 END) FROM telemetry.sensor_ask_requests WHERE actor_id=$1',[f.actor,f.tenant,f.device,limit]);
+        }
+        await c.query('COMMIT');
+      } catch { await c.query('ROLLBACK'); throw new Error('Quota evidence mismatch'); }
+    } else if (phase==='audit') {
       const rows = (await c.query('SELECT request_id,outcome,model,model_attempted,usage_known,input_tokens,output_tokens,cost_usd FROM telemetry.sensor_ask_requests WHERE tenant_id=$1 AND actor_id=$2 AND device_id=$3 ORDER BY created_at',[f.tenant,f.actor,f.device])).rows;
       console.log(JSON.stringify({usage:rows}));
     } else {

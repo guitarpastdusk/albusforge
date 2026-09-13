@@ -1,30 +1,13 @@
-import { routes, Showcase } from "@albusforge/schema";
-import { unstable_rethrow } from "next/navigation";
 import { BuildConversation, WhenConversationEmpty } from "@/components/build/BuildConversation";
 import { ConversationView } from "@/components/build/ConversationView";
-import { DeviceCarousel, type CarouselCard } from "@/components/carousel/DeviceCarousel";
+import { DeviceCarousel } from "@/components/carousel/DeviceCarousel";
 import { ChatStart } from "@/components/landing/ChatStart";
 import { enclosurePreviewFor } from "@/components/enclosure/fixture";
-import { apiGet } from "@/lib/api/server";
-import { formatAgo } from "@/lib/format";
 import { loadRuntimeConfig } from "@/lib/runtime-config";
-
-async function loadCarousel(): Promise<CarouselCard[]> {
-  try {
-    const { cards } = await apiGet(routes.showcase.path(), Showcase);
-    const now = new Date();
-    return cards.map(({ last_reading_at, ...card }) => ({ ...card, age: formatAgo(last_reading_at, now) }));
-  } catch (error) {
-    // Let Next's own control flow (dynamic rendering, redirects) through.
-    unstable_rethrow(error);
-    // The front door must render even if the showcase feed is down.
-    console.error("showcase unavailable", error);
-    return [];
-  }
-}
+import { loadShowcaseCards } from "@/lib/showcase";
 
 export default async function LandingPage() {
-  const cards = await loadCarousel();
+  const cards = await loadShowcaseCards();
 
   return (
     <BuildConversation enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>

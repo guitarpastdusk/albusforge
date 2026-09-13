@@ -6,17 +6,21 @@ const jar = new Map<string, string>();
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: (name: string) => (jar.has(name) ? { name, value: jar.get(name)! } : undefined) }),
+  headers: async () => new Headers(),
 }));
+vi.mock("./log", () => ({ log: vi.fn(), traceFromHeaders: () => undefined }));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw Object.assign(new Error("NEXT_REDIRECT"), { url });
   }),
+  unstable_rethrow: vi.fn(),
 }));
 vi.mock("./api/server", () => ({ apiGet: vi.fn() }));
 
 const { redirect } = await import("next/navigation");
 const { apiGet } = await import("./api/server");
-const { getSession, requireSession } = await import("./session");
+const { getHeaderSession, getSession, requireSession } = await import("./session");
+const { log } = await import("./log");
 const { mockSessionCookie } = await import("@/mocks");
 
 const ME = {
@@ -31,6 +35,7 @@ beforeEach(() => {
   jar.clear();
   vi.mocked(apiGet).mockReset();
   vi.mocked(redirect).mockClear();
+  vi.mocked(log).mockClear();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -91,5 +96,53 @@ describe("mock mode", () => {
     jar.set(SESSION_COOKIE, value);
     await expect(getSession()).resolves.toBeNull();
     expect(await redirectedTo(requireSession("/projects/greenhouse-soil"))).toBe("/signin?next=%2Fprojects%2Fgreenhouse-soil");
+  });
+});
+
+describe("the header's session on public pages (live mode)", () => {
+  beforeEach(() => {
+    vi.stubEnv("API_MODE", "live");
+    jar.set(SESSION_COOKIE, "sess-1");
+  });
+
+  it.each([
+    ["an HTML placeholder (200 text/html)", new GatewayError({ route: "GET /v1/me", status: 200, contentType: "text/html; charset=utf-8", reason: "not_json" })],
+    ["a 503", new ApiRequestError(503, "unavailable", "try later")],
+    ["JSON that isn't Me", new GatewayError({ route: "GET /v1/me", status: 200, contentType: "application/json", reason: "schema_mismatch", issues: "user: Required" })],
+    ["a network failure", new TypeError("fetch failed")],
+  ])("%s: the header shows signed out, one WARNING is logged, nothing is thrown", async (_label, failure) => {
+    vi.mocked(apiGet).mockRejectedValue(failure);
+    await expect(getHeaderSession()).resolves.toBeNull();
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(log).mock.calls[0]![0]).toBe("WARNING");
+    expect(vi.mocked(log).mock.calls[0]![2]).toMatchObject({ error: failure, fields: { component: "header" } });
+    expect(JSON.stringify(vi.mocked(log).mock.calls)).not.toContain("sess-1");
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("…while a guarded page on the same failure reaches the error boundary, not sign-in (no redirect loop)", async () => {
+    const failure = new GatewayError({ route: "GET /v1/me", status: 200, contentType: "text/html", reason: "not_json" });
+    vi.mocked(apiGet).mockRejectedValue(failure);
+    await expect(requireSession("/projects")).rejects.toBe(failure);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("a 401 is simply signed out: no log", async () => {
+    vi.mocked(apiGet).mockRejectedValue(new ApiRequestError(401, "unauthorized", "expired"));
+    await expect(getHeaderSession()).resolves.toBeNull();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("no session cookie: signed out without calling gateway or logging", async () => {
+    jar.clear();
+    await expect(getHeaderSession()).resolves.toBeNull();
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("a signed-in user still shows in the header", async () => {
+    vi.mocked(apiGet).mockResolvedValue(ME);
+    await expect(getHeaderSession()).resolves.toEqual(ME);
+    expect(log).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,10 @@
 import "server-only";
 import { Me, routes, SESSION_COOKIE } from "@albusforge/schema";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { cookies, headers } from "next/headers";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { cache } from "react";
 import { apiGet } from "./api/server";
+import { log, traceFromHeaders } from "./log";
 import { signinHref } from "./next-path";
 import { loadRuntimeConfig } from "./runtime-config";
 import { resolveSession } from "./session-core";
@@ -33,4 +34,27 @@ export async function requireSession(path: string): Promise<Me> {
   const session = await getSession();
   if (!session) redirect(signinHref(path));
   return session;
+}
+
+/**
+ * The session for the header on every page, public ones included. Unlike
+ * `requireSession`, a gateway failure here (unreachable, a 5xx, an HTML
+ * placeholder, a schema mismatch) shows the header signed out and logs one
+ * WARNING, instead of taking every page into the error boundary. A guarded
+ * page still fails properly: its own `requireSession` call throws.
+ */
+export async function getHeaderSession(): Promise<Me | null> {
+  try {
+    return await getSession();
+  } catch (error) {
+    // Next's own control flow (dynamic rendering bailouts, redirects) passes through.
+    unstable_rethrow(error);
+    const reason = error instanceof Error ? error.message : String(error);
+    log("WARNING", `session lookup failed; header shown signed out: ${reason}`, {
+      error,
+      trace: traceFromHeaders(await headers()),
+      fields: { component: "header" },
+    });
+    return null;
+  }
 }

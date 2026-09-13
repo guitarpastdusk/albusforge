@@ -15,6 +15,7 @@
   "calibrated": false,
   "overrides": {},
   "sources": [
+    "https://us.elegoo.com/products/centauri-carbon",
     "https://3dpros.com/printers/elegoo-centauri-carbon"
   ]
 }

@@ -55,7 +55,10 @@ def export(layout: Layout, enc: Enclosure, out_root: str | Path) -> dict:
             angularTolerance=STL_ANGULAR_TOLERANCE,
         )
 
-    assembled = cq.Workplane("XY").newObject([enc.base.val(), enc.lid.val()])
+    # Every body in its assembled position, hatches included, so CAD gets the whole enclosure.
+    assembled = cq.Workplane("XY").newObject(
+        [enc.base.val(), enc.lid.val(), *(hatch.val() for _, hatch in enc.hatches)]
+    )
     cq.exporters.export(assembled, str(out / "enclosure.step"))
 
     scene = trimesh.Scene()

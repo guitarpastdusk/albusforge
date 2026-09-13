@@ -6,7 +6,7 @@ import pytest
 from fit.coupons import build_coupons, export_coupons
 from fit.enclosure import build
 from fit.export import _mesh, export
-from fit.lint import lint_mesh, passed
+from fit.lint import lint_mesh, lint_params, passed
 from fit.model import (
     DEFAULT_PRINTER,
     ROOT,
@@ -170,12 +170,52 @@ def test_qr_serial_is_raised_on_inner_lid(built):
     assert not _inside(enc.lid, *centre(1, 1), z)
 
 
+def test_floor_under_pilots_and_ports_meets_min_wall(built):
+    layout, enc = built
+    pr = layout.profile
+    t, f, m = pr["wall_mm"], pr["floor_mm"], pr["lint"]["min_wall_mm"]
+    cw, cd, _ = layout.cavity()
+    for p in layout.placements:
+        if p.part.mount["type"] == "pcb-standoff":
+            for hx, hy, _ in p.holes():
+                assert _inside(enc.base, t + hx, t + hy, m - 0.01), f"{p.part.id}: pilot floor < {m} mm"
+        for port in p.ports():
+            hh = port.opening(pr["port_clearance_mm"])[1]
+            assert p.z0 + port.v - hh >= -1e-9, f"{p.part.id}.{port.name} opening dips into the floor"
+            x, y = {
+                "-x": (t / 2, t + p.at[1] + port.u),
+                "+x": (t + cw + t / 2, t + p.at[1] + port.u),
+                "-y": (t + p.at[0] + port.u, t / 2),
+                "+y": (t + p.at[0] + port.u, t + cd + t / 2),
+            }[port.side]
+            assert _inside(enc.base, x, y, f - 0.01), f"{p.part.id}.{port.name}: floor cut under opening"
+
+
+def test_lint_catches_thin_floor_under_a_port():
+    layout = load_layout(LAYOUTS[0])
+    i = next(i for i, p in enumerate(layout.placements) if p.part.id == "E-004")
+    p = layout.placements[i]
+    assert p.z0 > 0  # raised so its opening clears the floor
+    # At floor level (the old placement) the charger's opening cuts the floor to 1.05 mm.
+    layout.placements[i] = Placement(p.part, p.at, p.rot, 0.0)
+    check = lint_params(layout)["min_wall"]
+    assert not check["ok"] and "floor_under_port:E-004" in check["detail"]
+
+
 def test_export_lint_passes(built, tmp_path):
     layout, enc = built
     report = export(layout, enc, tmp_path)
     assert report["passed"], report
     for name in ("base.stl", "lid.stl", "enclosure.step", "enclosure.glb", "lint.json"):
         assert (tmp_path / layout.name / name).stat().st_size > 0
+
+    # STEP round trip: every printable body, hatches included, at full volume.
+    step = cq.importers.importStep(str(tmp_path / layout.name / "enclosure.step"))
+    solids = step.solids().vals()
+    bodies = [enc.base, enc.lid, *(hatch for _, hatch in enc.hatches)]
+    assert len(solids) == len(bodies) == len(report["bodies"])
+    expected = sum(b.val().Volume() for b in bodies)
+    assert sum(s.Volume() for s in solids) == pytest.approx(expected, rel=1e-3)
 
 
 def test_rotation_maps_ports_and_holes():

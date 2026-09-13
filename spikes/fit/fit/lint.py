@@ -1,8 +1,9 @@
 """Printability lint: a gate, not a suggestion (ARCHITECTURE.md §7.4).
 
 Mesh checks run on the exported STL, so they test the artifact that gets printed.
-Minimum wall is checked against the parameters that set every wall, not measured
-on the mesh; a mesh thickness check is left for bodygen proper.
+Minimum wall is checked against the parameters that set every wall, including what
+the known cuts leave (floor under pilot holes and port openings), not measured on the
+mesh; a general mesh thickness check is left for bodygen proper.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import math
 import numpy as np
 import trimesh
 
+from .enclosure import pilot_floor_mm
 from .model import Layout
 
 OVERHANG_AREA_TOLERANCE_MM2 = 1.0  # tessellation slivers
@@ -68,10 +70,16 @@ def lint_params(layout: Layout) -> dict:
         "lid_lip_ring": m,
         "cradle_post": m,
     }
+    pc = pr["port_clearance_mm"]
     for p in layout.placements:
         if p.part.mount["type"] == "pcb-standoff":
             tap = pr["self_tap_hole_d_mm"][p.part.mount["screw"]]
             walls[f"standoff:{p.part.id}"] = round((pr["standoff_od_mm"] - tap) / 2, 3)
+            walls[f"floor_under_pilot:{p.part.id}"] = pilot_floor_mm(pr)
+        for port in p.ports():
+            # Opening bottom in cavity coords; below zero the cut eats into the floor.
+            bottom = p.z0 + port.v - port.opening(pc)[1]
+            walls[f"floor_under_port:{p.part.id}.{port.name}"] = round(pr["floor_mm"] + min(0.0, bottom), 3)
     thin = {k: v for k, v in walls.items() if v < m - 1e-9}
     return {
         "min_wall": _check(not thin, f"min {m} mm; " + (f"too thin: {thin}" if thin else f"walls {walls}")),

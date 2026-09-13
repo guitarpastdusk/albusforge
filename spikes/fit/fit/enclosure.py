@@ -58,6 +58,10 @@ def build(layout: Layout, serial: str | None = None) -> Enclosure:
     for p in layout.placements:
         kind = p.part.mount["type"]
         if kind == "cradle":
+            if p.z0 > 0:
+                # Raised so its plug openings clear the floor: a pedestal carries it.
+                fx0, fy0, fx1, fy1 = _footprint(p, t)
+                base = base.union(_box(fx0, fx1, fy0, fy1, f, f + p.z0))
             base = base.union(_cradle_posts(p, pr, t, f))
         elif kind == "pcb-standoff":
             base = _standoffs(base, p, pr, t, f)
@@ -126,24 +130,30 @@ def _cradle_posts(p: Placement, pr: dict, t: float, f: float) -> cq.Workplane:
     posts = None
     for cx, sx in ((x0, -1), (x1, 1)):
         for cy, sy in ((y0, -1), (y1, 1)):
-            arm_x = _box(cx - sx * POST_ARM_MM, cx + sx * m, cy, cy + sy * m, f, f + h)
-            arm_y = _box(cx, cx + sx * m, cy - sy * POST_ARM_MM, cy + sy * m, f, f + h)
+            arm_x = _box(cx - sx * POST_ARM_MM, cx + sx * m, cy, cy + sy * m, f, f + p.z0 + h)
+            arm_y = _box(cx, cx + sx * m, cy - sy * POST_ARM_MM, cy + sy * m, f, f + p.z0 + h)
             corner = arm_x.union(arm_y)
             posts = corner if posts is None else posts.union(corner)
     return posts
 
 
 def _standoffs(base: cq.Workplane, p: Placement, pr: dict, t: float, f: float) -> cq.Workplane:
-    sh, od = pr["standoff_height_mm"], pr["standoff_od_mm"]
+    sh, od = p.z0, pr["standoff_od_mm"]
     tap = pr["self_tap_hole_d_mm"][p.part.mount["screw"]]
+    floor = pilot_floor_mm(pr)
     for hx, hy, _ in p.holes():
         x, y = t + hx, t + hy
         post = cq.Workplane("XY").circle(od / 2).extrude(sh).translate((x, y, f))
         base = base.union(post)
-        # Blind pilot hole, leaving 1 mm of floor under it.
-        pilot = cq.Workplane("XY").circle(tap / 2).extrude(sh + f - 1.0).translate((x, y, 1.0))
+        # Blind pilot hole, leaving the minimum wall of floor under it.
+        pilot = cq.Workplane("XY").circle(tap / 2).extrude(f + sh - floor).translate((x, y, floor))
         base = base.cut(pilot)
     return base
+
+
+def pilot_floor_mm(pr: dict) -> float:
+    """Floor left under a standoff's blind pilot hole."""
+    return pr["lint"]["min_wall_mm"]
 
 
 def _wall_plane(side: str, t: float, cw: float, cd: float) -> cq.Plane:

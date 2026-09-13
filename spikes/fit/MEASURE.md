@@ -24,7 +24,7 @@ Use calipers and take each measurement twice. Record the largest value (the part
 | **P-002 DS18B20 probe** | Probe tube diameter and length; cable diameter just behind the tube | `bounding_mm`, `mount.d_mm` (tube), `mount.cable_d_mm` |
 | **E-001 18650 holder** | Outline with a cell fitted; mounting hole centres and diameter | `bounding_mm`, `spike_ext.holes` |
 | **E-004 TP4056 USB-C** | Board outline; PCB thickness; USB-C centre (along the short edge, and height); how far the receptacle overhangs the board edge | `bounding_mm`, `pcb_thickness_mm`, `spike_ext.ports` |
-| **USB-C cable** *(optional)* | Overmold width and height at the plug end. Not needed: `plug` defaults to the USB-IF compliance maximum, 12.35 × 6.5 mm, which fits any compliant cable. Measure only to tighten the opening for one known cable | `spike_ext.ports[].plug` |
+| **USB-C cable** *(optional)* | Overmold width and height at the plug end. Not needed: `plug` defaults to the USB-IF compliance maximum, 12.35 × 6.5 mm, which fits any compliant non-locking cable. Measure only to tighten the opening for one known cable | `spike_ext.ports[].plug` |
 
 If a receptacle overhangs the board edge, add the overhang to the length, so the part still sits at
 clearance from the wall.

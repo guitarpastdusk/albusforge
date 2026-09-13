@@ -52,6 +52,6 @@
       }
     ],
     "note": "z is measured from the bottom of the header pins (8.5 mm below the PCB); USB-C sits on the PCB top.",
-    "plug_note": "plug = USB Type-C plug overmold maximum per the USB-IF Type-C Compliance Document rev 1.2, p. 46: width 12.35 max, height 6.5 max, with a 6.65 mm plug in front of it. Any compliant cable fits; Type-C spec R2.0 Fig. 3-80 needs the seated overmold to clear the product surface, so the opening passes the overmold."
+    "plug_note": "plug = USB Type-C non-locking plug overmold maximum per the USB-IF Type-C Compliance Document rev 1.2, p. 46 (printed p. 38): width 12.35 max, height 6.5 max, with a 6.65 mm plug in front of it. Any compliant non-locking plug fits; locking Type-C plugs are larger and not supported. Type-C spec R2.0 \u00a73.10.3 (Fig. 3-80, informative) has the seated overmold clear the product surface, so the opening passes the overmold."
   }
 }

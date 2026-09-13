@@ -15,7 +15,7 @@
   "calibrated": false,
   "overrides": {},
   "sources": [
-    "https://us.store.bambulab.com/products/p1s",
-    "https://bambureviews.com/posts/bambu-build-volume-and-footprint/"
+    "https://cdn1.bambulab.com/documentation/quick-start-2024-01-17/Quick-Start-P1S_en.pdf",
+    "https://us.store.bambulab.com/products/p1s"
   ]
 }

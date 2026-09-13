@@ -276,6 +276,12 @@ def load_layout(path: str | Path, printer_id: str = DEFAULT_PRINTER) -> Layout:
         if rot not in (0, 90):
             raise ValueError(f"{part.id}: rot must be 0 or 90")
         z0 = profile["standoff_height_mm"] if part.mount["type"] == "pcb-standoff" else 0.0
+        # A plug opening mustn't dip into the floor: raise the part until every opening
+        # clears the floor top. Cradle parts then sit on a pedestal; standoffs grow.
+        pc = profile["port_clearance_mm"]
+        flat = Placement(part, tuple(item["at"]), rot, 0.0)
+        need = max((port.opening(pc)[1] - port.v for port in flat.ports()), default=0.0)
+        z0 = max(z0, math.ceil(round(need, 6) * 20) / 20)
         placements.append(Placement(part, tuple(item["at"]), rot, z0))
     glands = [
         Gland(g["side"], g["u"], g["v"], load_part(g["part"])) for g in d.get("glands", [])

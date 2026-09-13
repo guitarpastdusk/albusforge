@@ -22,7 +22,7 @@ Dimples count the step: one dimple is the tightest clearance.
 | --- | --- | --- |
 | `hole-plate` + `peg` | Peg into each hole by hand | Tightest hole the peg enters fully without force |
 | `slot-block` | The PCB edge (C-001 and E-004) into each slot | Tightest slot the board slides into |
-| `port-wall` | A USB-C cable through each opening | Tightest opening the overmold passes. Openings are sized to the spec maximum, so any compliant cable should pass at the same step |
+| `port-wall` | A USB-C cable through each opening | Tightest opening the overmold passes. Openings are sized to the spec maximum, so any compliant non-locking cable should pass at the same step |
 | `gland-wall` | The DS18B20 tube through each hole | Tightest hole the tube passes, and whether it holds |
 | `pilot-posts` | Drive an M2.5 self-tapping screw into each post | Smallest pilot hole that doesn't crack the post and still grips |
 | `lid-frame` + `lid-c*` | Press each lid on | Tightest lid that closes fully and stays on upside down |

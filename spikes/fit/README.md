@@ -72,7 +72,8 @@ every layout; a test checks every layout against every printer.
   **12.35 × 6.5 mm**, with a 6.65 mm plug in front of it ([USB Type-C Compliance Document rev 1.2](https://www.usb.org/sites/default/files/USB_Type-C_Compliance_Document_rev_1_2.pdf), p. 46).
   The Type-C spec requires the seated overmold to clear the product's outer surface
   ([USB Type-C spec R2.0](https://www.usb.org/sites/default/files/USB%20Type-C%20Spec%20R2.0%20-%20August%202019.pdf), §3.10.3, Fig. 3-80),
-  so the opening passes the overmold and any compliant cable fits.
+  so the opening passes the overmold and any compliant non-locking plug fits. Locking Type-C plugs are
+  larger and not supported.
 - **Glands** are teardrop holes sized from `mount.d_mm`. Validation keeps an 8 mm corridor behind each one
   clear of parts, so the probe can go straight in.
 - **Battery hatch** over every part flagged `battery`: an opening in the lid, kept inside the lip ring, and a
@@ -84,7 +85,8 @@ every layout; a test checks every layout against every printer.
 
 - **Cradle parts are located in x and y only.** Nothing holds them down; the lid doesn't press on them.
   Whether that matters is one of the fit checks.
-- **Minimum wall is checked from parameters,** not measured on the mesh.
+- **Minimum wall is checked from parameters,** including the floor left under pilot holes and port
+  openings, not measured on the mesh.
 - **Not built yet:** snap-fit lid (the friction lid is tested by the lid coupons), condensation drains.
 - **The QR code is the lid's own colour.** It may need a filament change at its layers, or a light angle, to scan.
 - **Ports assume one cable per wall opening.** The ESP32-S3's two USB-C openings overlap at plug size.
@@ -105,3 +107,7 @@ every layout; a test checks every layout against every printer.
    lip, and the lint has a `single_body` check.
 5. **Lid features can break the mesh.** QR modules touching only at a corner share an edge, which makes the
    STL non-manifold. Modules are inset 0.05 mm per side.
+6. **Plug openings also bound the floor.** The TP4056's USB-C sits 2.8 mm above its board bottom, so a
+   6.5 mm overmold opening cut the floor to 1.05 mm, and the parametric wall check didn't see it. Parts are
+   now raised (on a pedestal) until every opening clears the floor, pilot holes stop at the minimum wall, and
+   the check includes both residuals.

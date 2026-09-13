@@ -19,9 +19,10 @@
  * - A `: ping` comment every heartbeat; the stream ends after maxMs and the
  *   client reconnects with Last-Event-ID.
  *
- * Authorization is re-checked by every poll: both queries are scoped to the
- * owner hash the stream was opened with and to an unclaimed build, and the
- * stream ends as soon as the build is claimed, deleted or re-owned.
+ * Every poll resolves credentials, build ownership and messages in one short
+ * repeatable-read snapshot, committed before emitting any event. A previously
+ * admitted batch may finish; later data cannot use its earlier authorization.
+ * The next poll observes revocation, expiry, membership removal or a claim.
  *
  * Admission is bounded per owner and per instance (StreamRegistry). A client
  * that stops reading is dropped: polling pauses while a write is still
@@ -39,7 +40,7 @@
  */
 import { BUILD_EVENT, type BuildUpdatedEvent, type ChatMessage, type MessageCreatedEvent } from "@albusforge/schema";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { type BuildState, type ChatStore, compareCursors, type Cursor, type MessageRow, type Owner, parseCursor } from "./chat-store";
+import { type BuildState, type ChatStore, compareCursors, type Cursor, type MessageRow, type StreamCredentials, parseCursor } from "./chat-store";
 import { describeError } from "./db-log";
 import type { Log } from "./log";
 
@@ -130,21 +131,13 @@ export function streamBuildEvents(input: {
   request: FastifyRequest;
   reply: FastifyReply;
   buildId: string;
-  owner: Owner;
-  /**
-   * Re-resolves the caller's credentials before each poll, so a session that
-   * is signed out, expired or dropped from the tenant loses the stream within
-   * one poll instead of keeping it until maxMs. Undefined means the owner
-   * can't change (anonymous only), and the claim check in buildState suffices.
-   */
-  refreshOwner?: () => Promise<Owner | undefined>;
+  credentials: StreamCredentials;
   store: ChatStore;
   log: Log;
   options: SseOptions;
   lease: StreamLease;
 }): void {
-  const { request, reply, buildId, refreshOwner, store, log, options, lease } = input;
-  let owner = input.owner;
+  const { request, reply, buildId, credentials, store, log, options, lease } = input;
   const lastEventId = request.headers["last-event-id"];
   const resumeFrom = parseCursor(Array.isArray(lastEventId) ? lastEventId[0] : lastEventId);
   const logFields = { requestId: request.id, buildId };
@@ -237,20 +230,17 @@ export function streamBuildEvents(input: {
   };
 
   const poll = async () => {
-    if (refreshOwner) {
-      const current = await refreshOwner();
-      if (!current) return close(); // signed out, expired, or no longer a member
-      owner = current;
-    }
-    const state = await store.buildState(buildId, owner);
-    if (!state) return close(); // deleted, claimed or re-owned: this credential may no longer read it
+    // Fetch everything under one authorized snapshot; release its transaction
+    // before emitting events or waiting for socket backpressure.
+    const batch = await store.readEventBatch(buildId, credentials, cursor, options.lookbackMs);
+    if (!batch) return close();
+    const { state, messages: rows } = batch;
     if (!lastState || state.status !== lastState.status || state.specVersion !== lastState.specVersion) {
       const payload: BuildUpdatedEvent = { status: state.status, spec_version: state.specVersion };
       event(BUILD_EVENT.buildUpdated, payload, cursor);
       lastState = state;
     }
 
-    const rows = await store.messagesSince(buildId, owner, cursor, options.lookbackMs);
     for (const row of rows) {
       if (closed) return;
       const position = parseCursor(row.cursor);

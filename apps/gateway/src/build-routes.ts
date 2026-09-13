@@ -297,9 +297,10 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
         request,
         reply,
         buildId: build.id,
-        owner,
-        // A session can end mid-stream; an anonymous cookie can only lose the build, which buildState catches.
-        refreshOwner: owner.tenantId === null ? undefined : () => ownerOf(request),
+        credentials: {
+          sessionToken: chat.sessions === undefined ? undefined : sessionTokenFromCookieHeader(request.headers.cookie),
+          anonHash: owner.anonHash,
+        },
         store,
         log,
         options: sse,

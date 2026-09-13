@@ -467,6 +467,48 @@ describe("a session that loses access", () => {
     );
   });
 
+  it.each(["signout", "expiry", "membership"] as const)("keeps an admitted poll snapshot when %s precedes the message query", async (loss) => {
+    const app = makeApp({}, { sse: { pollMs: 20, maxMs: 10_000 } });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const signedIn = await signIn(app, freshEmail());
+    const buildId = CreatedBuild.parse((await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Before access loss" }, headers: { cookie: signedIn.cookie } })).json()).id;
+    const blocker = await handle.pool.connect();
+    let reading: ReturnType<typeof readUntilClosed> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      // Initial authorization/owned-build admission does not query specs. The
+      // poll's state query does: hold it AFTER auth fixed the RR snapshot but
+      // BEFORE messages are read, without a production hook or guessed sleep.
+      await blocker.query("LOCK TABLE builds.specs IN ACCESS EXCLUSIVE MODE");
+      reading = readUntilClosed(`${base}/v1/builds/${buildId}/events`, signedIn.cookie);
+      await expect.poll(async () => {
+        const waiting = await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid)) AND query LIKE '%specs%'", [pid]);
+        return waiting.rowCount;
+      }, { timeout: 5000 }).toBe(1);
+      if (loss === "signout") {
+        expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: { cookie: signedIn.cookie } })).statusCode).toBe(204);
+      } else if (loss === "expiry") {
+        await handle.db.update(sessions).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(sessions.tokenHash, hashSessionToken(signedIn.token)));
+      } else {
+        await handle.db.delete(tenantMembers).where(eq(tenantMembers.userId, signedIn.me.user.id));
+      }
+      await handle.db.insert(buildMessages).values({ buildId, role: "assistant", text: "Private message after access loss" });
+      await blocker.query("COMMIT");
+      const result = await reading;
+      expect(result.closed).toBe(true);
+      expect(result.text).toContain("Before access loss"); // Already admitted data may finish.
+      expect(result.text).not.toContain("Private message after access loss");
+      // A poll never keeps its transaction open for heartbeat/socket lifetime.
+      expect((await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND state = 'idle in transaction' AND pid <> pg_backend_pid()")).rowCount).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await reading;
+    }
+  });
+
   it("loses an open event stream within a poll of signing out", async () => {
     const app = makeApp({}, { sse: { pollMs: 50, heartbeatMs: 200, maxMs: 10_000, lookbackMs: 1000, drainTimeoutMs: 1000, maxBufferedBytes: 1_000_000 } });
     await app.listen({ port: 0, host: "127.0.0.1" });

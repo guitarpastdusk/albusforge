@@ -484,6 +484,8 @@ POST   /v1/devices/:id/ask         { text } → answer; /v1/ask with device boun
 
 The web portal is a client of this contract and adds no API of its own. Its routes, the screens that read each endpoint, and how anonymous builds are claimed are in [`PORTAL.md`](PORTAL.md).
 
+**Build-event authorization snapshots:** each gateway SSE poll resolves the session and tenant membership, checks build ownership, and reads state/messages inside one short PostgreSQL `REPEATABLE READ READ ONLY` transaction. It commits before writing events or waiting for socket backpressure. An admitted batch may finish after access is revoked; messages committed after that snapshot cannot enter it, and the next poll closes after revocation, expiry, membership removal or ownership loss. No stream-lifetime transaction or extra pool is introduced. See [`BUILD-EVENT-SECURITY.md`](BUILD-EVENT-SECURITY.md).
+
 ### 6.1 Edge and service-to-service auth
 
 - Global External HTTPS LB → serverless NEG → gateway, with Cloud Armor rate-limit rules. The in-app rate-limit plugin stays as defense in depth.

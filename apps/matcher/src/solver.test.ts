@@ -152,6 +152,7 @@ describe("constraint failures", () => {
 describe("determinism, validation and bounds", () => {
   it("does not mutate inputs and ignores input order", () => {
     const input = fixture();
+    for (const profile of input.profiles) profile.activity.push({ part: { id: "P-002", version: "1.0.0" }, active_s: 1, evidence: "Synthetic test sensor timing" });
     const original = structuredClone(input);
     const expected = solve(input);
     expect(input).toEqual(original);

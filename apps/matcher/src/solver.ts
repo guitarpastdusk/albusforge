@@ -79,7 +79,9 @@ export function solve(value: unknown): SolveResult {
             "IO levels, I2C addresses, conflicts, runtime and exact passed compile tuples checked.",
             `Wiring and power evidence: ${profile.id}@${profile.version}: ${profile.evidence}`,
             "Unprofiled devices use continuous active current; peak load assumes simultaneous activity.",
-            ...(profile.activity.filter(a => ordered.some(p => pinKey(p) === pinKey(a.part))).map(a => `Duty ${pinKey(a.part)}: min(1, ${a.active_s}/${spec.interval_s}); ${a.evidence}`)),
+            ...(profile.activity.filter(a => ordered.some(p => pinKey(p) === pinKey(a.part)))
+              .sort((a, b) => compareText(pinKey(a.part), pinKey(b.part)))
+              .map(a => `Duty ${pinKey(a.part)}: min(1, ${a.active_s}/${spec.interval_s}); ${a.evidence}`)),
             "Battery days = usable mAh / source mA / 24; runtime is an estimate within the profile's measured operating window.",
           ],
         };

@@ -14,6 +14,7 @@ export interface DbTimeouts {
 
 export interface GatewayConfig {
   port: number;
+  telemetryEnabled: boolean;
   db: DbConfig;
   dbTimeouts: DbTimeouts;
 }
@@ -21,6 +22,7 @@ export interface GatewayConfig {
 const Millis = z.coerce.number().int().min(1).max(600_000);
 
 const ServerEnv = z.object({
+  TELEMETRY_ENABLED: z.enum(["true", "false"]).default("false"),
   // Cloud Run sets PORT.
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   DB_CONNECT_TIMEOUT_MS: Millis.default(5000),
@@ -45,6 +47,7 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
   const e = parsed.data;
   return {
     port: e.PORT,
+    telemetryEnabled: e.TELEMETRY_ENABLED === "true",
     db: dbConfigFromEnv(env),
     dbTimeouts: {
       connectMs: e.DB_CONNECT_TIMEOUT_MS,

@@ -1,5 +1,8 @@
 # Albus Forge — The Cloud Platform
 
+> **Implementation boundary, 2026-09-13:** The initial M6a slice is on `m6/telemetry-ingest`, pending review/merge: an opt-in module in the existing gateway, shared wire contract, transactional PostgreSQL storage and local simulator. There is no new `cloudlink` deployment. The topology and retention/intelligence layers below are the target design; [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) identifies implemented behavior and remaining work, including the ADR 0003 production isolation decision.
+
+
 **Status:** draft, pre-M0. Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md); expands §7.6 (ingest) and §11.3 (intelligence), which the source spec covers in two sentences.
 
 > The registry and the generator get a device built. **This document is the part that makes it worth keeping.** A gadget that works is a weekend; a gadget whose data becomes answers is a subscription.
@@ -125,7 +128,7 @@ Rules:
 - **`st` is not optional.** Battery, signal and health-code telemetry are what the support assistant and the patch-pledge fleet tooling read. Making them a first-class part of every envelope — rather than a separate channel someone forgets to enable — is what makes §10's self-test promise real.
 - **`v` is 1 and it is checked.** Envelope changes are versioned, never inferred.
 
-Identical JSON on both transports. MQTT publishes it to `hsx/t/{device_id}`; HTTPS PUTs it to `/ingest/v1`. The normalizer downstream cannot tell which arrived.
+Identical JSON on both transports. MQTT publishes it to `hsx/t/{device_id}`; HTTPS POSTs it to `/ingest/v1`. The normalizer downstream cannot tell which arrived.
 
 ### 3.4 Downlink without a broker: piggyback
 

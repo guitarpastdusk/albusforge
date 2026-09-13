@@ -9,7 +9,9 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "telemetry:provision": "tsx src/telemetry/provision.ts",
+    "telemetry:simulate": "tsx src/telemetry/simulate.ts"
   },
   "dependencies": {
     "@albusforge/db": "workspace:*",

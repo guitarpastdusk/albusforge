@@ -2,7 +2,7 @@
 
 The API: Fastify and zod, TypeScript. Deployed as the Cloud Run service `gateway`, which the load balancer sends `/v1` and `/v1/*` to on every host ([ADR 0007](../../docs/adr/0007-portal-routing.md)). Response shapes come from [`@albusforge/schema`](../../packages/schema/), and every response is validated against them on the way out. Data comes from [`@albusforge/db`](../../packages/db/).
 
-M1 is a skeleton: health checks and the parts registry.
+M1 supplies health checks and the parts registry. The opt-in M6a telemetry module adds simulator-backed ingestion in the same process; see [the telemetry runbook](../../docs/TELEMETRY-INGEST.md).
 
 ## Routes
 
@@ -12,6 +12,7 @@ M1 is a skeleton: health checks and the parts registry.
 | `GET /readyz` | `200` when `SELECT 1` answers within 2 s, otherwise `503` |
 | `GET /v1/parts?status=&category=` | `PartList`: the highest SemVer version of each part among versions whose status matches, sorted by id, without blocks |
 | `GET /v1/parts/:id?status=` | `PartDetail`: every block of that version, or `404` |
+| `POST /ingest/v1` | When `TELEMETRY_ENABLED=true`: authenticated device batches, `202` only after durable commit; disabled by default |
 | any other `/v1` path or method | `501 {"error":{"code":"NOT_IMPLEMENTED",…}}` |
 | anything else | `404 {"error":{"code":"NOT_FOUND",…}}` |
 
@@ -41,6 +42,7 @@ DB_HOST=localhost DB_NAME=albus DB_USER=albus_app DB_PASSWORD=albus_app DB_SSL=d
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `TELEMETRY_ENABLED` | `false` | Explicit `true` enables the initial telemetry module; no production edge route is added |
 | `PORT` | `8080` | Cloud Run sets it |
 | `DB_*` | see [packages/db](../../packages/db/README.md#environment) | required at startup, even though `/healthz` doesn't use them, so a misconfigured revision fails to start |
 | `GOOGLE_CLOUD_PROJECT` | unset | enables the `logging.googleapis.com/trace` field |

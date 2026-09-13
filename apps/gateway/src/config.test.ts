@@ -7,6 +7,7 @@ describe("configFromEnv", () => {
   it("defaults PORT to 8080, DB_SSL to require, and bounds every database wait", () => {
     expect(configFromEnv(DB)).toEqual({
       port: 8080,
+      telemetryEnabled: false,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
     });
@@ -20,6 +21,7 @@ describe("configFromEnv", () => {
 
   it.each([
     ["PORT", "http"],
+    ["TELEMETRY_ENABLED", "yes"],
     ["DB_CONNECT_TIMEOUT_MS", "0"],
     ["DB_QUERY_TIMEOUT_MS", "soon"],
   ])("rejects a bad %s", (name, value) => {
@@ -35,4 +37,9 @@ describe("configFromEnv", () => {
       expect(String(error)).not.toContain("s3cret-value");
     }
   });
+});
+
+it("enables telemetry only with the explicit true setting", () => {
+  expect(configFromEnv({ ...DB, TELEMETRY_ENABLED: "true" }).telemetryEnabled).toBe(true);
+  expect(configFromEnv({ ...DB, TELEMETRY_ENABLED: "false" }).telemetryEnabled).toBe(false);
 });

@@ -9,8 +9,9 @@ import { solve } from "./solver";
 it("agrees with exhaustive feasibility and minimum-cost enumeration in 120 generated catalogues", () => {
   let seed = 9281;
   const random = (n: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % n; };
+  const template = fixture();
   for (let trial = 0; trial < 120; trial++) {
-    const input = fixture();
+    const input = structuredClone(template);
     input.parts = input.parts.filter(p => ["C-001", "E-005", "P-001", "P-002"].includes(p.id));
     input.profiles = input.profiles.filter(p => p.source.id === "E-005");
     const profile = input.profiles[0]!;
@@ -55,4 +56,6 @@ it("agrees with exhaustive feasibility and minimum-cost enumeration in 120 gener
       if (conflict) expect(ids.includes("P-001") && ids.includes("P-002")).toBe(false);
     }
   }
-});
+// The repository runs all packages concurrently on a shared CI runner. This
+// is a correctness sweep, not a five-second performance benchmark.
+}, 30_000);

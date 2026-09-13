@@ -24,9 +24,12 @@
  * stream ends as soon as the build is claimed, deleted or re-owned.
  *
  * Admission is bounded per owner and per instance (StreamRegistry). A client
- * that stops reading is dropped: polling pauses while a write is waiting for
- * `drain`, and the stream is destroyed when the wait passes drainTimeoutMs or
- * the unsent buffer passes maxBufferedBytes.
+ * that stops reading is dropped: polling pauses while a write is still
+ * buffered, and the stream is destroyed when the wait passes drainTimeoutMs or
+ * the unsent buffer passes maxBufferedBytes. A reader that drains before the
+ * next poll is never waited on: the `drain` listener goes on at the moment the
+ * write buffers, and the next tick checks `writableNeedDrain` rather than a
+ * latched flag.
  *
  * A message committed after a later one was already polled (two writers
  * racing) would sort before the cursor. Each poll therefore re-reads a short
@@ -142,7 +145,8 @@ export function streamBuildEvents(input: {
   const raw = reply.raw;
 
   let closed = false;
-  let waitingForDrain = false;
+  /** Set the moment a write is buffered, never a tick later: see awaitDrain. */
+  let drainWait: { settled: Promise<"drained" | "timeout">; cancel: () => void } | null = null;
   let cursor: Cursor | undefined = resumeFrom;
   let lastState: BuildState | undefined;
   const sent = new Map<string, bigint>();
@@ -156,6 +160,9 @@ export function streamBuildEvents(input: {
     clearTimeout(pollTimer);
     clearTimeout(heartbeatTimer);
     clearTimeout(maxTimer);
+    // Clears the drain timer and listener, so no waiter outlives the stream.
+    drainWait?.cancel();
+    drainWait = null;
     lease.release();
     if (how === "destroy") raw.destroy();
     else raw.end();
@@ -169,9 +176,40 @@ export function streamBuildEvents(input: {
     close("destroy");
   };
 
+  /**
+   * Listens for `drain` straight away, because a healthy reader can drain
+   * before the next poll tick. Waiting until then would miss the event and
+   * then time out a connection that is perfectly fine.
+   */
+  const awaitDrain = () => {
+    let settle!: (result: "drained" | "timeout") => void;
+    const settled = new Promise<"drained" | "timeout">((resolve) => (settle = resolve));
+    const cleanUp = () => {
+      clearTimeout(timer);
+      raw.off("drain", onDrain);
+    };
+    const onDrain = () => {
+      cleanUp();
+      settle("drained");
+    };
+    const timer = setTimeout(() => {
+      cleanUp();
+      settle("timeout");
+    }, options.drainTimeoutMs);
+    raw.once("drain", onDrain);
+    return {
+      settled,
+      cancel: () => {
+        cleanUp();
+        settle("drained");
+      },
+    };
+  };
+
   const send = (chunk: string) => {
     if (closed) return;
-    if (!raw.write(chunk)) waitingForDrain = true;
+    // write() false means this chunk is buffered: start waiting for drain now.
+    if (!raw.write(chunk)) drainWait ??= awaitDrain();
     if (raw.writableLength > options.maxBufferedBytes) dropSlowClient("buffer");
   };
 
@@ -217,26 +255,20 @@ export function streamBuildEvents(input: {
     }
   };
 
-  const drained = () =>
-    new Promise<boolean>((resolve) => {
-      const onDrain = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        raw.off("drain", onDrain);
-        resolve(false);
-      }, options.drainTimeoutMs);
-      raw.once("drain", onDrain);
-    });
-
   const loop = async () => {
     if (closed) return;
-    if (waitingForDrain) {
-      const ok = await drained();
-      if (closed) return;
-      if (!ok) return dropSlowClient("drain timeout");
-      waitingForDrain = false;
+    if (drainWait) {
+      // The socket may have drained already, in which case the waiter has
+      // resolved (or is moot) and nothing should wait for a second drain.
+      if (!raw.writableNeedDrain) {
+        drainWait.cancel();
+        drainWait = null;
+      } else {
+        const result = await drainWait.settled;
+        drainWait = null;
+        if (closed) return;
+        if (result === "timeout") return dropSlowClient("drain timeout");
+      }
     }
     try {
       await poll();
@@ -249,7 +281,7 @@ export function streamBuildEvents(input: {
 
   const heartbeat = () => {
     if (closed) return;
-    if (!waitingForDrain) send(": ping\n\n");
+    if (!raw.writableNeedDrain) send(": ping\n\n");
     heartbeatTimer = setTimeout(heartbeat, options.heartbeatMs);
   };
 

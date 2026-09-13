@@ -700,6 +700,30 @@ describe("GET /v1/builds/:id/events", () => {
     b1.controller.abort();
   });
 
+  it("keeps a prompt reader open when a large write needs a drain between polls", async () => {
+    // 40 × 4000 chars buffers well past the socket's high-water mark but stays
+    // far under maxBufferedBytes, and the reader drains before the next poll.
+    const prompt = makeApp({ sse: { pollMs: 50, heartbeatMs: 5000, maxMs: 10_000, drainTimeoutMs: 300, maxBufferedBytes: 1024 * 1024 } }).app;
+    const origin = await listen(prompt);
+    const { body, cookie } = await createBuild(prompt, "prompt reader");
+    await handle.pool.query(
+      `INSERT INTO builds.build_messages (build_id, role, text) SELECT $1, 'assistant', repeat('y', 4000) FROM generate_series(1, 40)`,
+      [body.id],
+    );
+
+    const { events } = await readEvents(
+      `${origin}/v1/builds/${body.id}/events`,
+      { cookie },
+      // The message after the drain proves the loop kept polling.
+      [(e) => messageTexts(e).includes("after the drain")],
+      { when: (e) => messageTexts(e).length >= 41, run: async () => void (await reply(body.id, "after the drain")) },
+      8000,
+    );
+
+    expect(messageTexts(events)).toHaveLength(42); // the ask, 40 replies, and the one after the drain
+    expect(lines.filter((l) => l.message === "closing slow event stream")).toEqual([]);
+  });
+
   it("drops a client that stops reading once its unsent buffer passes the bound, and frees its slot", async () => {
     const slow = makeApp({ sse: { maxBufferedBytes: 64 * 1024, drainTimeoutMs: 1000 }, streamLimits: { perOwner: 1, perInstance: 10 } }).app;
     const origin = await listen(slow);

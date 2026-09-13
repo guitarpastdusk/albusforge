@@ -80,7 +80,7 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
 - A failed poll logs `build events poll failed` at WARNING, with database metadata only, and ends the stream.
 - **Authorization holds for the life of the stream.** Both poll queries are scoped to the owner hash the stream opened with and to an unclaimed build. The stream ends at the first poll after the build is claimed (`tenant_id` set, hash cleared), deleted or re-owned, and a message written after a claim is never sent.
 - **Admission is bounded.** At most `SSE_MAX_STREAMS_PER_OWNER` (3) open streams per anonymous owner and `SSE_MAX_STREAMS` (100) per instance. Beyond that the answer is `429 RATE_LIMITED` with `Retry-After: 5`, before the stream opens. A slot is released when the client disconnects, the stream ends, or on shutdown.
-- **Slow clients are dropped.** While a write waits for `drain`, polling and heartbeats pause. A client that doesn't drain within 30 s, or whose unsent buffer passes 1 MiB, is disconnected, and `closing slow event stream` is logged at INFO.
+- **Slow clients are dropped.** While a write is still buffered, polling and heartbeats pause. A client that doesn't drain within 30 s, or whose unsent buffer passes 1 MiB, is disconnected, and `closing slow event stream` is logged at INFO. A reader that drains before the next poll is never made to wait: the `drain` listener is attached as the write buffers, and the next tick tests the socket rather than a latched flag.
 
 ### Rate limits
 

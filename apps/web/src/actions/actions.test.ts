@@ -102,3 +102,33 @@ describe("sign-in outcomes", () => {
     expect(logged).not.toContain("you@example.com");
   });
 });
+
+const { ApiRequestError: GatewayRefusal } = await import("@/lib/api/core");
+const { actionFailure: loggedFailure } = await import("@/lib/action-errors");
+
+describe("a turn gateway refuses before accepting it", () => {
+  const refusingClient = (error: Error) => ({
+    get: vi.fn().mockResolvedValue({ messages: [] }),
+    mutate: vi.fn().mockRejectedValue(error),
+    credentialChange: vi.fn(),
+  });
+
+  it.each([
+    ["409 TURN_IN_PROGRESS", new GatewayRefusal(409, "TURN_IN_PROGRESS", "a reply is still being written"), /^Still working on the last reply\. Your message wasn’t sent/],
+    ["429 RATE_LIMITED", new GatewayRefusal(429, "RATE_LIMITED", "slow down"), /Your message wasn’t sent: wait a moment/],
+  ])("%s: says the message wasn't sent (so the draft comes back), with no check-again, and logs nothing", async (_label, error, message) => {
+    vi.mocked(loggedFailure).mockClear();
+    vi.mocked(sessionClient).mockResolvedValue(refusingClient(error) as never);
+    for (const result of [await sendBuildMessage("bld_1", "One more bed"), await startBuild("A soil sensor")]) {
+      expect(result).toEqual({ ok: false, message: expect.stringMatching(message) });
+    }
+    expect(loggedFailure).not.toHaveBeenCalled();
+  });
+
+  it("any other 409 is still a logged failure", async () => {
+    vi.mocked(loggedFailure).mockClear();
+    vi.mocked(sessionClient).mockResolvedValue(refusingClient(new GatewayRefusal(409, "conflict", "something else")) as never);
+    await expect(sendBuildMessage("bld_1", "hi")).resolves.toEqual({ ok: false, message: "failure" });
+    expect(loggedFailure).toHaveBeenCalledTimes(1);
+  });
+});

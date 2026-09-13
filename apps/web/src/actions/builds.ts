@@ -3,6 +3,7 @@
 import { BuildDetail, type ChatMessage, CreateBuildRequest, CreateBuildResponse, Id, MessageList, PostMessageRequest, routes } from "@albusforge/schema";
 import { z } from "zod";
 import { actionFailure } from "@/lib/action-errors";
+import { ApiRequestError } from "@/lib/api/core";
 import { sessionClient } from "@/lib/api/server";
 import type { SessionClient } from "@/lib/api/session-client";
 import { assistantCount, waitForReply, type BuildTranscript, type ConversationResult } from "@/lib/build-transcript";
@@ -21,6 +22,20 @@ const READ_FAILED_MESSAGE = "Your message was sent, but we couldn’t load the r
 /** The read before sending: nothing is sent yet, so failing it is a plain failed send. */
 const PRE_SEND_READ_TIMEOUT_MS = 10_000;
 const SinceInput = z.number().int().nonnegative();
+const TURN_IN_PROGRESS_MESSAGE = "Still working on the last reply. Your message wasn’t sent: send it again once the reply arrives.";
+const RATE_LIMITED_MESSAGE = "That’s a lot of messages at once. Your message wasn’t sent: wait a moment, then send it again.";
+
+/**
+ * Gateway refused the turn before accepting it: 429 RATE_LIMITED, or 409
+ * TURN_IN_PROGRESS while a reply is still being written. Nothing was sent, so
+ * the UI gives the text back. Expected, so not logged.
+ */
+function refusedTurn(error: unknown): { ok: false; message: string } | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status === 429) return { ok: false, message: RATE_LIMITED_MESSAGE };
+  if (error.status === 409 && error.code === "TURN_IN_PROGRESS") return { ok: false, message: TURN_IN_PROGRESS_MESSAGE };
+  return null;
+}
 
 async function readTranscript(client: SessionClient, buildId: string, signal?: AbortSignal): Promise<BuildTranscript> {
   const [build, { messages }] = await Promise.all([
@@ -76,7 +91,7 @@ export async function startBuild(askText: unknown): Promise<ConversationResult> 
     const { build_id } = await client.mutate("POST", routes.builds.create.path(), CreateBuildResponse, parsed.data);
     return await awaitReply("startBuild", client, build_id, 0, pendingTranscript(build_id, [], parsed.data.ask_text));
   } catch (error) {
-    return actionFailure("startBuild", error);
+    return refusedTurn(error) ?? actionFailure("startBuild", error);
   }
 }
 
@@ -100,7 +115,7 @@ export async function sendBuildMessage(buildId: unknown, text: unknown): Promise
       pendingTranscript(id.data, before.messages, parsed.data.text),
     );
   } catch (error) {
-    return actionFailure("sendBuildMessage", error);
+    return refusedTurn(error) ?? actionFailure("sendBuildMessage", error);
   }
 }
 

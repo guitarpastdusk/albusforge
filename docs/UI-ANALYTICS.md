@@ -104,13 +104,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-### 4.2 Gating Automatic Collection & Enhanced Measurement
-Default GA4 installations immediately fire pageviews on initial load and use Enhanced Measurement to capture browser History API updates (`pushState`, `replaceState`). This leaks private data:
-1. `BuildConversation.tsx` invokes `history.replaceState` when `/` turns into `/build/<UUID>`.
-2. Navigation into `/live/<device-UUID>` triggers history pageview listeners.
-3. Loading a tenant host (`<tenant>.albusforge.ai`) leaks tenant identifiers through `page_location`.
+### 4.2 Gating Script Injection, Consent, and History Collection
+A default GA4 snippet or standard `<GoogleAnalytics>` tag causes immediate data leakage:
+1. **Unconditional Script Injection:** Merely loading `gtag/js` on cold visits to private surfaces (e.g., direct entry to `https://acme.albusforge.ai/live/dev_123`) exposes the visitor's IP and tenant hostname to Google servers and creates tracking cookies prior to consent.
+2. **Enhanced Measurement History Tracking:** Even with `send_page_view: false`, GA4's default Enhanced Measurement captures browser History API changes (`pushState`, `replaceState`). When `BuildConversation.tsx` calls `history.replaceState` turning `/` into `/build/<UUID>`, or a user navigates to `/live/<device-UUID>`, GA automatically logs the full private URL.
 
-To enforce the boundary, **automatic collection must be completely disabled at the script level**:
+To enforce the boundary, **three controls must be applied together**:
+
+1. **Administrative Stream Config:** In the GA4 property settings under *Data Streams > Web Stream > Enhanced Measurement*, toggle **OFF** "Page changes based on browser history events" so the Google script does not automatically track SPA transitions.
+2. **Gated DOM Injection:** The `<Script>` tag is **not injected into the DOM** unless:
+   - `hasAnalyticsConsent() === true` (explicit user consent), AND
+   - `isPublicPath(pathname) === true` (current route is on the public allowlist).
+   On direct entry to `/live/*`, `/build/*`, or `<tenant>.albusforge.ai`, zero scripts are mounted and zero network requests occur.
+3. **Consent Mode v2 Defaults:** Before script initialization, default all consent types to `denied`.
 
 ```tsx
 // apps/web/src/components/analytics/AnalyticsProvider.tsx (Client Component)
@@ -118,8 +124,8 @@ To enforce the boundary, **automatic collection must be completely disabled at t
 
 import Script from "next/script";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
-import { isPublicPath, sanitizeUrl, hasAnalyticsConsent } from "@/lib/analytics";
+import { useEffect, useState } from "react";
+import { isPublicPath, hasAnalyticsConsent, trackSanitizedPageView } from "@/lib/analytics";
 
 export function AnalyticsProvider({
   measurementId,
@@ -129,28 +135,55 @@ export function AnalyticsProvider({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const [hasConsent, setHasConsent] = useState(false);
 
-  if (!measurementId) return <>{children}</>;
+  useEffect(() => {
+    // Read consent from storage / consent banner state
+    setHasConsent(hasAnalyticsConsent());
+  }, []);
+
+  // Strict gating: do NOT inject script if no measurement ID, no consent, or on a private route
+  const isEligible = Boolean(measurementId && hasConsent && isPublicPath(pathname));
+
+  useEffect(() => {
+    if (isEligible && measurementId) {
+      trackSanitizedPageView(measurementId, pathname);
+    }
+  }, [isEligible, measurementId, pathname]);
 
   return (
     <>
-      <Script
-        src={`https://www.googletagmanager.com/gtag/js?id=${measurementId}`}
-        strategy="afterInteractive"
-      />
-      <Script id="ga-init" strategy="afterInteractive">
-        {`
-          window.dataLayer = window.dataLayer || [];
-          function gtag(){dataLayer.push(arguments);}
-          gtag('js', new Date());
-          // CRITICAL: Disable automatic pageview collection
-          gtag('config', '${measurementId}', {
-            send_page_view: false,
-            cookie_domain: 'auto'
-          });
-        `}
-      </Script>
-      <RouteAnalyticsTracker measurementId={measurementId} pathname={pathname} />
+      {isEligible && (
+        <>
+          <Script
+            src={`https://www.googletagmanager.com/gtag/js?id=${measurementId}`}
+            strategy="afterInteractive"
+          />
+          <Script id="ga-init" strategy="afterInteractive">
+            {`
+              window.dataLayer = window.dataLayer || [];
+              function gtag(){dataLayer.push(arguments);}
+              // Consent Mode v2: enforce denied by default
+              gtag('consent', 'default', {
+                analytics_storage: 'denied',
+                ad_storage: 'denied',
+                ad_user_data: 'denied',
+                ad_personalization: 'denied',
+              });
+              gtag('js', new Date());
+              // Disable automatic pageview collection
+              gtag('config', '${measurementId}', {
+                send_page_view: false,
+                cookie_domain: 'auto',
+                restricted_data_processing: true
+              });
+              gtag('consent', 'update', {
+                analytics_storage: 'granted',
+              });
+            `}
+          </Script>
+        </>
+      )}
       {children}
     </>
   );
@@ -158,10 +191,10 @@ export function AnalyticsProvider({
 ```
 
 ### 4.3 Sanitized SPA Route Listener & Privacy Controls
-A custom client listener (`<RouteAnalyticsTracker>`) governs virtual pageviews on client-side route transitions:
+A custom client listener (`trackSanitizedPageView`) governs virtual pageviews on client-side route transitions:
 
 1. **Consent Check:** Verifies `hasAnalyticsConsent() === true` before dispatching any event.
-2. **Surface Eligibility:** Checks `isPublicPath(pathname)`. If the user is on `/build/*`, `/live/*`, or `/projects/*`, tracking is **halted** and no event is emitted.
+2. **Surface Eligibility:** Checks `isPublicPath(pathname)`. If the user transitions to `/build/*`, `/live/*`, or `/projects/*`, tracking is **halted** and no event is emitted.
 3. **URL & Referrer Normalization:**
    * **Hostname:** Strips tenant subdomains, normalizing `page_location` to `https://albusforge.ai${sanitizedPath}`.
    * **Path Sanitization:** Replaces dynamic entity IDs with template tokens (e.g. `/marketplace/[listingId]`).
@@ -183,6 +216,23 @@ export function isPublicPath(pathname: string): boolean {
   return PUBLIC_ROUTE_PATTERNS.some((pattern) => pattern.test(pathname));
 }
 
+export function sanitizeReferrer(referrer: string): string {
+  if (!referrer) return "";
+  try {
+    const url = new URL(referrer);
+    // If referrer was on a tenant subdomain or private route, strip it to apex root
+    if (url.hostname.endsWith(".albusforge.ai") && url.hostname !== "albusforge.ai") {
+      return "https://albusforge.ai/";
+    }
+    if (!isPublicPath(url.pathname)) {
+      return "https://albusforge.ai/";
+    }
+    return `https://albusforge.ai${url.pathname}`;
+  } catch {
+    return "";
+  }
+}
+
 export function trackSanitizedPageView(measurementId: string, pathname: string) {
   if (!hasAnalyticsConsent() || !isPublicPath(pathname)) {
     return;
@@ -191,11 +241,13 @@ export function trackSanitizedPageView(measurementId: string, pathname: string) 
   // Normalize host to apex to prevent tenant leakage
   const sanitizedLocation = `https://albusforge.ai${pathname}`;
 
-  window.gtag("event", "page_view", {
-    page_title: document.title,
-    page_location: sanitizedLocation,
-    page_referrer: sanitizeReferrer(document.referrer),
-  });
+  if (typeof window !== "undefined" && typeof (window as any).gtag === "function") {
+    (window as any).gtag("event", "page_view", {
+      page_title: document.title,
+      page_location: sanitizedLocation,
+      page_referrer: sanitizeReferrer(document.referrer),
+    });
+  }
 }
 ```
 
@@ -204,10 +256,10 @@ Before deploying any UI tracking integration, the following automated regression
 
 | Scenario | Trigger / Route | Expected Verification |
 |---|---|---|
-| **Direct Private Entry** | Cold load on `https://acme.albusforge.ai/live/dev_123` | Zero network calls to `google-analytics.com`; `gtag` emits no events; tenant slug and device UUID absent from all headers. |
+| **Direct Private Entry** | Cold load on `https://acme.albusforge.ai/live/dev_123` | `<Script>` tags not mounted in DOM; zero network calls to `google-analytics.com` or `googletagmanager.com`; `gtag` undefined; tenant slug and device UUID absent from all headers. |
 | **Public-to-Private SPA Transition** | User enters prompt on `/` $\rightarrow$ `replaceState` to `/build/bld_456` | Initial `/` logs sanitized pageview (if consent granted); transition to `/build/*` triggers zero network requests or history events. |
-| **Private-to-Public Return** | User navigates from `/live` back to `/docs` | Pageview tracking re-engages cleanly on `/docs` with apex location (`https://albusforge.ai/docs`) and empty/sanitized referrer. |
-| **Consent Denial** | User rejects or has not accepted analytics cookies | All tracking functions no-op; no cookies (`_ga`) created. |
+| **Private-to-Public Return** | User navigates from `/live` back to `/docs` | Pageview tracking re-engages cleanly on `/docs` with apex location (`https://albusforge.ai/docs`) and sanitized referrer. |
+| **Consent Denial** | User rejects or has not accepted analytics cookies | `<Script>` tags not rendered; all tracking functions no-op; no cookies (`_ga`) created. |
 
 ---
 
@@ -225,7 +277,8 @@ Before deploying any UI tracking integration, the following automated regression
 
 1. **Phase 1 — Public Funnel GA4 (Immediate, if requested):**
    * Implement `<AnalyticsProvider>` reading server runtime `process.env.GA_MEASUREMENT_ID` to preserve [ADR 0005](adr/0005-ci-owns-images-terraform-owns-shape.md).
-   * Disable automatic pageviews (`send_page_view: false`) and history-change tracking.
+   * Disable GA4 Enhanced Measurement history-change tracking in stream settings.
+   * Gate `<Script>` DOM injection behind `hasAnalyticsConsent() && isPublicPath(pathname)`.
    * Restrict pageviews and events to the whitelisted public surface via `trackSanitizedPageView`.
    * Bind `GA_MEASUREMENT_ID` via Terraform in `infra/env/apps.tf` for production only.
 

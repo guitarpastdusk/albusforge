@@ -5,8 +5,9 @@ import { fetchTransport, request } from "./core";
  * Browser calls are same-origin: the load balancer sends /v1/* to gateway on
  * every hostname (ADR 0007), so there is no base URL and no CORS.
  *
- * No mock mode here. Nothing in the browser calls the API yet; when the first
- * client-side call lands, add a dev-only /v1 handler that serves src/mocks.
+ * No mock mode here, and no current callers: interactive writes go through
+ * Server Functions in src/actions, which use the server client (and so mock
+ * mode, the internal token and the cookie allowlist).
  */
 const transport = fetchTransport("", {}, "same-origin");
 

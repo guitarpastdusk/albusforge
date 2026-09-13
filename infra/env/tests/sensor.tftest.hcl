@@ -83,3 +83,67 @@ run "narration_rejects_unsupported_model" {
   }
   expect_failures = [var.ask_model]
 }
+
+run "observability_disabled_until_acceptance" {
+  command = plan
+  assert {
+    condition     = !google_monitoring_alert_policy.telemetry_heartbeat.enabled && !google_monitoring_alert_policy.telemetry_maintenance_heartbeat.enabled && alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : !policy.enabled])
+    error_message = "Do not page on paused initial processing."
+  }
+  assert {
+    condition     = !google_monitoring_alert_policy.sensor_sql_connections.enabled
+    error_message = "Connection alert needs a measured capacity threshold."
+  }
+  assert {
+    condition     = length(jsondecode(google_monitoring_dashboard.sensor.dashboard_json).gridLayout.widgets) == 12
+    error_message = "Expected ingestion, queue, SQL and execution evidence charts."
+  }
+}
+
+run "observability_active_with_schedules" {
+  command = plan
+  variables {
+    telemetry_schedules_enabled           = true
+    sensor_sql_connection_alert_threshold = 65
+  }
+  assert {
+    condition     = google_monitoring_alert_policy.telemetry_heartbeat.enabled && google_monitoring_alert_policy.telemetry_maintenance_heartbeat.enabled && alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : policy.enabled])
+    error_message = "Processing alert policies must follow schedule activation."
+  }
+  assert {
+    condition     = google_monitoring_alert_policy.sensor_sql_connections.enabled && google_monitoring_alert_policy.sensor_sql_connections.conditions[0].condition_threshold[0].threshold_value == 65
+    error_message = "Apply only the explicitly reviewed connection ceiling."
+  }
+}
+
+run "default_presence_is_exact_not_a_percentile" {
+  command = plan
+  assert {
+    condition     = endswith(google_logging_metric.telemetry_default_present.filter, "AND jsonPayload.default_rows>0") && google_logging_metric.telemetry_default_present.metric_descriptor[0].value_type == "INT64"
+    error_message = "Zero rows must be excluded before counting; default presence is not a distribution."
+  }
+  assert {
+    condition     = endswith(google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].filter, "user/${google_logging_metric.telemetry_default_present.name}\"") && google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].aggregations[0].per_series_aligner == "ALIGN_SUM" && google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].threshold_value == 0
+    error_message = "Default-row alert must test positive snapshot counts, not interpolated histogram buckets."
+  }
+}
+
+run "all_application_cutoffs_use_exact_counters" {
+  command = plan
+  assert {
+    condition     = alltrue([for metric in google_logging_metric.telemetry_breach : metric.metric_descriptor[0].value_type == "INT64"]) && google_logging_metric.ingest_pool_wait_breach.metric_descriptor[0].value_type == "INT64"
+    error_message = "Breach metrics must count exact matches instead of interpolating distributions."
+  }
+  assert {
+    condition     = endswith(google_logging_metric.telemetry_breach["dirty_hours"].filter, "jsonPayload.dirty_hours>10000") && endswith(google_logging_metric.telemetry_breach["oldest_dirty_seconds"].filter, "jsonPayload.oldest_dirty_seconds>900") && endswith(google_logging_metric.ingest_pool_wait_breach.filter, "jsonPayload.pool_wait_ms>500")
+    error_message = "Operational cutoffs must be exact log comparisons, unaffected by bucket interpolation."
+  }
+  assert {
+    condition     = alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : policy.conditions[0].condition_threshold[0].threshold_value == 0 && policy.conditions[0].condition_threshold[0].aggregations[0].per_series_aligner == "ALIGN_SUM" && policy.conditions[0].condition_threshold[0].evaluation_missing_data == "EVALUATION_MISSING_DATA_INACTIVE"])
+    error_message = "Backlog alerts must use exact breach counts with missing data inactive."
+  }
+  assert {
+    condition     = endswith(google_monitoring_alert_policy.ingest_pool_wait.conditions[0].condition_threshold[0].filter, "user/${google_logging_metric.ingest_pool_wait_breach.name}\"") && google_monitoring_alert_policy.ingest_pool_wait.conditions[0].condition_threshold[0].aggregations[0].per_series_aligner == "ALIGN_SUM" && google_monitoring_alert_policy.ingest_pool_wait.conditions[0].condition_threshold[0].threshold_value == 0
+    error_message = "Pool wait must alert on the exact breach counter, not an estimated percentile."
+  }
+}

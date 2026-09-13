@@ -9,6 +9,8 @@ import { createDb } from "./client.js";
 import { runMigrations, MIGRATIONS_FOLDER } from "./migrate.js";
 import { maintainTelemetryStorage, processTelemetryRollups } from "./telemetry-storage.js";
 
+import { readTelemetryHealth } from "./telemetry-health.js";
+
 let container: StartedPostgreSqlContainer;
 let owner: ReturnType<typeof createDb>;
 let app: ReturnType<typeof createDb>;
@@ -139,4 +141,18 @@ it("requeues an ingest that waits while a worker deletes its claimed dirty marke
     await processTelemetryRollups(app.pool);
     expect((await rows("SELECT n FROM telemetry.rollups WHERE device_id=$1 AND resolution='1h'"))[0].n).toBe("2");
   } finally { await worker.query("ROLLBACK"); worker.release(); await pending?.catch(() => {}); }
+});
+
+it("reports backlog age, default partition rows and empty health after rollup", async () => {
+  expect(await readTelemetryHealth(app.pool)).toEqual({ dirty_hours: 0, oldest_dirty_seconds: 0, default_rows: 0 });
+  const backfill = new Date(hour.getTime() - 500 * 86400000);
+  await insert([{ value: 5, offset: 0 }, { value: 6, offset: 1 }], 1, backfill);
+  await owner.pool.query("UPDATE telemetry.dirty_hours SET created_at=now()-interval '20 minutes'");
+  const queued = await readTelemetryHealth(app.pool);
+  expect(queued.dirty_hours).toBe(1);
+  expect(queued.default_rows).toBe(2);
+  expect(queued.oldest_dirty_seconds).toBeGreaterThanOrEqual(1200);
+  expect(queued.oldest_dirty_seconds).toBeLessThan(1260);
+  await processTelemetryRollups(app.pool);
+  expect(await readTelemetryHealth(app.pool)).toEqual({ dirty_hours: 0, oldest_dirty_seconds: 0, default_rows: 2 });
 });

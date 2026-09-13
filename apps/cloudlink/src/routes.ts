@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+import type { Log } from "./app.js";
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { Pool } from "pg";
@@ -9,7 +11,7 @@ class IngestError extends Error {
 }
 
 /** All tenant attribution comes from the authenticated device, never the wire. */
-export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8) {
+export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8, log: Log = () => {}) {
   app.setErrorHandler((error, _request, reply) => {
     // Never log driver errors: they can contain values from parameterized SQL.
     const code = (error as { statusCode?: number }).statusCode;
@@ -27,7 +29,18 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
     const canonical = JSON.stringify(envelope);
     const fingerprint = tokenHash(canonical);
     const received = now();
-    const client = await pool.connect();
+    const started = performance.now();
+    const observeWait = (outcome: "acquired" | "failed") => {
+      // Logging must never strand a successfully acquired lease or replace its error.
+      try { log({ severity: outcome === "acquired" ? "INFO" : "WARNING", event: "ingest_pool_wait", pool_wait_ms: performance.now() - started, outcome }); } catch { /* request processing owns the lease */ }
+    };
+    const client = await pool.connect().then((lease) => {
+      observeWait("acquired");
+      return lease;
+    }, (error: unknown) => {
+      observeWait("failed");
+      throw error;
+    });
     let discard = false;
     try {
       await client.query("BEGIN");

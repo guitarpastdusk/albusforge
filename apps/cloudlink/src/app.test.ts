@@ -27,7 +27,25 @@ it("bounds admission, keeps health independent and releases capacity after failu
     expect((await first).statusCode).toBe(503);
     expect((await app.inject(request)).json().error.code).toBe("storage_unavailable");
     expect(connect).toHaveBeenCalledTimes(2);
+    const waits = logs.filter((entry) => entry.event === "ingest_pool_wait");
+    expect(waits).toHaveLength(2);
+    expect(waits.every((entry) => entry.outcome === "failed" && typeof entry.pool_wait_ms === "number" && entry.pool_wait_ms >= 0)).toBe(true);
     expect(JSON.stringify(logs)).not.toContain("private database detail");
     expect(JSON.stringify(logs)).not.toContain("A".repeat(43));
+  } finally { await app.close(); }
+});
+
+it("records successful pool acquisition without credential or database labels", async () => {
+  const logs: Record<string, unknown>[] = [];
+  const release = vi.fn();
+  const client = { query: vi.fn().mockResolvedValue({ rows: [] }), release };
+  const app = buildApp({ pool: { connect: async () => client } as unknown as Pool, log: (entry) => logs.push(entry) });
+  try {
+    const response = await app.inject({ method: "POST", url: "/ingest/v1", headers: { authorization: `Bearer ${"A".repeat(43)}` },
+      payload: { v: 1, dev: randomUUID(), seq: 1, ts: 1789300000, r: [{ c: "temperature_c", t: -60, v: 4 }], st: { up_s: 1, health: ["OK"] } } });
+    expect(response.statusCode).toBe(401);
+    const wait = logs.find((entry) => entry.event === "ingest_pool_wait");
+    expect(wait).toEqual({ severity: "INFO", event: "ingest_pool_wait", pool_wait_ms: expect.any(Number), outcome: "acquired" });
+    expect(release).toHaveBeenCalledTimes(1);
   } finally { await app.close(); }
 });

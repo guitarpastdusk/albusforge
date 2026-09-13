@@ -6,7 +6,7 @@ See [TELEMETRY-INGEST.md](../../docs/TELEMETRY-INGEST.md) for the wire contract,
 
 - `src/app.ts`: process health, request IDs, redacted logs and route registration.
 - `src/routes.ts`: bounded admission and atomic ingestion; depends on a generic `pg.Pool`.
-- `src/database.ts`: plain PostgreSQL locally; private-IP Cloud SQL connector in Cloud Run.
+- `src/database.ts`: direct PostgreSQL through the shared DB library; private VPC networking and TLS in Cloud Run.
 - `src/server.ts`: configuration, startup and graceful shutdown.
 - `Dockerfile`: independent non-root Node image; `docker-cloudlink` CI tests the built image with PostgreSQL.
 

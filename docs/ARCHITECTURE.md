@@ -616,7 +616,7 @@ The wire envelope is the transport contract: devices upload authenticated `POST 
 
 **M6a implementation (2026-09-13, branch `m6/telemetry-ingest`, pending review/merge):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
-Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small connector-backed SQL pool and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
+Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
 
 Production BuildPlan provisioning, partitioning/retention, rollups, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 
@@ -759,7 +759,7 @@ Runtime is **Cloud Run services and jobs, no GKE**. Managed GCP wherever it exis
 | `intake`, `matcher`, `marketplace` | Cloud Run, internal ingress, scale to zero |
 | `codegen` | Cloud Run worker, min 1, CPU always allocated — the always-on BullMQ consumer |
 | `fulfillment` | Cloud Run internal; mock adapters for MVP |
-| `cloudlink` | Standalone HTTPS ingest Cloud Run service (ADR 0003); small SQL connector pool, separate NEG/Armor, prod warm floor and connection-budgeted instance cap (§7.6). Terraform owned by infra; MQTT deferred |
+| `cloudlink` | Standalone HTTPS ingest Cloud Run service (ADR 0003); small direct PostgreSQL pool, separate NEG/Armor, prod warm floor and connection-budgeted instance cap (§7.6). Terraform owned by infra; MQTT deferred |
 | `workers/bodygen` | Cloud Run Job, 2 vCPU / 4 GiB, Python + CadQuery |
 | `workers/fwbuild` | Cloud Run Job, 4 vCPU / 8 GiB, PlatformIO, cache warmed from GCS |
 | Postgres 16 | Cloud SQL, private IP, direct VPC egress, no proxy sidecar |

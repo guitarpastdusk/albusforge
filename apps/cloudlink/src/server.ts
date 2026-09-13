@@ -5,7 +5,7 @@ import { connectDatabase } from "./database.js";
 const log = (severity: string, message: string) => console.log(JSON.stringify({ severity, message }));
 async function main() {
   const config = configFromEnv();
-  const database = await connectDatabase(config);
+  const database = connectDatabase(config);
   database.pool.on("error", () => log("ERROR", "idle database connection failed"));
   const app = buildApp({ pool: database.pool, maxInflight: config.maxInflight });
   let closing = false;

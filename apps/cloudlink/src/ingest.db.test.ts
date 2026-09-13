@@ -244,7 +244,7 @@ it('deployed acceptance quota fixture seeds and audits with app grants and prese
   const dir = await mkdtemp(join(tmpdir(), 'acceptance-quota-db-'));
   const file = join(dir, 'fixture.json');
   const run = (phase: string) => promisify(execFile)('pnpm', ['exec', 'tsx', 'scripts/acceptance.ts', phase, file, 'staging'], {
-    env: { ...cliEnv, ACCEPTANCE_SQL_EXPORT: '', ACCEPTANCE_PURPOSE: 'quota', ACCEPTANCE_ACTOR_LIMIT: '20', ACCEPTANCE_MODEL_DISABLED: 'verified' },
+    env: { ...cliEnv, ACCEPTANCE_SQL_EXPORT: '', ACCEPTANCE_PURPOSE: 'quota', ACCEPTANCE_ACTOR_LIMIT: '20', ACCEPTANCE_TENANT_LIMIT: '100', ACCEPTANCE_GLOBAL_LIMIT: '200', ACCEPTANCE_MODEL_DISABLED: 'verified' },
   });
   try {
     await run('provision');

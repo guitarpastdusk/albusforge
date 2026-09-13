@@ -7,7 +7,7 @@ import { z } from 'zod';
 
 const Fixture = z.strictObject({ purpose: z.enum(['pipeline','quota']).default('pipeline'), environment: z.enum(['staging','prod']), origin: z.enum(['https://staging.albusforge.ai','https://albusforge.ai']), run: z.uuid(), tenant: z.uuid(), otherTenant: z.uuid(), actor: z.uuid(), otherActor: z.uuid(), device: z.uuid(), token: z.string().regex(/^[\w-]{43}$/), session: z.string().regex(/^[\w-]{43}$/), otherSession: z.string().regex(/^[\w-]{43}$/), ts: z.number().int() });
 const [phase, file, environment] = process.argv.slice(2);
-if (!file || !['provision','ingest','verify','ask','audit','cleanup','quota-seed','quota-check','quota-audit','load','verify-cleanup'].includes(phase ?? '')) throw new Error('Usage: acceptance.ts provision|ingest|verify|ask|audit|cleanup|quota-seed|quota-check|quota-audit|load|verify-cleanup /private/path/fixture.json staging|prod');
+if (!file || !['provision','ingest','verify','ask','audit','cleanup','quota-seed','quota-check','quota-confirm','quota-audit','load','verify-cleanup'].includes(phase ?? '')) throw new Error('Usage: acceptance.ts provision|ingest|verify|ask|audit|cleanup|quota-seed|quota-check|quota-confirm|quota-audit|load|verify-cleanup /private/path/fixture.json staging|prod');
 if (!['staging','prod'].includes(environment ?? '')) throw new Error('Explicit staging or prod is required');
 if (process.env.ACCEPTANCE_SQL_EXPORT && !['provision','cleanup','quota-seed','quota-audit'].includes(phase!)) throw new Error('SQL export cannot be combined with HTTP or audit phases');
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -46,10 +46,10 @@ if (phase === 'provision') {
 } else {
   const info = await stat(file); if ((info.mode & 0o077)!==0) throw new Error('Manifest must be private (0600)');
   const f = Fixture.parse(JSON.parse(await readFile(file,'utf8'))); if (f.environment !== environment || f.origin !== (environment==='staging'?'https://staging.albusforge.ai':'https://albusforge.ai')) throw new Error('Environment mismatch');
-  const statusCounts:Record<string,number>={};
+  const statusCounts:Record<string,number>={}; let requestId:string|undefined;
   async function request(path: string, expected: number | number[], body?: unknown, auth = f.session, deviceAuth = false) {
     const r = await fetch(new URL(path,f.origin),{method:body===undefined?'GET':'POST',headers:{'content-type':'application/json',...(auth ? deviceAuth?{authorization:`Bearer ${auth}`}:{cookie:`${SESSION_COOKIE}=${auth}`} : {})},body:body===undefined?undefined:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(40000)});
-    statusCounts[r.status]=(statusCounts[r.status]??0)+1;
+    statusCounts[r.status]=(statusCounts[r.status]??0)+1; requestId=r.headers.get('x-request-id')??undefined;
     if (!(Array.isArray(expected)?expected:[expected]).includes(r.status)) { await r.body?.cancel(); throw new Error(`HTTP status mismatch: expected ${expected}, received ${r.status}`); }
     const reader=r.body?.getReader(); if (!reader) return null;
     const chunks: Uint8Array[]=[]; let size=0;
@@ -71,8 +71,20 @@ if (phase === 'provision') {
   } else if (phase==='verify-cleanup') {
     await request(series,401); await request(series,401,undefined,f.otherSession);
     await request('/ingest/v1',401,{v:1,dev:f.device,seq:1,ts:f.ts,r:[{c:'temperature_c',t:-60,v:20}],st:{rssi:-62,up_s:60,health:['OK']}},f.token,true);
+  } else if (phase==='quota-confirm') {
+    const record = z.strictObject({run:z.uuid(),environment:z.enum(['staging','prod']),request_id:z.uuid()}).parse(JSON.parse(await readFile(z.string().min(1).parse(process.env.ACCEPTANCE_QUOTA_REQUEST),'utf8')));
+    if(record.run!==f.run || record.environment!==f.environment) throw new Error('Correlation mismatch');
+    const entries=z.array(z.object({resource:z.object({type:z.literal('cloud_run_revision'),labels:z.object({project_id:z.string(),service_name:z.literal('ask')})}),jsonPayload:z.object({event:z.literal('sensor_ask_quota_rejected'),request_id:z.uuid(),scope:z.enum(['actor','tenant','global'])})})).parse(JSON.parse(await readFile(z.string().min(1).parse(process.env.ACCEPTANCE_QUOTA_PROOF),'utf8')));
+    if(entries.length!==1 || entries[0]!.resource.labels.project_id!==`albusforge-${f.environment}` || entries[0]!.jsonPayload.request_id!==record.request_id || entries[0]!.jsonPayload.scope!=='actor') throw new Error('Durable actor quota remains unproven');
   } else if (phase==='quota-check') {
-    await request(`/v1/devices/${f.device}/ask`,429,{text:'What is the average temperature?',channel:'temperature_c',from,to});
+    const path=z.string().min(1).parse(process.env.ACCEPTANCE_QUOTA_REQUEST);
+    // Reserve the artifact before sending; never overwrite a previous paid/request correlation.
+    const handle=await open(path,'wx',0o600);
+    try { await request(`/v1/devices/${f.device}/ask`,429,{text:'What is the average temperature?',channel:'temperature_c',from,to});
+      await handle.writeFile(JSON.stringify({run:f.run,environment:f.environment,request_id:z.uuid().parse(requestId)})); await handle.sync();
+    } finally { await handle.close(); }
+    console.log(JSON.stringify({phase,run:f.run,request_id:requestId,status:'unproven_requires_durable_event'}));
+    process.exitCode=2;
   } else if (phase==='ingest') {
     for (const [seq,t,v] of [[1,-60,20],[1,-60,20],[2,-120,10]]) await request('/ingest/v1',202,{v:1,dev:f.device,seq,ts:f.ts,r:[{c:'temperature_c',t,v}],st:{rssi:-62,up_s:60,health:['OK']}},f.token,true);
     await request('/ingest/v1',401,{v:1,dev:f.device,seq:3,ts:f.ts,r:[{c:'temperature_c',t:-60,v:99}],st:{rssi:-62,up_s:60,health:['OK']}},secret(),true);
@@ -84,14 +96,18 @@ if (phase === 'provision') {
   } else if (phase==='ask') {
     const path = `/v1/devices/${f.device}/ask`, body = {text:'What is the average temperature?',channel:'temperature_c',from,to};
     await request(path,401,body,''); await request(path,404,body,f.otherSession);
-    const result = await request(path,200,body); if (!result.message?.text?.includes('sample mean 15°C.') || !result.message.text.includes('2 readings')) throw new Error('Ask numerical evidence mismatch');
+    const result = await request(path,200,body); if (! /sample mean 15\s+°C\./u.test(result.message?.text??'') || !result.message.text.includes('2 readings')) throw new Error('Ask numerical evidence mismatch');
     // Print only correlation ID; inspect provider mode/usage through the scoped ledger audit.
     console.log(JSON.stringify({request_id:result.message.id}));
   } else await database(async c => {
     if (phase==='quota-seed' || phase==='quota-audit') {
       const limit=z.coerce.number().int().min(1).max(20).parse(process.env.ACCEPTANCE_ACTOR_LIMIT);
+      const tenantLimit=z.coerce.number().int().min(limit+1).max(100000).parse(process.env.ACCEPTANCE_TENANT_LIMIT);
+      const globalLimit=z.coerce.number().int().min(tenantLimit+1).max(1000000).parse(process.env.ACCEPTANCE_GLOBAL_LIMIT);
       if (process.env.ACCEPTANCE_MODEL_DISABLED!=='verified') throw new Error('Coordinator must verify deployed model disabled');
       await c.query('BEGIN'); try {
+        await c.query('SELECT pg_advisory_xact_lock(1936028275,1)');
+        await c.query("SELECT 1/(CASE WHEN count(*)+$2<$3 AND count(*) FILTER(WHERE tenant_id=$1)+$2<$4 THEN 1 ELSE 0 END) FROM telemetry.sensor_ask_requests WHERE created_at>statement_timestamp()-interval '24 hours'",[f.tenant,phase==='quota-seed'?limit:0,globalLimit,tenantLimit]);
         if (phase==='quota-seed') {
           // Must be an unused isolated actor: no existing reservations or model activity.
           await c.query('SELECT 1/(CASE WHEN EXISTS(SELECT 1 FROM telemetry.sensor_ask_requests WHERE actor_id=$1) THEN 0 ELSE 1 END)',[f.actor]);
@@ -113,6 +129,6 @@ if (phase === 'provision') {
       } catch { await c.query('ROLLBACK'); throw new Error('Cleanup failed'); }
     }
   });
-  console.log(JSON.stringify({phase,run:f.run,status:process.env.ACCEPTANCE_SQL_EXPORT?'prepared_not_executed':'pass'}));
+  if (phase!=='quota-check') console.log(JSON.stringify({phase,run:f.run,status:process.env.ACCEPTANCE_SQL_EXPORT?'prepared_not_executed':'pass'}));
 }
 } catch { console.error(JSON.stringify({phase,status:'fail',message:'Acceptance failed; credentials and response bodies suppressed. Retain private manifest for scoped cleanup.'})); process.exitCode=1; }

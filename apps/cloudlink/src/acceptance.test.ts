@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -32,7 +32,7 @@ describe('deployment acceptance preparation', () => {
       const run=(phase:string,output:string,extra:Record<string,string>={})=>spawnSync('pnpm',['exec','tsx',resolve('scripts/acceptance.ts'),phase,file,'staging'],{encoding:'utf8',env:{...process.env,ACCEPTANCE_SQL_EXPORT:output,...extra}});
       expect(run('provision',join(dir,'provision.json'),{ACCEPTANCE_PURPOSE:'quota'}).status).toBe(0);
       expect(run('quota-seed',join(dir,'missing.json')).status).toBe(1);
-      const config={ACCEPTANCE_ACTOR_LIMIT:'20',ACCEPTANCE_MODEL_DISABLED:'verified'};
+      const config={ACCEPTANCE_ACTOR_LIMIT:'20',ACCEPTANCE_TENANT_LIMIT:'100',ACCEPTANCE_GLOBAL_LIMIT:'200',ACCEPTANCE_MODEL_DISABLED:'verified'};
       const output=join(dir,'seed.json'); expect(run('quota-seed',output,config).status).toBe(0);
       const statements=JSON.parse(readFileSync(output,'utf8')).statements;
       expect(statements.filter((q:{text:string})=>q.text.startsWith('INSERT INTO telemetry.sensor_ask_requests'))).toHaveLength(20);
@@ -40,6 +40,28 @@ describe('deployment acceptance preparation', () => {
       const audit=join(dir,'audit.json'); expect(run('quota-audit',audit,config).status).toBe(0);
       expect(readFileSync(audit,'utf8')).toContain('model_attempted');
       expect(run('quota-seed',join(dir,'oversize.json'),{...config,ACCEPTANCE_ACTOR_LIMIT:'21'}).status).toBe(1);
+    }finally{rmSync(dir,{recursive:true,force:true});}
+  });
+  it('accepts the real Ask renderer through the gateway and leaves admission BUSY unproven',()=>{
+    const dir=mkdtempSync(join(tmpdir(),'sensor-http-'));
+    try {
+      for(const mode of ['ask','busy']) {
+        const file=join(dir,`${mode}.json`), correlation=join(dir,`${mode}-request.json`);
+        const prepared=spawnSync('pnpm',['exec','tsx','scripts/acceptance.ts','provision',file,'staging'],{encoding:'utf8',env:{...process.env,ACCEPTANCE_PURPOSE:mode==='busy'?'quota':'pipeline',ACCEPTANCE_SQL_EXPORT:join(dir,`${mode}-sql.json`)}});
+        expect(prepared.status).toBe(0);
+        const result=spawnSync('pnpm',['exec','tsx','src/acceptance-http-fixture.ts',mode,file],{encoding:'utf8',env:{...process.env,ACCEPTANCE_SQL_EXPORT:'',ACCEPTANCE_QUOTA_REQUEST:correlation}});
+        expect(result.status,result.stderr).toBe(mode==='busy'?2:0);
+        if(mode==='busy') {
+          expect(result.stdout).toContain('unproven_requires_durable_event');
+          expect(result.stdout).not.toContain('"status":"pass"');
+          const request=JSON.parse(readFileSync(correlation,'utf8')); const proof=join(dir,'proof.json');
+          const confirm=()=>spawnSync('pnpm',['exec','tsx','scripts/acceptance.ts','quota-confirm',file,'staging'],{encoding:'utf8',env:{...process.env,ACCEPTANCE_SQL_EXPORT:'',ACCEPTANCE_QUOTA_REQUEST:correlation,ACCEPTANCE_QUOTA_PROOF:proof}});
+          writeFileSync(proof,'[]');expect(confirm().status).toBe(1);
+          const entry={resource:{type:'cloud_run_revision',labels:{project_id:'albusforge-staging',service_name:'ask'}},jsonPayload:{event:'sensor_ask_quota_rejected',request_id:request.request_id,scope:'global'}};
+          writeFileSync(proof,JSON.stringify([entry]));expect(confirm().status).toBe(1);
+          entry.jsonPayload.scope='actor';writeFileSync(proof,JSON.stringify([entry]));expect(confirm().status).toBe(0);
+        }
+      }
     }finally{rmSync(dir,{recursive:true,force:true});}
   });
 });

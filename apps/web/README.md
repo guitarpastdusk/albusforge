@@ -27,6 +27,7 @@ All data goes through [`src/lib/api`](src/lib/api/) and is validated against [`@
 | [`src/mocks/`](src/mocks/) | mock API responses (the prototype's data) |
 | [`src/styles/`](src/styles/) | design tokens |
 | `Dockerfile` | production image; build from the **repo root** (`docker build -f apps/web/Dockerfile .`) |
+| `turbo.json` | makes `build` depend on `typecheck` — both write `.next` (`next typegen`, `next build`), so they must never run at once |
 
 ## Not yet
 

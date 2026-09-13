@@ -29,4 +29,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm turbo run typecheck lint test build
+      # Two steps, not one turbo invocation: web's typecheck (`next typegen`) and
+      # build (`next build`) both write apps/web/.next. apps/web/turbo.json also
+      # makes build depend on typecheck, so the build step reuses step one's
+      # typecheck from the local turbo cache.
+      - name: Typecheck, lint, test
+        run: pnpm turbo run typecheck lint test
+
+      - name: Build
+        run: pnpm turbo run build

@@ -15,12 +15,17 @@ const DEVICE_REPLY_MS = 800;
 const latency = (ms: number) =>
   process.env.NODE_ENV === "test" ? Promise.resolve() : new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const jsonResponse = (status: number, json: unknown): TransportResponse => ({
+const jsonResponse = (status: number, json: unknown, setCookies: readonly string[] = []): TransportResponse => ({
   status,
   contentType: "application/json",
   isJson: true,
   json,
+  setCookies,
 });
+
+/** The cookies gateway sets (PORTAL.md §5, ADR 0008), so mock mode exercises the same relay as live. */
+const COOKIE_ATTRIBUTES = "Path=/; Secure; HttpOnly; SameSite=Lax";
+const MONTH = 30 * 24 * 60 * 60;
 
 const ok = (json: unknown): TransportResponse => jsonResponse(200, json);
 
@@ -50,7 +55,10 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       const code = field(body, "code");
       // Mock mode: any 6 digits verify.
       if (!email || !code || !/^\d{6}$/.test(code)) return badRequest("email and a 6-digit code are required");
-      return ok(data.verifiedSession(email));
+      return jsonResponse(200, data.verifiedSession(email), [
+        `__Host-albus_session=mock-session; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`,
+        `__Host-albus_anon=; ${COOKIE_ATTRIBUTES}; Max-Age=0`,
+      ]);
     },
   ],
   [routes.me.get, () => ok(data.me())],
@@ -61,7 +69,8 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       const ask = field(body, "ask_text")?.trim();
       if (!ask) return badRequest("ask_text is required");
       await latency(TYPING_MS);
-      return jsonResponse(201, data.createBuild(ask));
+      const created = data.createBuild(ask);
+      return jsonResponse(201, created, [`__Host-albus_anon=mock-anon-${created.build_id}; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`]);
     },
   ],
   [routes.builds.get, ([id = ""]) => orNotFound(`build ${id}`, data.buildDetail(id))],
@@ -86,7 +95,7 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       return orNotFound(`device ${id}`, data.askDevice(id));
     },
   ],
-  [routes.listings.list, (_, query) => ok(data.listingList(query.get("tags")))],
+  [routes.listings.list, (_, query) => ok(data.listingList(query.get("tags"), query.get("cursor"), query.get("limit")))],
   [routes.listings.get, ([id = ""]) => orNotFound(`listing ${id}`, data.listing(id))],
   [routes.usage, () => ok(data.usage())],
 ];

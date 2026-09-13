@@ -7,3 +7,5 @@ Mock API responses, used when `API_MODE=mock` — set for `next dev` by `apps/we
 - `mocks.test.ts` — every mock goes through the transport and is parsed by its schema, so a mock can't drift from the contract.
 
 Connecting a screen to gateway means nothing here changes — set `API_MODE=live`.
+
+Mock responses carry the same cookies gateway sets — `__Host-albus_anon` on build creation, `__Host-albus_session` (and the anonymous cookie cleared) on verify — so mock mode exercises the Server Functions' cookie relay. Listings are filtered by `tags` before paging with `cursor` / `limit` (12 per page).

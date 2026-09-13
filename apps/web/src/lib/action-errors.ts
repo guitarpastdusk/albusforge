@@ -24,3 +24,15 @@ export async function actionFailure(
   });
   return { ok: false, message };
 }
+
+/**
+ * The upstream call succeeded but the outcome is incomplete (e.g. verify
+ * returned no session cookie). Logged once, without any credential values.
+ */
+export async function actionIncomplete(action: string, reason: string, message: string): Promise<{ ok: false; message: string }> {
+  log("ERROR", `action ${action} incomplete: ${reason}`, {
+    trace: traceFromHeaders(await headers()),
+    fields: { action },
+  });
+  return { ok: false, message };
+}

@@ -1,12 +1,14 @@
 import "server-only";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import type { z } from "zod";
 import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { ApiRequestError, fetchTransport, request, type Transport } from "./core";
+import { nextCookieWriter } from "./cookies";
 import { gatewayHeaders } from "./gateway-headers.server";
 import { idToken } from "./id-token.server";
+import { createSessionClient, type SessionClient } from "./session-client";
 
 /** `none` skips the ID token — for a gateway running locally without auth. */
 function internalAuth(): "metadata" | "none" {
@@ -15,7 +17,8 @@ function internalAuth(): "metadata" | "none" {
   throw new Error(`GATEWAY_INTERNAL_AUTH must be "metadata" or "none", got "${auth}"`);
 }
 
-async function transport(): Promise<Transport> {
+/** A transport whose upstream Cookie header comes from `cookieHeader` (filtered to the allowlist). */
+async function transportFor(cookieHeader: string | null): Promise<Transport> {
   // Render per request. Nothing environment-specific may be baked in at build
   // time: the image promoted to prod is the one staging ran (ADR 0001). This
   // also means `next build` never fetches, so CI needs no gateway.
@@ -43,12 +46,16 @@ async function transport(): Promise<Transport> {
       {
         host: incoming.get("host"),
         forwardedFor: incoming.get("x-forwarded-for"),
-        cookie: incoming.get("cookie"),
+        cookie: cookieHeader,
       },
       token,
       trustedProxyHops,
     ),
   );
+}
+
+async function transport(): Promise<Transport> {
+  return transportFor((await headers()).get("cookie"));
 }
 
 export async function apiGet<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>> {
@@ -57,6 +64,20 @@ export async function apiGet<S extends z.ZodType>(path: string, schema: S): Prom
 
 export async function apiPost<S extends z.ZodType>(path: string, schema: S, body: unknown): Promise<z.infer<S>> {
   return request(await transport(), "POST", path, schema, body);
+}
+
+/**
+ * Server Functions only (cookies can only be written there). Mutations relay
+ * gateway's `__Host-albus_session` / `__Host-albus_anon` cookies to the browser
+ * and use them for the client's own follow-up calls. See lib/api/README.md.
+ */
+export async function sessionClient(): Promise<SessionClient> {
+  const incoming = await headers();
+  return createSessionClient({
+    transportFor,
+    cookieHeader: incoming.get("cookie"),
+    writer: nextCookieWriter(await cookies()),
+  });
 }
 
 /** Await an API call; a 404 renders the route's not-found page. */

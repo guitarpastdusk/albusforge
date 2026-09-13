@@ -178,3 +178,32 @@ describe("mock conversation, device chat and sign-in", () => {
     expect(listings.map((l) => l.name)).toEqual(expect.arrayContaining(["The Vibration Prophet", "The Air Marshal"]));
   });
 });
+
+describe("mock pagination and cookies", () => {
+  it("filters before paging: a category's matches beyond the first unfiltered page are returned", async () => {
+    const firstUnfiltered = await get(`${routes.listings.list.path()}?limit=6`, ListingList);
+    expect(firstUnfiltered.next_cursor).toBe("6");
+    expect(firstUnfiltered.listings.map((l) => l.name)).not.toContain("The Vibration Prophet");
+
+    const industrial = await get(`${routes.listings.list.path()}?tags=industrial&limit=6`, ListingList);
+    expect(industrial.listings).toHaveLength(6);
+    expect(industrial.listings.every((l) => l.category === "industrial")).toBe(true);
+    expect(industrial.listings.map((l) => l.name)).toContain("The Vibration Prophet");
+    expect(industrial.next_cursor).toBe("6");
+
+    const rest = await get(`${routes.listings.list.path()}?tags=industrial&limit=6&cursor=6`, ListingList);
+    expect(rest.listings.map((l) => l.name)).toEqual(["The Air Marshal"]);
+    expect(rest.next_cursor).toBeNull();
+  });
+
+  it("creating a build sets the anonymous owner cookie; verifying sets the session and clears it", async () => {
+    const created = await mockTransport("POST", routes.builds.create.path(), { ask_text: "A sensor" });
+    expect(created.setCookies).toEqual([expect.stringMatching(/^__Host-albus_anon=mock-anon-bld_\w+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/)]);
+
+    const verified = await mockTransport("POST", routes.auth.verify.path(), { email: "you@example.com", code: "123456" });
+    expect(verified.setCookies).toEqual([
+      expect.stringMatching(/^__Host-albus_session=mock-session;.*Max-Age=\d+$/),
+      expect.stringMatching(/^__Host-albus_anon=;.*Max-Age=0$/),
+    ]);
+  });
+});

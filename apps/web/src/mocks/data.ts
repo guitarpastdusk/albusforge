@@ -452,10 +452,16 @@ const LISTINGS: Listing[] = [
   { id: "the-air-marshal", name: "The Air Marshal", category: "industrial", accent: "green", description: "PMS5003 + SCD40 traffic-light air quality the whole shop can see. ~$68/zone.", author: { handle: "ines" }, remix_count: 52 },
 ];
 
-export function listingList(tags: string | null): ListingList {
+const LISTING_PAGE = 12;
+
+/** GET /v1/listings?tags=&cursor=&limit= — filtered before paging, so a category's matches are never lost to the page size. */
+export function listingList(tags: string | null, cursor: string | null = null, limit: string | null = null): ListingList {
   const wanted = tags?.split(",").filter(Boolean) ?? [];
-  const listings = wanted.length ? LISTINGS.filter((l) => wanted.includes(l.category)) : LISTINGS;
-  return { listings, next_cursor: null };
+  const matching = wanted.length ? LISTINGS.filter((l) => wanted.includes(l.category)) : LISTINGS;
+  const offset = cursor && /^\d+$/.test(cursor) ? Number(cursor) : 0;
+  const size = limit && /^\d+$/.test(limit) ? Math.min(Math.max(Number(limit), 1), 50) : LISTING_PAGE;
+  const end = offset + size;
+  return { listings: matching.slice(offset, end), next_cursor: end < matching.length ? String(end) : null };
 }
 
 export function listing(id: string): Listing | null {

@@ -5,5 +5,5 @@
   },
   // Bundled by esbuild (package.json build), so Bundler resolution: workspace
   // packages are TypeScript source and imports carry no extension.
-  "include": ["src", "*.ts"]
+  "include": ["src", "scripts", "*.ts"]
 }

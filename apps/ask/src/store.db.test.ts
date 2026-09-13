@@ -160,3 +160,20 @@ it("cancels post-body disconnect during blocked SQL and promptly restores HTTP c
     const next=await app.inject({method:'POST',url:'/v1/ask',payload:{...q,request_id:randomUUID()}});expect(next.statusCode).toBe(200);
   } finally {caller.destroy();await blocker.query('ROLLBACK');blocker.release();await app.close();await pool.end();}
 });
+it("logs only request-correlated serialized quota scope, with actor requiring other headroom",async()=>{
+  const {q}=await fixture();
+  const limiter=createStore(handle.pool,{user:1,tenant:100,global:10000});
+  await limiter.reserve({...q,request_id:randomUUID()});
+  const lines:string[]=[];
+  const app=buildApp({store:limiter,concurrency:1,deadlineMs:2000,ping:async()=>{},maxTokens:128,write:line=>lines.push(line)});
+  try {
+    const response=await app.inject({method:'POST',url:'/v1/ask',payload:q});
+    expect(response.statusCode).toBe(429);
+    expect(lines.map(line=>JSON.parse(line))).toEqual([{event:'sensor_ask_quota_rejected',request_id:q.request_id,scope:'actor'}]);
+    expect(lines.join('')).not.toContain(q.question);expect(lines.join('')).not.toContain(q.actor_id);
+    expect((await handle.pool.query('SELECT count(*)::int AS n FROM telemetry.sensor_ask_requests WHERE actor_id=$1',[q.actor_id])).rows[0].n).toBe(1);
+    // Global and tenant limits take priority and cannot masquerade as actor evidence.
+    await expect(createStore(handle.pool,{user:1,tenant:1,global:10000}).reserve({...q,request_id:randomUUID()})).rejects.toMatchObject({scope:'tenant'});
+    await expect(createStore(handle.pool,{user:1,tenant:1,global:1}).reserve({...q,request_id:randomUUID()})).rejects.toMatchObject({scope:'global'});
+  }finally{await app.close();}
+});

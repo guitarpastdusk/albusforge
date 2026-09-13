@@ -2,17 +2,50 @@
   "$schema": "https://turborepo.com/schema.json",
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "dist/**"
+      ]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"]
+      "dependsOn": [
+        "^typecheck"
+      ]
     },
     "lint": {},
     "test": {},
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "cloudlink#test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/ask/src/**",
+        "$TURBO_ROOT$/apps/ask/package.json",
+        "$TURBO_ROOT$/apps/gateway/src/**",
+        "$TURBO_ROOT$/apps/gateway/package.json",
+        "$TURBO_ROOT$/packages/llm/src/**",
+        "$TURBO_ROOT$/packages/llm/package.json"
+      ]
+    },
+    "cloudlink#typecheck": {
+      "dependsOn": [
+        "^typecheck"
+      ],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/ask/src/**",
+        "$TURBO_ROOT$/apps/ask/package.json",
+        "$TURBO_ROOT$/apps/gateway/src/**",
+        "$TURBO_ROOT$/apps/gateway/package.json",
+        "$TURBO_ROOT$/packages/llm/src/**",
+        "$TURBO_ROOT$/packages/llm/package.json"
+      ]
     }
   }
 }

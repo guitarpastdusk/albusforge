@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from "pg";
 import { SensorAskEvidence, TelemetryChannels, type SensorAskRequest } from "@albusforge/schema";
 import type { LlmCallRecord } from "@albusforge/llm";
-import { AskError } from "./errors";
+import { AskError, AskQuotaError } from "./errors";
 
 export interface Limits { user: number; tenant: number; global: number }
 export interface Store {
@@ -107,8 +107,11 @@ export function createStore(pool: Pool, limits: Limits): Store {
         count(*) FILTER (WHERE tenant_id=$1)::int AS tenant,
         count(*) FILTER (WHERE actor_id=$2)::int AS actor
         FROM telemetry.sensor_ask_requests WHERE created_at > statement_timestamp()-interval '24 hours'`,[q.tenant_id,q.actor_id])).rows[0];
-      if (counts!.global >= limits.global || counts!.tenant >= limits.tenant || counts!.actor >= limits.user)
-        throw new AskError(429,"DAILY_LIMIT","Sensor chat daily request limit reached");
+      // Priority makes an actor diagnostic evidence of tenant/global headroom
+      // at this same serialized snapshot, rather than guessing from a 429.
+      if (counts!.global >= limits.global) throw new AskQuotaError("global");
+      if (counts!.tenant >= limits.tenant) throw new AskQuotaError("tenant");
+      if (counts!.actor >= limits.user) throw new AskQuotaError("actor");
       await client.query("INSERT INTO telemetry.sensor_ask_requests(request_id,tenant_id,actor_id,device_id) VALUES($1,$2,$3,$4)",
         [q.request_id,q.tenant_id,q.actor_id,q.device_id]);
     },signal),

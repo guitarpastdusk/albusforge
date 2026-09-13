@@ -49,3 +49,14 @@ One deadline covers reservation, evidence, model and completion. SQL acquisition
 | `ASK_GLOBAL_DAILY_REQUESTS` | 200, maximum 10000 |
 
 `GET /healthz` is database-independent liveness. `GET /readyz` checks connectivity and required Ask table existence. Errors do not expose SDK/SQL/configuration messages. Run migrations before deploying the service. Run `pnpm --filter ask test`, `typecheck`, `lint`, and `build`; PostgreSQL tests require Docker (Postgres 16). Build the standalone image with `docker build -f apps/ask/Dockerfile .`. The image runs as a non-root user and supports SIGTERM draining. No deployment, migration against shared infrastructure or model call is part of the test suite.
+
+### Durable quota rejection diagnostics
+
+After an authenticated, serialized reservation check rejects a quota, Ask emits
+`{event: "sensor_ask_quota_rejected", request_id, scope: "global" | "tenant" | "actor"}`.
+Global then tenant limits take priority over actor, so an actor event establishes
+headroom in the other scopes at that check. The event has no question, credential,
+tenant, actor or device fields. Pre-reservation admission BUSY emits no quota event;
+the public gateway error remains generic. Deployed quota acceptance correlates the
+request ID with this internal log and separately audits reservations and usage; a
+429 alone is insufficient. See [sensor acceptance](SENSOR-ACCEPTANCE.md).

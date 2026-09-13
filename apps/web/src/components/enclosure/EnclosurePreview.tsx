@@ -7,7 +7,7 @@ import { Button, Kicker, Toggle } from "@/components/ui";
 import { cx } from "@/lib/cx";
 import { EnclosureFrame, STAGE_CLASS, ViewControls } from "./EnclosureFrame";
 import type { EnclosurePreviewData } from "./fixture";
-import { previewMode, supportsWebGL, type EnclosureView } from "./modes";
+import { previewMode, RendererUnavailableError, supportsWebGL2, type EnclosureView } from "./modes";
 
 /**
  * three.js lives only in this chunk: fetched in the browser when a preview
@@ -40,7 +40,7 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
   const hintId = `${id}-hint`;
 
   // null on the server and during hydration: the loading state renders until the browser answers.
-  const webgl = useSyncExternalStore(noSubscription, () => supportsWebGL(), () => null);
+  const webgl = useSyncExternalStore(noSubscription, () => supportsWebGL2(), () => null);
   const reducedMotion = useSyncExternalStore(subscribeReducedMotion, () => window.matchMedia?.(REDUCED_MOTION).matches ?? false, () => false);
 
   const [view, setView] = useState<EnclosureView>("base");
@@ -48,6 +48,8 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
   const [resetToken, setResetToken] = useState(0);
   const [status, setStatus] = useState<Status>("loading");
   const [attempt, setAttempt] = useState(0);
+  // The probe passed but the renderer still couldn't start: the static image, not a retry.
+  const [rendererFailed, setRendererFailed] = useState(false);
 
   if (!preview) {
     return (
@@ -64,7 +66,7 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
     );
   }
 
-  const mode = webgl === null ? "checking" : previewMode({ webgl, reducedMotion, autoRotate });
+  const mode = webgl === null ? "checking" : rendererFailed ? "static" : previewMode({ webgl, reducedMotion, autoRotate });
   const interactive = mode === "interactive";
 
   const controls = (
@@ -99,7 +101,7 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
       footer={
         <p id={hintId} className="mt-1.5 font-mono text-[12px] text-faint">
           {mode === "static"
-            ? "Still image — the interactive preview needs WebGL and motion."
+            ? "Still image — the interactive preview needs WebGL 2."
             : "Drag to rotate · scroll or pinch to zoom · right-drag to pan · arrow keys rotate"}
         </p>
       }
@@ -120,7 +122,7 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
             label={`3D model of the enclosure, ${preview.dimensionsLabel}`}
             describedBy={`${descriptionId} ${hintId}`}
             onReady={() => setStatus("ready")}
-            onError={() => setStatus("error")}
+            onError={(error) => (error instanceof RendererUnavailableError ? setRendererFailed(true) : setStatus("error"))}
           />
         ) : null}
 

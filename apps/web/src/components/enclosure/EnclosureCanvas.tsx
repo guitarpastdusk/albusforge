@@ -14,6 +14,7 @@ export interface EnclosureCanvasProps {
   label: string;
   describedBy: string;
   onReady: () => void;
+  /** RendererUnavailableError (show the static image) or ModelLoadError (retryable). */
   onError: (error: unknown) => void;
 }
 
@@ -48,7 +49,8 @@ export default function EnclosureCanvas({ glbUrl, view, showParts, resetToken, a
     if (!host) return;
     let disposed = false;
     let created: EnclosureScene | null = null;
-    createEnclosureScene(host, glbUrl, { autoRotate }).then(
+    const loading = new AbortController();
+    createEnclosureScene(host, glbUrl, { autoRotate, signal: loading.signal }).then(
       (scene) => {
         if (disposed) return scene.dispose();
         created = scene;
@@ -63,6 +65,7 @@ export default function EnclosureCanvas({ glbUrl, view, showParts, resetToken, a
     );
     return () => {
       disposed = true;
+      loading.abort();
       created?.dispose();
       sceneRef.current = null;
     };

@@ -10,12 +10,13 @@ import {
   PerspectiveCamera,
   Scene,
   Spherical,
+  Texture,
   Vector3,
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import type { EnclosureView } from "./modes";
+import { ModelLoadError, RendererUnavailableError, type EnclosureView } from "./modes";
 
 /*
  * The three.js side of the viewer. Imported only by EnclosureCanvas, which is
@@ -72,6 +73,31 @@ export function dollyBy(camera: OrbitCamera, target: Vector3, factor: number, mi
   camera.lookAt(target);
 }
 
+/**
+ * Release what a loaded model owns: each geometry, material and texture once
+ * (they are often shared), and the ImageBitmap or frame behind a texture.
+ */
+export function disposeObject(root: Object3D): void {
+  const geometries = new Set<{ dispose(): void }>();
+  const materials = new Set<Material>();
+  const textures = new Set<Texture>();
+  root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    geometries.add(object.geometry);
+    for (const material of [object.material].flat() as Material[]) {
+      materials.add(material);
+      for (const value of Object.values(material)) if (value instanceof Texture) textures.add(value);
+    }
+  });
+  for (const texture of textures) {
+    const data = texture.source?.data as { close?: () => void } | null | undefined;
+    texture.dispose();
+    if (typeof data?.close === "function") data.close();
+  }
+  for (const material of materials) material.dispose();
+  for (const geometry of geometries) geometry.dispose();
+}
+
 export interface EnclosureScene {
   setView(view: EnclosureView): void;
   setShowParts(show: boolean): void;
@@ -82,13 +108,52 @@ export interface EnclosureScene {
 const KEY_STEP = Math.PI / 24;
 const STAGE_COLOR = "#faf8f5";
 
-/** Load the GLB and mount a renderer in `host`. Rejects if the model can't be fetched or lacks base and lid. */
-export async function createEnclosureScene(host: HTMLElement, url: string, { autoRotate = false } = {}): Promise<EnclosureScene> {
-  const gltf = await new GLTFLoader().loadAsync(url);
-  const model = gltf.scene;
-  const objects = findEnclosureObjects(model);
+/**
+ * Start a renderer, load the GLB and mount in `host`.
+ * Rejects with RendererUnavailableError when WebGL 2 can't start (before any
+ * download), ModelLoadError when the model can't be fetched or parsed, or the
+ * signal's reason when aborted. Nothing is left behind on any rejection.
+ */
+export async function createEnclosureScene(
+  host: HTMLElement,
+  url: string,
+  { autoRotate = false, signal }: { autoRotate?: boolean; signal?: AbortSignal } = {},
+): Promise<EnclosureScene> {
+  let renderer: WebGLRenderer;
+  try {
+    renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  } catch (error) {
+    throw new RendererUnavailableError(error);
+  }
+  const releaseRenderer = () => {
+    // dispose() alone leaves the context to garbage collection; repeated opens then hit the browser's context limit.
+    renderer.forceContextLoss();
+    renderer.dispose();
+  };
 
-  const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  let model: Object3D;
+  let objects: EnclosureObjects;
+  try {
+    const response = await fetch(url, { signal });
+    if (!response.ok) throw new ModelLoadError(`GET ${url} returned ${response.status}`);
+    const gltf = await new GLTFLoader().parseAsync(await response.arrayBuffer(), "");
+    model = gltf.scene;
+    try {
+      objects = findEnclosureObjects(model);
+    } catch (error) {
+      disposeObject(model);
+      throw error;
+    }
+    if (signal?.aborted) {
+      disposeObject(model);
+      throw signal.reason;
+    }
+  } catch (error) {
+    releaseRenderer();
+    if (signal?.aborted || error instanceof ModelLoadError) throw error;
+    throw new ModelLoadError(error instanceof Error ? error.message : String(error), { cause: error });
+  }
+
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setClearColor(new Color(STAGE_COLOR), 1);
   const canvas = renderer.domElement;
@@ -202,12 +267,8 @@ export async function createEnclosureScene(host: HTMLElement, url: string, { aut
       observer.disconnect();
       host.removeEventListener("keydown", onKeyDown);
       controls.dispose();
-      model.traverse((object) => {
-        if (!(object instanceof Mesh)) return;
-        object.geometry.dispose();
-        for (const material of [object.material].flat() as Material[]) material.dispose();
-      });
-      renderer.dispose();
+      disposeObject(model);
+      releaseRenderer();
       canvas.remove();
     },
   };

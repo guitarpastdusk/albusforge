@@ -1,6 +1,6 @@
-import { Group, PerspectiveCamera, Vector3 } from "three";
-import { describe, expect, it } from "vitest";
-import { applyView, dollyBy, findEnclosureObjects, orbitBy } from "./scene";
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial, PerspectiveCamera, Texture, Vector3 } from "three";
+import { describe, expect, it, vi } from "vitest";
+import { applyView, disposeObject, dollyBy, findEnclosureObjects, orbitBy } from "./scene";
 
 const objects = () => {
   const root = new Group();
@@ -77,5 +77,29 @@ describe("keyboard orbit and zoom", () => {
     expect(camera.position.length()).toBeCloseTo(0.8);
     dollyBy(camera, target, 10, 0.8, 2);
     expect(camera.position.length()).toBeCloseTo(2);
+  });
+});
+
+describe("disposeObject", () => {
+  it("disposes each shared geometry, material and texture once, and closes the bitmap behind a texture", () => {
+    const bitmap = { close: vi.fn() };
+    const texture = new Texture(bitmap as never);
+    const normal = new Texture();
+    const geometry = new BoxGeometry();
+    const shared = new MeshStandardMaterial({ map: texture, normalMap: normal });
+    const other = new MeshStandardMaterial({ map: texture });
+    const root = new Group().add(new Mesh(geometry, shared), new Mesh(geometry, [shared, other]));
+
+    const spies = {
+      geometry: vi.spyOn(geometry, "dispose"),
+      shared: vi.spyOn(shared, "dispose"),
+      other: vi.spyOn(other, "dispose"),
+      texture: vi.spyOn(texture, "dispose"),
+      normal: vi.spyOn(normal, "dispose"),
+    };
+    disposeObject(root);
+
+    for (const spy of Object.values(spies)) expect(spy).toHaveBeenCalledTimes(1);
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
   });
 });

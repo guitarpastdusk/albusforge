@@ -1,4 +1,6 @@
+import { readRule } from "./rules";
 import type {
+  ActionProposal,
   AskResponse,
   BuildDetail,
   BuildList,
@@ -336,8 +338,85 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       : device.id === "bed-a"
         ? BED_A_GREETING
         : `Hi — I'm ${device.name}. Ask me anything about my readings.`,
-    ...(device.id === "bed-a" ? { actions: BED_A_ACTIONS, last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+      permissions: { edit_actions: true },
+    ...actionsBlock(device.id),
   };
+}
+
+// --- closed-loop actions ------------------------------------------------------
+
+/**
+ * Mock mode's rule store: bed-a starts with the prototype's three rules,
+ * every other device with none. Lives for the process, like the chat
+ * transcripts, so a toggle survives a refresh.
+ */
+const actionStore = new Map<string, DeviceAction[]>();
+const proposals = new Map<string, { deviceId: string; proposal: ActionProposal }>();
+const PROPOSAL_TTL_MS = 10 * MINUTE * 1000;
+
+function actionsOf(deviceId: string): DeviceAction[] {
+  let actions = actionStore.get(deviceId);
+  if (!actions) {
+    actions = deviceId === "bed-a" ? BED_A_ACTIONS.map((a) => ({ ...a })) : [];
+    actionStore.set(deviceId, actions);
+  }
+  return actions;
+}
+
+function actionsBlock(deviceId: string): Pick<DeviceDashboard, "actions" | "last_action"> {
+  const actions = actionsOf(deviceId);
+  if (actions.length === 0) return {};
+  return {
+    actions: actions.map((a) => ({ ...a })),
+    ...(deviceId === "bed-a" ? { last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+  };
+}
+
+/** PATCH /v1/devices/:id/actions/:actionId. Null when the device or the rule is unknown. */
+export function setActionEnabled(deviceId: string, actionId: string, enabled: boolean): DeviceAction | null {
+  if (!dashboardExists(deviceId)) return null;
+  const action = actionsOf(deviceId).find((a) => a.id === actionId);
+  if (!action) return null;
+  action.enabled = enabled;
+  // The device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4).
+  action.sync = "pending";
+  return { ...action };
+}
+
+/** POST /v1/devices/:id/actions/proposals. Reads the words against the device's channels; writes nothing. */
+export function proposeAction(deviceId: string, text: string): ActionProposal | null {
+  const dash = dashboard(deviceId);
+  if (!dash) return null;
+  const reading = readRule(text, dash.channels);
+  const proposal: ActionProposal = {
+    id: `prop_${Date.now().toString(36)}_${proposals.size}`,
+    ...reading,
+    expires_at: new Date(Date.now() + PROPOSAL_TTL_MS).toISOString(),
+  };
+  proposals.set(proposal.id, { deviceId, proposal });
+  return proposal;
+}
+
+export type ConfirmOutcome = { ok: true; action: DeviceAction } | { ok: false; reason: "not_found" | "unresolved"; issues?: string[] };
+
+/** POST /v1/devices/:id/actions. A proposal is confirmed once, for the device it was made for, before it expires. */
+export function confirmAction(deviceId: string, proposalId: string): ConfirmOutcome {
+  const held = proposals.get(proposalId);
+  if (!held || held.deviceId !== deviceId || Date.parse(held.proposal.expires_at) < Date.now()) return { ok: false, reason: "not_found" };
+  if (held.proposal.issues.length > 0) return { ok: false, reason: "unresolved", issues: held.proposal.issues };
+  proposals.delete(proposalId);
+  const { kind, rule, via } = held.proposal;
+  const action: DeviceAction = { id: `act_${Date.now().toString(36)}_${actionsOf(deviceId).length}`, kind, rule, via, enabled: true, sync: "pending" };
+  actionsOf(deviceId).push(action);
+  return { ok: true, action: { ...action } };
+}
+
+const dashboardExists = (deviceId: string) => fleet().systems.some((s) => s.devices.some((d) => d.id === deviceId));
+
+/** Tests only: forget toggles, rules and proposals. */
+export function resetActions(): void {
+  actionStore.clear();
+  proposals.clear();
 }
 
 // --- marketplace --------------------------------------------------------------

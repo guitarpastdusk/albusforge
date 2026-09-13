@@ -7,7 +7,6 @@ import { DeviceWidgets } from "@/components/devices/DeviceWidgets";
 import { PageContainer, Pill } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { formatWhen } from "@/lib/format";
-import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { requireSession } from "@/lib/session";
 
 export default async function DevicePage({ params }: { params: Promise<{ deviceId: string }> }) {
@@ -17,6 +16,8 @@ export default async function DevicePage({ params }: { params: Promise<{ deviceI
   const { device } = dashboard;
   const now = new Date();
   const lastAction = dashboard.last_action ? `${dashboard.last_action.summary}, ${formatWhen(dashboard.last_action.at, now)}` : null;
+  // Operator or admin on the device's tenant, resolved by gateway (ADR 0009). Absent means read-only.
+  const canEdit = dashboard.permissions?.edit_actions ?? false;
 
   return (
     <PageContainer compact>
@@ -40,12 +41,9 @@ export default async function DevicePage({ params }: { params: Promise<{ deviceI
       <div className="mt-[30px] grid items-start gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,1fr)]">
         <div className="flex min-w-0 flex-col gap-6">
           <DeviceWidgets dashboard={dashboard} />
-          {dashboard.actions && dashboard.actions.length > 0 ? (
-            <ClosedLoopActions
-              actions={dashboard.actions}
-              lastAction={lastAction}
-              interactive={loadRuntimeConfig(process.env).apiMode === "mock"}
-            />
+          {/* Shown when the device has rules, or the session may add the first one. */}
+          {dashboard.actions || canEdit ? (
+            <ClosedLoopActions deviceId={device.id} actions={dashboard.actions ?? []} lastAction={lastAction} canEdit={canEdit} />
           ) : null}
         </div>
         <DeviceChat

@@ -17,7 +17,7 @@ export function DeviceStatusHeader({ device, now }: { device: DeviceDashboard["d
     <div>
       <div className="flex items-center gap-2.5">
         {!awaiting && device.status === "online" ? <PulseDot size={10} /> : null}
-        <Kicker tone={awaiting ? "muted" : TONE[device.status]} className="tracking-[0.16em]">
+        <Kicker tone={awaiting ? "muted" : TONE[device.status]} tracking={0.16}>
           {formatDeviceStatus(device, now)}
         </Kicker>
       </div>

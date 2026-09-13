@@ -7,3 +7,11 @@ export const buildStatus: Record<DisplayStatus, { label: string; accent: Accent;
   designing: { label: "Designing", accent: "peach", action: "Resume chat" },
   parts_picked: { label: "Parts picked", accent: "violet", action: "Review parts" },
 };
+
+/** Where a project card's action goes: live builds to the fleet, designs back to their chat. */
+export function buildHref(build: { id: string; display_status: DisplayStatus }): string {
+  const id = encodeURIComponent(build.id);
+  if (build.display_status === "live") return "/live";
+  if (build.display_status === "designing") return `/build/${id}`;
+  return `/projects/${id}`;
+}

@@ -14,6 +14,8 @@
   --color-hairline: #eae5de;
   --color-nav-active: #f0ebe4;
   --color-success: #3e7d6b;
+  /* Text on the dark device-chat surface. */
+  --color-on-ink: #f4f1ec;
 
   --color-pastel-peach: #fbeae0;
   --color-pastel-peach-fg: #6b3a22;

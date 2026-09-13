@@ -1,0 +1,31 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+@layer base {
+  /* The design was drawn at the browser's default line-height, not preflight's 1.5. */
+  html {
+    line-height: normal;
+  }
+
+  body {
+    background-color: var(--color-porcelain);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  a {
+    color: var(--color-coral-deep);
+  }
+
+  a:hover {
+    color: var(--color-coral);
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}

@@ -1,0 +1,62 @@
+/*
+ * Design tokens from the Albusforge.ai website handoff. Tailwind generates the
+ * utilities: --color-coral → bg-coral / text-coral / border-coral, and so on.
+ */
+
+@theme {
+  --color-porcelain: #faf8f5;
+  --color-ink: #2e2a33;
+  --color-ink-2: #3a3542;
+  --color-coral: #e8794a;
+  --color-coral-deep: #c4643b;
+  --color-muted: #6e6879;
+  --color-faint: #a9a3b2;
+  --color-hairline: #eae5de;
+  --color-nav-active: #f0ebe4;
+  --color-success: #3e7d6b;
+
+  --color-pastel-peach: #fbeae0;
+  --color-pastel-peach-fg: #6b3a22;
+  --color-pastel-blue: #dce9f6;
+  --color-pastel-blue-fg: #2e4460;
+  --color-pastel-green: #d8ece3;
+  --color-pastel-green-fg: #274f43;
+  --color-pastel-violet: #e6dff2;
+  --color-pastel-violet-fg: #413360;
+
+  --shadow-card: 0 18px 44px -24px rgb(46 42 51 / 0.3);
+  --shadow-hero: 0 24px 60px -30px rgb(46 42 51 / 0.25);
+  --shadow-tile: 0 14px 32px -18px rgb(46 42 51 / 0.35);
+
+  --ease-carousel: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --animate-af-pulse: af-pulse 2s infinite;
+  --animate-af-blink: af-blink 1s infinite;
+
+  @keyframes af-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  @keyframes af-blink {
+    0%,
+    100% {
+      opacity: 0.25;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+/* next/font sets these variables on <html>; `inline` makes the utilities use them directly. */
+@theme inline {
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), Menlo, Consolas, monospace;
+}

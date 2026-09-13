@@ -1,0 +1,12 @@
+**/node_modules
+**/.next
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+docs
+infra
+**/.env
+**/.env.*
+!**/.env.example

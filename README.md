@@ -13,9 +13,21 @@ the app layer is generated, and an optional cloud tier with dashboards and alert
 
 ## Status
 
-Pre-M0. Architecture defined; no code yet. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-and §18 in particular — several forks (firmware target, tenant-vs-build root, first-party vs
-partner cloud) should be settled before M0 lays down the workspace.
+Pre-M0. Architecture defined. The workspace root and the portal ([`apps/web`](apps/web/)) are
+scaffolded against mock data; no backend service exists yet. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and §18 in particular — several forks (firmware
+target, tenant-vs-build root, first-party vs partner cloud) should be settled before M0 goes further.
+
+## Running the portal
+
+Node 22 and pnpm (the version is pinned in `package.json`; `corepack enable` picks it up).
+
+```sh
+pnpm install
+pnpm dev          # http://localhost:3000 — mock API data, no gateway needed
+```
+
+`pnpm typecheck`, `pnpm lint`, `pnpm test` and `pnpm build` run across the workspace through turbo.
 
 ## Documentation
 

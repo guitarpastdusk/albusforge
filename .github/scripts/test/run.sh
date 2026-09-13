@@ -276,9 +276,9 @@ gateway_jobs() {
   export JOBS="db-migrate registry-load" IMAGE=db-jobs
   unset SERVICE
 }
-# execution NAME CREATED IMAGE SUCCEEDED(True|False): one Cloud Run execution, as JSON.
+# execution NAME CREATED IMAGE SUCCEEDED(True|False) [COMPLETED]: terminal fixture interval.
 execution() {
-  printf '{"metadata":{"name":"%s","creationTimestamp":"%s"},"spec":{"template":{"spec":{"containers":[{"image":"%s"}]}}},"status":{"conditions":[{"type":"Completed","status":"%s"}]}}' "$1" "$2" "$3" "$4"
+  printf '{"metadata":{"name":"%s","creationTimestamp":"%s"},"spec":{"template":{"spec":{"containers":[{"image":"%s"}]}}},"status":{"conditions":[{"type":"Completed","status":"%s"}],"completionTime":"%s"}}' "$1" "$2" "$3" "$4" "${5:-$2}"
 }
 # executions JOB EXECUTION...: the job's execution list.
 executions() {
@@ -603,6 +603,122 @@ for wf in "$root"/.github/workflows/deploy-*.yml "$root"/.github/workflows/promo
   expect '[ -z "$piped" ] || grep -qE "^ +shell: bash$" "$wf"'
 done
 
+# Sensor releases do not race the shared migrator: require its last successful
+# execution's schema tree to match, even when unrelated source commits differ.
+g update-ref refs/remotes/origin/main "$C"
+setup "schema: matching successful migration tree allows release"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" = 0 ] && ! called "run jobs execute"'
+
+setup "schema: failed execution does not certify schema"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" False)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+
+
+for status in False Unknown; do
+  setup "schema: old success followed by newer $status refuses release"
+  export IMAGE=cloudlink
+  images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+  executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)" "$(execution db-migrate-b 2026-09-02T00:00:00Z "$REPO/db-jobs@$d2" "$status")"
+  run require-schema-release.sh
+  expect '[ "$code" != 0 ] && has "Latest migration is not a known completed success"'
+done
+
+setup "schema: newer matching success restores known migration state"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" False)" "$(execution db-migrate-b 2026-09-02T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" = 0 ]'
+
+setup "schema: older overlapping running migration blocks newer success"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" Unknown)" "$(execution db-migrate-b 2026-09-02T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+
+setup "schema: ambiguous execution ordering refuses release"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)" "$(execution db-migrate-b 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" False)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+
+# Completion order cannot determine which overlapping execution changed SQL last.
+for outcome in False True; do
+  for finish in 2026-09-01T00:10:00Z 2026-09-01T00:03:00Z; do
+    setup "schema: earlier-created $outcome overlapping migration ending $finish blocks success"
+    export IMAGE=cloudlink
+    images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+    older="$(execution older 2026-09-01T00:00:00Z "$REPO/db-jobs@$d2" "$outcome" "$finish")"
+    newer="$(execution newer 2026-09-01T00:01:00Z "$REPO/db-jobs@$d1" True 2026-09-01T00:05:00Z)"
+    executions db-migrate "$older" "$newer"
+    run require-schema-release.sh
+    expect '[ "$code" != 0 ]'
+  done
+done
+setup "schema: fresh matching recovery after all overlapping attempts ended succeeds"
+export IMAGE=cloudlink
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$older" "$newer" "$(execution recovery 2026-09-01T00:11:00Z "$REPO/db-jobs@$d1" True 2026-09-01T00:12:00Z)"
+run require-schema-release.sh
+expect '[ "$code" = 0 ]'
+
+for finish in null '"invalid"' '"2026-08-31T23:59:59Z"' '"2026-09-01T00:01:00.100Z"'; do
+  setup "schema: uncertain earlier completion $finish refuses release"
+  export IMAGE=cloudlink
+  images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+  uncertain="$(printf '%s' "$older" | jq --argjson finish "$finish" '.status.completionTime=$finish')"
+  executions db-migrate "$uncertain" "$newer"
+  run require-schema-release.sh
+  expect '[ "$code" != 0 ]'
+done
+
+g checkout -q --detach "$C"
+mkdir -p "$repo/packages/db/migrations"
+echo new-schema > "$repo/packages/db/migrations/new.sql"
+g add . && g commit -qm schema
+schema_commit="$(g rev-parse HEAD)"
+g update-ref refs/remotes/origin/main "$schema_commit"
+setup "schema: newer unapplied migration refuses release"
+export IMAGE=cloudlink GITHUB_SHA="$schema_commit"
+images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)"
+run require-schema-release.sh
+expect '[ "$code" != 0 ] && has "Deploy gateway-owned migrations"'
+
+
+for changed in packages/db/src/schema/index.ts packages/db/src/config.ts pnpm-lock.yaml docker/db-jobs-entrypoint.sh; do
+  g checkout -q --detach "$C"
+  mkdir -p "$(dirname "$repo/$changed")"
+  echo changed-policy > "$repo/$changed"
+  g add . && g commit -qm changed-input
+  input_commit="$(g rev-parse HEAD)"
+  g update-ref refs/remotes/origin/main "$input_commit"
+  setup "schema: changed $changed requires a new migration execution"
+  export IMAGE=cloudlink GITHUB_SHA="$input_commit"
+  images "[{\"version\":\"$d1\",\"tags\":\"$B\"}]"
+  executions db-migrate "$(execution db-migrate-a 2026-09-01T00:00:00Z "$REPO/db-jobs@$d1" True)"
+  run require-schema-release.sh
+  expect '[ "$code" != 0 ] && has "Deploy gateway-owned migrations"'
+done
+
+setup "schema: source digest without staging marker refuses promotion"
+export IMAGE=cloudlink DIGEST="$d2"
+images "[{\"version\":\"$d2\",\"tags\":\"$C\"}]"
+run require-schema-release.sh
+expect '[ "$code" != 0 ]'
+unset DIGEST
+
 echo
 echo "$passed passed, $failed failed"
-[ "$failed" = 0 ]
+[ "$failed" = 0 ] || exit 1
+
+bash "$root/.github/scripts/test/release-ci.sh"

@@ -20,6 +20,7 @@ describe("configFromEnv", () => {
       port: 8080,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
+      sensorAsk: { url: null, auth: "google" },
       intake: { url: null, auth: "google" },
       registryIncludeDrafts: false,
       anonBuildsPerHour: 60,
@@ -123,4 +124,13 @@ describe("configFromEnv", () => {
       expect(String(error)).not.toContain("s3cret-value");
     }
   });
+});
+
+it("keeps Ask credentials on a configured service origin and requires secure production transport", () => {
+  expect(configFromEnv({ ...DB, ASK_URL: "http://localhost:8081", ASK_AUTH: "none" }).sensorAsk).toEqual({ url: "http://localhost:8081", auth: "none" });
+  for (const ASK_URL of ["https://user:pass@ask.test", "https://ask.test/v1", "https://ask.test?key=value", "https://ask.test#token"]) {
+    expect(() => configFromEnv({ ...DB, ASK_URL })).toThrow("ASK_URL must be a service origin");
+  }
+  expect(() => configFromEnv({ ...DB, K_SERVICE: "gateway", ASK_AUTH: "none" })).toThrow("ASK_AUTH=none");
+  expect(() => configFromEnv({ ...DB, K_SERVICE: "gateway", ASK_URL: "http://ask.test" })).toThrow("HTTPS on Cloud Run");
 });

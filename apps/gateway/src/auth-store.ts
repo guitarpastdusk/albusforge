@@ -114,6 +114,17 @@ async function liveSession(db: Queryable, token: string) {
   return row ?? null;
 }
 
+/** Resolve tenant membership using the caller's query context/snapshot. */
+export async function sessionTenantIn(db: Queryable, token: string): Promise<string | null> {
+  const [row] = await db
+    .select({ activeTenantId: sessions.activeTenantId })
+    .from(sessions)
+    .innerJoin(tenantMembers, and(eq(tenantMembers.tenantId, sessions.activeTenantId), eq(tenantMembers.userId, sessions.userId)))
+    .where(and(eq(sessions.tokenHash, hashSessionToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, sql`statement_timestamp()`)))
+    .limit(1);
+  return row?.activeTenantId ?? null;
+}
+
 export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: () => string }): AuthStore {
   return {
     async issueCode(rawEmail, now = new Date()) {
@@ -221,13 +232,7 @@ export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: 
     },
 
     async sessionTenant(token) {
-      const [row] = await db
-        .select({ activeTenantId: sessions.activeTenantId })
-        .from(sessions)
-        .innerJoin(tenantMembers, and(eq(tenantMembers.tenantId, sessions.activeTenantId), eq(tenantMembers.userId, sessions.userId)))
-        .where(and(eq(sessions.tokenHash, hashSessionToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, sql`now()`)))
-        .limit(1);
-      return row?.activeTenantId ?? null;
+      return sessionTenantIn(db, token);
     },
 
     async revokeSessionFamily(token) {

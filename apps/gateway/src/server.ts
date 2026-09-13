@@ -15,6 +15,7 @@ import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient } from "./inta
 import { googleInternalAuthVerifier, untrustingVerifier } from "./internal-auth";
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
+import { httpSensorAskClient } from "./sensor-ask";
 import { RateLimiter } from "./rate-limit";
 import { newSessionToken } from "./session-cookie";
 
@@ -72,13 +73,14 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     telemetryPool: pool,
+    sensorAsk: config.sensorAsk.url ? httpSensorAskClient(config.sensorAsk.url, config.sensorAsk.auth === "google" ? googleIdTokenAuth(config.sensorAsk.url) : async () => undefined) : null,
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");
     },
     log,
     chat: {
-      store: createChatStore(db),
+      store: createChatStore(db, pool),
       turns: createTurnScheduler({ intake, log }),
       includeDrafts: config.registryIncludeDrafts,
       rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },

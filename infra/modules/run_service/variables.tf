@@ -94,3 +94,13 @@ variable "deletion_protection" {
   type    = bool
   default = true
 }
+
+variable "request_timeout" {
+  type    = string
+  default = "300s"
+}
+
+variable "request_concurrency" {
+  type    = number
+  default = 80
+}

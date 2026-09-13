@@ -11,6 +11,9 @@
  */
 import { buildMessages, builds, type BuildStatus, type Db, type MessageRole, specs } from "@albusforge/db";
 import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { sessionTenantIn } from "./auth-store";
+import type { Pool } from "pg";
+import { readSnapshot } from "./read-snapshot";
 
 /**
  * Who may read a build: the tenant of a live session, the hash of an
@@ -86,7 +89,12 @@ export type SubmitMessageResult =
   | { kind: "pending"; pendingMessageId: string }
   | { kind: "not_found" };
 
+export interface EventBatch { state: BuildState; messages: MessageRow[] }
+export interface StreamCredentials { sessionToken?: string; anonHash: string | null }
+
 export interface ChatStore {
+  /** One short authorization/data snapshot, released before writing to the socket. */
+  readEventBatch(buildId: string, credentials: StreamCredentials, after: Cursor | undefined, lookbackMs: number): Promise<EventBatch | null>;
   /**
    * In one transaction: with a client message id, lock (owner, id) and return
    * the build already created from it; otherwise call `admit` (which throws to
@@ -195,8 +203,20 @@ async function lastMessageOf(db: Queryable, buildId: string, withinS: number) {
   return row ?? null;
 }
 
-export function createChatStore(db: Db): ChatStore {
+export function createChatStore(db: Queryable, pool: Pool): ChatStore {
   return {
+    async readEventBatch(buildId, credentials, after, lookbackMs) {
+      return readSnapshot(pool, async (tx) => {
+        const tenantId = credentials.sessionToken === undefined ? null : await sessionTenantIn(tx, credentials.sessionToken);
+        const owner = { tenantId, anonHash: credentials.anonHash };
+        if (owner.tenantId === null && owner.anonHash === null) return null;
+        const scoped = createChatStore(tx, pool);
+        const state = await scoped.buildState(buildId, owner);
+        if (!state) return null;
+        const messages = await scoped.messagesSince(buildId, owner, after, lookbackMs);
+        return { state, messages };
+      });
+    },
     async createBuild({ owner, askText, clientMessageId, admit }) {
       return db.transaction(async (tx): Promise<CreateBuildResult> => {
         if (clientMessageId !== null) {

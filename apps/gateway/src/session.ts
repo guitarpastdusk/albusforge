@@ -31,7 +31,7 @@ function tenantSlug(host: string): string | null {
 
 /** Authentication and reads share a consistent, read-only snapshot. */
 export async function withSession<T>(pool: Pool, cookie: string | undefined, host: string,
-  read: (client: PoolClient, tenantId: string) => Promise<T>,
+  read: (client: PoolClient, tenantId: string, userId: string) => Promise<T>,
   options: { historyLayout?: boolean } = {}): Promise<T> {
   const hash = sessionTokenHash(cookie);
   const slug = tenantSlug(host);
@@ -60,7 +60,7 @@ export async function withSession<T>(pool: Pool, cookie: string | undefined, hos
     if (!tenant) throw new HttpError(404, "NOT_FOUND", "Unknown tenant");
     const member = await client.query("SELECT 1 FROM users.tenant_members WHERE tenant_id=$1 AND user_id=$2", [tenant.id, session.user_id]);
     if (!member.rowCount) throw new HttpError(403, "FORBIDDEN", "Tenant membership required");
-    const result = await read(client, tenant.id);
+    const result = await read(client, tenant.id, session.user_id);
     await client.query("COMMIT");
     return result;
   } catch (error) {

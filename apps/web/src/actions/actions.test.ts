@@ -201,3 +201,11 @@ describe("build conversation outcomes", () => {
     expect(loggedFailure).toHaveBeenCalledTimes(1);
   });
 });
+
+it("forwards an explicit sensor channel/window through the server action", async () => {
+  const scope = { channel: "temperature_c", from: "2026-09-13T10:00:00Z", to: "2026-09-13T11:00:00Z" };
+  const message = { id: "answer", role: "assistant", text: "20 C", created_at: scope.to };
+  vi.mocked(apiPost).mockResolvedValue({ message, queries: [] });
+  expect(await askDevice("sensor", "Mean?", scope)).toEqual({ ok: true, data: message });
+  expect(apiPost).toHaveBeenCalledWith("/v1/devices/sensor/ask", expect.anything(), { text: "Mean?", ...scope });
+});

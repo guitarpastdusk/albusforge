@@ -46,6 +46,7 @@ POST   /v1/auth/code               { email } → 204           rate-limited per 
 POST   /v1/auth/verify             { email, code } → { user, tenant } + Set-Cookie; claims anonymous builds
 POST   /v1/auth/signout            → 204
 GET    /v1/me                      → { user, tenant } | 401
+PUT    /v1/me/active-tenant        { tenant_id } → 204           membership checked; apex only
 
 GET    /v1/builds?status=          the session tenant's builds, with display_status
 GET    /v1/builds/:id/messages     chat transcript
@@ -84,10 +85,12 @@ Device counts on the card use the plan's device count before provisioning and re
 
 Chat is anonymous; the only sign-up ask is the gate on the device-ready card.
 
-1. `POST /v1/builds` without a session sets a host-only, httpOnly **anonymous owner cookie** and records its hash on the build (`builds.anon_owner_hash`, `tenant_id` null).
-2. `/v1/builds/:id` and its messages are readable only with that cookie.
-3. `POST /v1/auth/verify` moves every build carrying the cookie's hash into the user's tenant, clears the hash and the cookie in one transaction, and returns the session.
-4. Anonymous builds that are never claimed expire after 30 days.
+1. `POST /v1/builds` without a session sets a host-only, httpOnly **anonymous owner cookie** and records its hash on the build (`builds.anon_owner_hash`, `tenant_id` null). `CHECK (tenant_id IS NOT NULL OR anon_owner_hash IS NOT NULL)` guarantees every build has one owner or the other.
+2. `/v1/builds/:id` and its messages are readable only with that cookie. LLM usage for the build is recorded against the same hash.
+3. `POST /v1/auth/verify` moves every build carrying the cookie's hash, **and the usage rows those builds incurred**, into the tenant resolved for that request. On a first sign-up that is the new personal tenant. It clears the hash and the cookie in the same transaction and returns the session.
+4. Anonymous builds that are never claimed are removed after 30 days by a scheduled job. Their usage stays as platform cost.
+
+Which tenant a request uses, and why the Host header alone never grants access, is [ADR 0009](adr/0009-tenant-created-at-sign-up.md).
 
 This is the concrete version of §6's "anonymous builds are allowed until checkout": checkout, saving and cloning all require a session; designing does not.
 
@@ -123,7 +126,8 @@ Surfaces the architecture requires that the handoff does not cover. They need de
 - **Alert rules** — the device chat offers to set one; there is no screen to see or edit them.
 - **Signals, Inbox, Usage** ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §6.3). **Usage is not optional:** it ships with the first metered call (§9).
 - **Listing detail and publish** — the marketplace grid exists; the listing page, remix diff and publish flow do not.
-- **Tenant subdomain sign-in handoff** ([ADR 0007](adr/0007-portal-routing.md)).
+- **Tenant subdomain sign-in handoff** ([ADR 0007](adr/0007-portal-routing.md)), and sign-out that revokes the sessions on every host together ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).
+- **Tenant switcher** for a user in more than one tenant ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).
 - Error, empty and offline states for every screen; mobile layouts; dark mode (the design is light only).
 
 ---

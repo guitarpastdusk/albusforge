@@ -213,7 +213,7 @@ sequenceDiagram
 
     U->>GW: POST /v1/builds/:id/checkout
     GW->>FU: place order
-    FU->>FU: device_id = new<br/>tenant_id = h(order)<br/>device_token = random 32B
+    FU->>FU: device_id = new<br/>tenant_id = build's tenant<br/>device_token = random 32B
     FU->>CL: register device + channels<br/>derived from the plan's pinned parts
     Note over CL: dashboard, widgets and alert rules<br/>exist before the device is powered on
     FU->>CG: mint identity into the bundle
@@ -227,7 +227,7 @@ sequenceDiagram
 
 The first packet is already authenticated and already attributed to a tenant. **No claim code, no pairing screen, no setup.** Bearer token in an `Authorization` header; rotation is a downlink command; mTLS remains `[LATER]` and is a per-device cert swap, not an architecture change.
 
-The existing `POST /v1/devices/claim` route stays for self-printed and self-flashed builds, where nobody bought anything and there is no order to hash.
+The existing `POST /v1/devices/claim` route stays for self-printed and self-flashed builds, where nobody bought anything and there is no order. It takes `tenant_id` from the session, never from the request body, and requires it to match the build's tenant ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).
 
 ### 4.3 Offline detection without LWT
 
@@ -334,7 +334,8 @@ audit_log(id, tenant_id, actor, action, target, at, detail jsonb)
 
 -- metering (§9)
 usage_records(tenant_id, device_id, period, readings_in, bytes_stored,
-              llm_calls_tier2, llm_calls_tier3, tokens_in, tokens_out, ota_bytes)
+              llm_calls_tier2, llm_calls_tier3, tokens_in, tokens_out, ota_bytes,
+              anon_owner_hash)   -- tenant_id null only for unclaimed anonymous builds (ADR 0009)
 ```
 
 Rollups are computed by a job on Cloud Scheduler (`readings_1m` every minute over the last two minutes; `readings_1h` hourly), **idempotent on bucket**, so a missed run backfills on the next pass. Ingest never writes a rollup — keeping ingest a single cheap insert is what lets it absorb a burst.
@@ -691,7 +692,7 @@ Per-sensor subscription is ~90% of projected revenue, and **nothing in the spec 
 | --- | --- |
 | `readings_in` | ingest, per accepted reading |
 | `bytes_stored` | nightly sweep over partition sizes per tenant |
-| `llm_calls_tier2` / `llm_calls_tier3`, `tokens_in`, `tokens_out` | the `packages/llm` wrapper, tagged with `tenant_id` and tier |
+| `llm_calls_tier2` / `llm_calls_tier3`, `tokens_in`, `tokens_out` | the `packages/llm` wrapper, tagged with `tenant_id` and tier. For an anonymous build `tenant_id` is null and `anon_owner_hash` is set; the sign-up claim re-attributes the rows ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)) |
 | `ota_bytes` | the OTA path, when it lands |
 
 Three requirements that are cheap now and painful later:
@@ -784,7 +785,7 @@ The transport decision moves work *out* of M6, and the intelligence layer adds a
 | **Transport** | HTTPS now, MQTT at M8 | reversible by design — the envelope is the contract — but it sets M6's size. If remote actuation is a launch demo, this flips |
 | **Tier-2 gating** | statistics gate the model | the alternative (model on every window) is ~20× the cost. Revisit only if detection quality proves inadequate on real data |
 | **Raw retention** | 90 days raw, rollups indefinite | needs to be stated on the slide, since it is the resolution of a visible contradiction |
-| **Tenant root** | tenant, from `h(order)` | **blocking for M1.** Cheap now, a seven-service migration later |
+| **Tenant root** | tenant created at sign-up; orders and devices take it from the build ([ADR 0009](adr/0009-tenant-created-at-sign-up.md), proposed). Superseded: tenant from `h(order)`, which can't hold builds that have no order | **blocking for M1.** Cheap now, a seven-service migration later |
 | **Hub timing** | design the tool interface as a port in M6.5, build the hub after | building the hub early halves MVP; ignoring the seam makes it a rewrite |
 | **Vertex vs direct API** | direct Anthropic API | Vertex keeps traffic in-project and spend on the GCP bill, and is worth switching to if procurement requires it — but it lags on feature availability, so verify per-feature support before committing. `packages/llm` makes it an env var either way |
 | **Fusion connectors** | out of scope until a customer names one | weather/schedule/ERP fusion is pitched but unscoped; the tool interface accommodates it as additional tools, so no architecture is blocked |

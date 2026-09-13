@@ -460,6 +460,7 @@ POST   /v1/auth/code               { email } → 204
 POST   /v1/auth/verify             { email, code } → { user, tenant } + session cookie
 POST   /v1/auth/signout            → 204
 GET    /v1/me                      → { user, tenant } | 401
+PUT    /v1/me/active-tenant        { tenant_id } → 204, membership checked
 GET    /v1/builds?status=          tenant's builds + display_status
 GET    /v1/builds/:id/messages     chat transcript
 POST   /v1/builds/:id/messages     { text } → 202, reply over events
@@ -647,7 +648,7 @@ The deck adds public build/remix counts and an **earn** promise: remixes route t
 
 **The spec has no tenant concept at all.** Everything hangs off `build_id`; the deck hangs everything off a tenant.
 
-- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output.
+- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output. [ADR 0009](adr/0009-tenant-created-at-sign-up.md) (proposed) keeps order-time provisioning but **takes `tenant_id` from the build, not from `h(order)`**: the tenant exists from sign-up, and checkout requires a session, so every order already has one. `/v1/devices/claim` likewise takes the tenant from the session.
 - **Multi-user tenants.** The platform slide shows twelve members and three roles (ops manager as admin; maintenance crew with alerts + acknowledge; customer auditor read-only), plus SSO, an audit log and per-tenant keys. The spec has `users`, session cookies, and anonymous builds. No organisation, membership, role, audit table, or per-tenant key material. This is a schema addition, an authorization layer across **every** route, and an SSO integration.
 - **Per-tenant app hosting** at `acme-plant.albusforge.ai` — subdomain routing and per-tenant isolation, against an LB config that assumes one public hostname.
 

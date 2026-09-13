@@ -1,0 +1,77 @@
+# Promote an image that deploy-web.yml built and deployed to staging.
+# Dispatched by hand with the digest from that run's job summary; this is the
+# manual promotion step (ARCHITECTURE.md §12.3, docs/adr/0001). It never builds.
+#
+# The plan doesn't allow required reviewers on the prod environment, so the
+# protection is: only a person can dispatch this, and the environment accepts
+# dispatches from main only.
+name: promote-web
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Image digest from the deploy-web staging run summary (sha256:…)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: web
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+
+jobs:
+  prod:
+    runs-on: ubuntu-latest
+    # WIF trust is bound to the GitHub environment (ADR 0001); its branch
+    # policy refuses dispatches from anything but main.
+    environment: prod
+    # One prod deploy at a time; a running deploy is never interrupted.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Validate before the input touches anything else.
+      - name: Validate digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest must match ^sha256:[0-9a-f]{64}\$"
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: deploy-prod@albusforge-ci.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # deploy-prod can read the registry but never push, so a digest that exists
+      # is one deploy-web pushed from main.
+      - name: Check the image exists
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          gcloud artifacts docker images describe "${REPO}/${SERVICE}@${DIGEST}" \
+            --format='value(image_summary.digest)'
+
+      # Image only: Terraform owns env vars and everything else (ADR 0005).
+      - name: Deploy to prod
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project albusforge-prod \
+            --region "${REGION}" \
+            --quiet
+          echo "Promoted \`${REPO}/${SERVICE}@${DIGEST}\` to prod (dispatched by ${GITHUB_ACTOR})" >> "$GITHUB_STEP_SUMMARY"

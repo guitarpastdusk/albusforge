@@ -1,0 +1,123 @@
+# Build web once and deploy that digest to staging. Prod is never deployed from
+# here: promote the same digest with promote-web.yml, dispatched by hand.
+# ARCHITECTURE.md §12.3 "never build twice"; docs/adr/0001, 0005, 0007.
+name: deploy-web
+
+on:
+  push:
+    branches: [main]
+    # Everything that changes the image, plus this file.
+    paths:
+      - apps/web/**
+      - packages/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+      - tsconfig*.json
+      - .dockerignore
+      - .github/workflows/deploy-web.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: web
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+
+jobs:
+  staging:
+    # workflow_dispatch can target any branch; only main deploys.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # WIF trust is bound to the GitHub environment, not the branch (ADR 0001).
+    environment: staging
+    # Deploys run in push order; a newer push waits rather than racing.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: deploy-staging@albusforge-ci.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      # Tags are immutable, so a re-run for the same commit can't push again.
+      # Reuse the image that the earlier attempt pushed.
+      - name: Look for an existing image for this commit
+        id: existing
+        run: |
+          digest="$(gcloud artifacts docker images describe "${REPO}/${SERVICE}:${GITHUB_SHA}" \
+            --format='value(image_summary.digest)' 2>/dev/null || true)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          if [ -n "$digest" ]; then echo "Reusing ${REPO}/${SERVICE}:${GITHUB_SHA} (${digest})"; fi
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: steps.existing.outputs.digest == ''
+
+      - name: Build and push
+        id: build
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REPO }}/${{ env.SERVICE }}:${{ github.sha }}
+          # No attestation manifests: the digest must be the single-platform
+          # image manifest that Cloud Run deploys.
+          provenance: false
+          sbom: false
+
+      - name: Resolve digest
+        id: digest
+        env:
+          EXISTING: ${{ steps.existing.outputs.digest }}
+          BUILT: ${{ steps.build.outputs.digest }}
+        run: |
+          digest="${EXISTING:-$BUILT}"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::No valid image digest (existing='${EXISTING}', built='${BUILT}')"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Image only: Terraform owns env vars and everything else (ADR 0005).
+      - name: Deploy to staging
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project albusforge-staging \
+            --region "${REGION}" \
+            --quiet
+          {
+            echo "### Deployed to staging"
+            echo
+            echo "Commit \`${GITHUB_SHA}\`"
+            echo
+            echo "Image \`${REPO}/${SERVICE}@${DIGEST}\`"
+            echo
+            echo "To promote this image, run **promote-web** with \`digest\`:"
+            echo
+            echo '```'
+            echo "${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

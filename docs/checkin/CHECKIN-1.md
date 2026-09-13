@@ -2,7 +2,7 @@
 
 **Battle of the Coasts · Hour 12 · 13 Sep 2026** · Track: **Deep Tech / Physical AI**
 
-**Team:** Albus · **Solo hacker:** Sukrit Dasgupta · **Email:** sukritd@mit.edu
+**Team:** Albus · **Solo hacker:** Sukrit Dasgupta · **Email:** sukritd@mit.edu · **Website:** [albusforge.ai](https://albusforge.ai)
 
 > **One question in. Cart, enclosure, firmware and dashboard out.** Albus Forge turns a plain-language request ("tell me when my fridge gets warm") into a real parts cart, a 3D-printable enclosure, working firmware and a cloud dashboard. All of it is generated from a single curated part registry.
 
@@ -23,7 +23,7 @@ This first 12 hours built the ground floor: everything the product runs on, in t
 
 ## 2. Where it runs
 
-**Code:** [`github.com/guitarpastdusk/albusforge`](https://github.com/guitarpastdusk/albusforge) (private), trunk-based on `main`
+**Code:** [`github.com/guitarpastdusk/albusforge`](https://github.com/guitarpastdusk/albusforge) (public), trunk-based on `main`
 
 **Cloud:** Google Cloud, region `us-central1`, in three isolated projects
 

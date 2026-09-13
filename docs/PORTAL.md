@@ -69,7 +69,10 @@ GET    /v1/usage                   current period for the resolved tenant: model
                                    readings and storage added in M6
 
 POST   /v1/devices/:id/ask         { text } → answer + executed queries; /v1/ask with device_id bound
-PATCH  /v1/devices/:id/actions/:actionId  { enabled } → Action   proposed, not implemented; the live UI is read-only
+
+PATCH  /v1/devices/:id/actions/:actionId   { enabled } → DeviceAction (sync: pending)   operator|admin; audited
+POST   /v1/devices/:id/actions/proposals   { text } → ActionProposal                     reads plain words back; writes nothing
+POST   /v1/devices/:id/actions             { proposal_id } → 201 DeviceAction            the only way a rule is created; 409 while the proposal has issues
 ```
 
 Notes:
@@ -80,18 +83,13 @@ Notes:
 - **`/v1/showcase`** is curated and opt-in, not a live query across other people's devices. At launch it can be a static list maintained by hand. A real feed needs a per-build `showcase_opt_in` and must never expose location — the prototype shows coordinates on a fleet card, which is fine for an owner and not for the public.
 - **`/v1/devices/:id/ask`** is a thin wrapper. The tool loop is [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §7.4 unchanged, with `tenant_id` from the session and `device_id` from the path, both bound server-side. Answers the design shows ("you'll cross the 22% threshold in ~2 days — want me to alert you at 24%?") map to `compare_to_baseline` plus a proposed alert rule the user confirms — the same proposal pattern as `create_work_order`.
 - **Closed-loop actions (device dashboard, design v2).** `GET /v1/devices/:id/dashboard` may carry, all optional so older responses still parse:
-  - `actions[]`: `{ id, kind: SERVO | API | ALERT, rule, via, enabled }`
+  - `actions[]`: `{ id, kind: SERVO | API | ALERT, rule, via, enabled, sync?: synced | pending }`
   - `last_action`
+  - `permissions: { edit_actions }` — resolved by gateway from the session's role (ADR 0009); absent means read-only
   - `greeting`, the device chat's opening line
   - `value_tone` and `caption_tone` on stat widgets
 
-  **No write route exists yet**, so in live mode the portal renders the switches and "+ New action" read-only, marked "Not connected yet". They're interactive only against mock data. Before `PATCH /v1/devices/:id/actions/:actionId` is enabled, it needs:
-  - the tenant resolved and membership checked (ADR 0009), with `operator` or `admin` role
-  - an `audit_log` entry for every change
-  - the device picking the change up on its next check-in (CLOUD-PLATFORM.md §3.4)
-  - optimistic UI state rolled back on failure
-
-  Creating a rule from plain words ("water for 5 min when soil drops below 22%") becomes a proposal a person or policy confirms, never a direct write.
+  Writes follow [ADR 0010](adr/0010-closed-loop-rules-are-confirmed-proposals.md). A switch changes optimistically and rolls back, with the refusal shown, if the write fails or gateway answers `501` (not built) or `403` (viewer role). A new rule is plain words → `ActionProposal` → confirm; the composer never writes a rule directly, and a proposal with `issues` can't be confirmed. Every write returns `sync: "pending"` — the device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4) — and the card labels it "applies at next check-in" until the device acknowledges. Gateway's side (tables, `audit_log`, the proposal reader through `packages/llm`, the ack from ingest) is listed in the ADR's consequences.
 
 ---
 
@@ -152,7 +150,7 @@ The prototype's example builds are illustrative. They are fine as mock data and 
 Surfaces the architecture requires that the handoff does not cover. They need designs before they can be built:
 
 - **Project detail** — the targets of "Review parts" and "Track kit": the plan and cart, firmware and enclosure downloads, checkout, order tracking.
-- **Alert rules** — the device chat offers to set one; there is no screen to see or edit them.
+- **Alert rules across devices** — the per-device rules live on the device dashboard ([ADR 0010](adr/0010-closed-loop-rules-are-confirmed-proposals.md)); a tenant-wide list, and the device chat's "want me to alert you at 24%?" handing a proposal to that card, are not designed.
 - **Signals, Inbox, Usage** ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §6.3). **Usage is not optional:** it ships with the first metered call ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9). Intake's model calls are metered from M2, so a minimal Usage screen is needed by M2 even before a full design exists.
 - **Listing detail and publish** — the marketplace grid exists; the listing page, remix diff and publish flow do not.
 - **Tenant subdomain sign-in handoff** ([ADR 0007](adr/0007-portal-routing.md)), and sign-out that revokes the sessions on every host together ([ADR 0009](adr/0009-tenant-created-at-sign-up.md)).

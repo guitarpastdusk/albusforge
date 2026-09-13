@@ -1,5 +1,7 @@
 import {
+  ActionProposal,
   AskResponse,
+  DeviceAction,
   BuildDetail,
   BuildList,
   CreateBuildResponse,
@@ -12,7 +14,7 @@ import {
   Usage,
   VerifyCodeResponse,
 } from "@albusforge/schema";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ApiRequestError, request } from "@/lib/api/core";
 import * as data from "./data";
@@ -23,6 +25,9 @@ const get = <S extends Parameters<typeof request>[3]>(path: string, schema: S) =
 
 const post = <S extends Parameters<typeof request>[3]>(path: string, schema: S, body: unknown) =>
   request(mockTransport, "POST", path, schema, body);
+
+const patch = <S extends Parameters<typeof request>[3]>(path: string, schema: S, body: unknown) =>
+  request(mockTransport, "PATCH", path, schema, body);
 
 describe("every mock parses against the schema", () => {
   it("session", async () => {
@@ -158,8 +163,63 @@ describe("mock conversation, device chat and sign-in", () => {
 
     const bedC = await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard);
     expect(bedC.actions).toBeUndefined();
+    expect(bedC.permissions).toEqual({ edit_actions: true });
   });
 
+});
+
+describe("mock closed-loop rules (ADR 0010)", () => {
+  beforeEach(() => data.resetActions());
+
+  it("toggling a rule returns it pending, and the dashboard reflects it until reset", async () => {
+    const off = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: false });
+    expect(off).toMatchObject({ id: "act-irrigate", enabled: false, sync: "pending" });
+    const dashboard = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(dashboard.actions?.find((a) => a.id === "act-irrigate")).toMatchObject({ enabled: false, sync: "pending" });
+
+    await expect(patch(routes.devices.actions.setEnabled.path("bed-a", "nope"), DeviceAction, { enabled: true })).rejects.toMatchObject({ status: 404 });
+    await expect(patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: "yes" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("plain words become a proposal; confirming it creates a pending rule on a device that had none", async () => {
+    const proposal = await post(routes.devices.actions.propose.path("bed-c"), ActionProposal, { text: "water for 5 min when soil drops below 22%" });
+    expect(proposal).toMatchObject({ kind: "SERVO", rule: "Soil moisture < 22% → water for 5 min", issues: [] });
+    expect(Date.parse(proposal.expires_at)).toBeGreaterThan(Date.now());
+
+    const created = await post(routes.devices.actions.create.path("bed-c"), DeviceAction, { proposal_id: proposal.id });
+    expect(created).toMatchObject({ kind: "SERVO", rule: proposal.rule, enabled: true, sync: "pending" });
+    expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toEqual([created]);
+
+    // Confirming again (a retry after a lost response) returns the same rule and creates nothing.
+    const again = await mockTransport("POST", routes.devices.actions.create.path("bed-c"), { proposal_id: proposal.id });
+    expect(again.status).toBe(200);
+    expect(again.json).toEqual(created);
+    expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toHaveLength(1);
+    // But not on another device.
+    await expect(post(routes.devices.actions.create.path("bed-a"), DeviceAction, { proposal_id: proposal.id })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("each write bumps the rule's version; an ack flips it to synced on the next dashboard", async () => {
+    const first = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: false });
+    const second = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: true });
+    expect([first.version, second.version]).toEqual([2, 3]);
+    data.ackActions("bed-a");
+    const dashboard = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(dashboard.actions?.find((a) => a.id === "act-irrigate")).toMatchObject({ enabled: true, sync: "synced", version: 3 });
+  });
+
+  it("a proposal with issues is 409 on confirm; a proposal for one device can't be confirmed on another", async () => {
+    const vague = await post(routes.devices.actions.propose.path("bed-a"), ActionProposal, { text: "when it's dry" });
+    expect(vague.issues.length).toBeGreaterThan(0);
+    await expect(post(routes.devices.actions.create.path("bed-a"), DeviceAction, { proposal_id: vague.id })).rejects.toMatchObject({
+      status: 409,
+      code: "unresolved_proposal",
+    });
+
+    const clean = await post(routes.devices.actions.propose.path("bed-a"), ActionProposal, { text: "text me when battery is below 10%" });
+    await expect(post(routes.devices.actions.create.path("bed-b"), DeviceAction, { proposal_id: clean.id })).rejects.toMatchObject({ status: 404 });
+    await expect(post(routes.devices.actions.propose.path("nope"), ActionProposal, { text: "text me when battery is below 10%" })).rejects.toMatchObject({ status: 404 });
+  });
 });
 
 describe("mock cookies", () => {

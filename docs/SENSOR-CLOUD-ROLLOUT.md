@@ -19,12 +19,14 @@ No `cloudlink` or sensor Ask service, telemetry rollup job or maintenance job wa
 
 | Workstream | Branch / isolated tree | Scope | State |
 | --- | --- | --- | --- |
-| Sensor cloud infrastructure | `codex/sensor-infra`, `/private/tmp/albusforge-sensor-infra` | Cloudlink, Ask runtime, scheduled database jobs, IAM/network/edge, delivery workflows and operational controls | Implementation in progress |
-| Sensor Ask backend | `codex/sensor-ask`, `/private/tmp/albusforge-sensor-ask` | Internal Ask contract, scoped query execution, small-model intent selection, evidence, persistent request budgets and metering | Implementation in progress |
-| Gateway and portal | `codex/sensor-gateway`, `/private/tmp/albusforge-sensor-gateway` | Session-authorized gateway bridge, actual telemetry fleet/dashboard adapter, sensor chat controls and evidence display | Implementation in progress; depends on Ask contract |
-| Architecture and integration ledger | `codex/sensor-architecture`, `/private/tmp/albusforge-sensor-architecture` | This ledger, central architecture boundaries, dependency/review/rollout evidence | Implementation in progress |
+| Sensor cloud infrastructure | `codex/sensor-infra`, `/private/tmp/albusforge-sensor-infra` | Cloudlink, Ask runtime, scheduled database jobs, IAM/network/edge, delivery workflows and operational controls | [PR #52](https://github.com/guitarpastdusk/albusforge/pull/52), review pending |
+| Sensor Ask backend | `codex/sensor-ask`, `/private/tmp/albusforge-sensor-ask` | Internal Ask contract, scoped query execution, small-model intent selection, evidence, persistent request budgets and metering | [PR #54](https://github.com/guitarpastdusk/albusforge/pull/54), review requested |
+| Gateway and portal | `codex/sensor-gateway`, `/private/tmp/albusforge-sensor-gateway` | Session-authorized Ask bridge and sensor chat controls mounted on the independently developed telemetry monitor | [PR #53](https://github.com/guitarpastdusk/albusforge/pull/53), stacked on UI PR #50; Ask contract integration implemented |
+| Architecture and integration ledger | `codex/sensor-architecture`, `/private/tmp/albusforge-sensor-architecture` | This ledger, central architecture boundaries, dependency/review/rollout evidence | [PR #47](https://github.com/guitarpastdusk/albusforge/pull/47), review pending |
 
-Every workstream has a dedicated PR. The gateway integration may stack on the Ask schema/service PR. Shared architecture changes stay in the architecture branch; service-specific runbooks stay with the service. Code review uses exact commits and does not authorize merging or deploying unrelated work.
+The separate UI agent's [PR #50](https://github.com/guitarpastdusk/albusforge/pull/50) supplies the paginated telemetry fleet and bounded raw/rollup history monitor using the existing read API. The Ask integration adopts those pages; it does not add a second set of richer dashboard/fleet adapter endpoints. [PR #51](https://github.com/guitarpastdusk/albusforge/pull/51) preserves the pre-existing deployed/local spend monitoring correction as a separate infrastructure prerequisite, leaving the original shared-checkout file untouched.
+
+Every workstream has a dedicated PR. The gateway integration stacks on UI PR #50 and also requires the Ask service/schema PR before deployment. Shared architecture changes stay in the architecture branch; service-specific runbooks stay with the service. Code review uses exact commits and does not authorize merging or deploying unrelated work.
 
 ## Target data path
 
@@ -52,15 +54,29 @@ The Ask service receives identity bound by the authenticated gateway and indepen
 
 The initial UI keeps its transcript within the tab and exposes the current channel/window. If earlier messages are not sent to the model, the UI must say so; it must not promise remembered conversational context. Persistent conversation storage, cross-sensor reasoning, baseline/anomaly analysis and write actions are later work.
 
+## Terraform plan evidence
+
+Infrastructure PR #52 alone produces the same read-only plan counts in both environments: 34 additions, five updates, no destruction. Three updates would revert deployed LLM monitoring to the stale checked-in configuration. Combining the exact pre-existing correction from PR #51 removes those reversions: **34 additions, two updates, no destruction** in both environments. The two updates are the HTTPS URL map and gateway Cloud Run service (`ASK_URL`). Private plans are retained locally; their sensitive contents are not published.
+
+These plans prepare the action; they are not evidence of an apply. Telemetry schedules start paused and model calls start disabled until migration/image verification and staged acceptance are complete. The current production service versions differ substantially from staging; new sensor resources do not implicitly promote the existing gateway/web/intake stack.
+
 ## Integration and deployment sequence
 
 1. Review the independent implementation PRs and the stacked schema/gateway dependency at exact heads. Verify the combined checkout builds and tests, not only each branch separately.
 2. Review Terraform plans for each environment, accounting for the existing user-owned infrastructure changes. Confirm explicit service caps and a database connection reservation shared by gateway, intake, cloudlink, Ask, migrations and scheduled jobs. Retain headroom for overlapping revisions.
 3. Build immutable service/job images. Apply schema migrations before the service that needs them; prepare networking, service accounts, secret references and internal invocation permissions. Never embed API keys or database passwords in source, PRs or plans shared for review.
 4. Establish staging cloudlink routing and health, then deploy the rollup and maintenance job images before enabling their schedules. Confirm one-minute rollup and daily maintenance execution, restricted roles, retry behavior and observable failures.
-5. Deploy the internal Ask service, then its gateway integration and portal adapter. Run model-free staging checks first. A paid provider call is separate evidence and must be explicitly budgeted; fixtures are not a real-provider test.
+5. Deploy the internal Ask service, then its gateway integration and portal chat. Run model-free staging checks first. A paid provider call is separate evidence and must be explicitly budgeted; fixtures are not a real-provider test.
 6. Exercise a provisioned simulator through durable ingestion, latest/history reads and a sensor question. Verify authorization failures for another tenant, duplicate ingestion, delayed samples, retention boundaries, upstream timeouts and exhausted Ask budgets. Record exact image digests, migration state and executed job results.
 7. Promote only the reviewed and verified staging images through existing promotion gates. Physical sensor acceptance remains separate from simulator acceptance.
+
+## Local integration evidence
+
+A root-owned combined checkout was assembled from infrastructure `83eae51`, monitoring `47cc606`, Ask `ac261c5`, and gateway/portal `6d6e82` (including the UI #50 base `e8d5bf0`). The complete workspace `turbo run typecheck lint test build` passed all **36 tasks** (13 cache hits). This includes 23 Ask, 222 gateway, 592 web and 21 database tests. These results apply to those commits, not to later changes on the independent UI branch.
+
+An additional local test used PostgreSQL 16 and actual HTTP servers for cloudlink, gateway and Ask. It ingested two samples, confirmed a repeated packet did not add duplicate rows, ran the rollup worker, read authenticated fleet/latest endpoints, and obtained a sensor answer with verified count 2 and mean 15. Missing authentication returned 401; removed membership returned 403. The model was disabled, so this validates the deterministic fallback and service/data integration, not a provider response. The temporary test and execution log are retained in `/private/tmp/albusforge-sensor-evidence/`.
+
+The gateway branch also passed a browser check with contract-stub transport at desktop, 390px and 320px widths, including long channel identifiers and Ask evidence, without document overflow or page errors. Infrastructure validation includes Terraform validation/mocked configuration tests, actionlint, and 85 shell checks. Cloud read-only plans are described above. Review verdicts and current CI belong to each PR's exact head; passing local checks do not substitute for review.
 
 ## Acceptance evidence to collect
 

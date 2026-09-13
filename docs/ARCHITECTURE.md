@@ -125,7 +125,7 @@ Each stage is a separate service, communicates over Redis streams, and emits a p
 ```
 albusforge/
 ├── apps/
-│   ├── gateway/        Fastify BFF: routes, plugins, sse.ts — the only public service
+│   ├── gateway/        Fastify BFF: session-authenticated routes, plugins and SSE
 │   ├── intake/         ask → Spec: extract, clarify, scope-filter, prompts/
 │   ├── matcher/        Spec → BuildPlan: solver, power, rank, explain
 │   ├── codegen/        BuildPlan → firmware: scaffold, applayer, edits, compilegate

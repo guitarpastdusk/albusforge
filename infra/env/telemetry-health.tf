@@ -42,6 +42,19 @@ resource "google_logging_metric" "telemetry_heartbeat" {
   }
 }
 
+# Presence is categorical: zero must never become a positive histogram estimate.
+# Keep the row-count distribution for charts, but alert on exact positive snapshots.
+resource "google_logging_metric" "telemetry_default_present" {
+  project = local.project_id
+  name    = "telemetry_default_present"
+  filter  = "resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"telemetry-rollup\" AND jsonPayload.event=\"telemetry_health\" AND jsonPayload.default_rows>0"
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
 resource "google_monitoring_alert_policy" "telemetry_backlog" {
   for_each              = local.telemetry_health_fields
   project               = local.project_id
@@ -52,20 +65,20 @@ resource "google_monitoring_alert_policy" "telemetry_backlog" {
   conditions {
     display_name = "Unhealthy post-rollup snapshot for ten minutes"
     condition_threshold {
-      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${google_logging_metric.telemetry_health[each.key].name}\""
+      filter          = "resource.type=\"cloud_run_job\" AND metric.type=\"logging.googleapis.com/user/${each.key == "default_rows" ? google_logging_metric.telemetry_default_present.name : google_logging_metric.telemetry_health[each.key].name}\""
       comparison      = "COMPARISON_GT"
       threshold_value = each.value.threshold
       duration        = "600s"
       aggregations {
         alignment_period     = "300s"
-        per_series_aligner   = "ALIGN_PERCENTILE_99"
+        per_series_aligner   = each.key == "default_rows" ? "ALIGN_SUM" : "ALIGN_PERCENTILE_99"
         cross_series_reducer = "REDUCE_MAX"
       }
     }
   }
   documentation {
     mime_type = "text/markdown"
-    content   = "Inspect telemetry job logs and queue age. Default rows can be valid backfill pending maintenance; inspect before changing retention. Percentiles are bucket estimates, not exact counts. Do not delete dirty markers to silence alerts. See docs/SENSOR-OBSERVABILITY.md."
+    content   = "Inspect telemetry job logs and queue age. Default rows can be valid backfill pending maintenance; inspect before changing retention. Default-row presence uses an exact positive-snapshot counter; queue/age percentiles are bucket estimates, not exact counts. Do not delete dirty markers to silence alerts. See docs/SENSOR-OBSERVABILITY.md."
   }
 }
 

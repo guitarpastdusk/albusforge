@@ -99,3 +99,15 @@ run "observability_active_with_schedules" {
     error_message = "Apply only the explicitly reviewed connection ceiling."
   }
 }
+
+run "default_presence_is_exact_not_a_percentile" {
+  command = plan
+  assert {
+    condition     = endswith(google_logging_metric.telemetry_default_present.filter, "AND jsonPayload.default_rows>0") && google_logging_metric.telemetry_default_present.metric_descriptor[0].value_type == "INT64"
+    error_message = "Zero rows must be excluded before counting; default presence is not a distribution."
+  }
+  assert {
+    condition     = endswith(google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].filter, "user/${google_logging_metric.telemetry_default_present.name}\"") && google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].aggregations[0].per_series_aligner == "ALIGN_SUM" && google_monitoring_alert_policy.telemetry_backlog["default_rows"].conditions[0].condition_threshold[0].threshold_value == 0
+    error_message = "Default-row alert must test positive snapshot counts, not interpolated histogram buckets."
+  }
+}

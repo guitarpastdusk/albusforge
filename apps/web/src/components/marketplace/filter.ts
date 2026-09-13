@@ -1,4 +1,4 @@
-import type { Listing, ListingCategory } from "@albusforge/schema";
+import type { ListingCategory } from "@albusforge/schema";
 
 export const CATEGORY_LABEL: Record<ListingCategory, string> = {
   garden: "Garden",
@@ -12,6 +12,25 @@ export const MARKETPLACE_FILTERS: Array<{ label: string; category: ListingCatego
   ...(Object.keys(CATEGORY_LABEL) as ListingCategory[]).map((category) => ({ label: CATEGORY_LABEL[category], category })),
 ];
 
-export function filterListings(listings: readonly Listing[], category: ListingCategory | null): Listing[] {
-  return category ? listings.filter((listing) => listing.category === category) : [...listings];
+interface MarketplacePage {
+  category: ListingCategory | null;
+  cursor?: string | null;
+}
+
+/** The page URL: `/marketplace?category=industrial&cursor=…`. */
+export function marketplaceHref({ category, cursor }: MarketplacePage): string {
+  const query = new URLSearchParams();
+  if (category) query.set("category", category);
+  if (cursor) query.set("cursor", cursor);
+  const search = query.toString();
+  return search ? `/marketplace?${search}` : "/marketplace";
+}
+
+/** The gateway query: filtered by gateway, before paging — GET /v1/listings?tags=…&cursor=…. */
+export function listingsQuery({ category, cursor }: MarketplacePage): string {
+  const query = new URLSearchParams();
+  if (category) query.set("tags", category);
+  if (cursor) query.set("cursor", cursor);
+  const search = query.toString();
+  return search ? `?${search}` : "";
 }

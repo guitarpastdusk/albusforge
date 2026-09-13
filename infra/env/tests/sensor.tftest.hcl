@@ -67,3 +67,35 @@ run "narration_rejects_unsupported_model" {
   }
   expect_failures = [var.ask_model]
 }
+
+run "observability_disabled_until_acceptance" {
+  command = plan
+  assert {
+    condition     = !google_monitoring_alert_policy.telemetry_heartbeat.enabled && !google_monitoring_alert_policy.telemetry_maintenance_heartbeat.enabled && alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : !policy.enabled])
+    error_message = "Do not page on paused initial processing."
+  }
+  assert {
+    condition     = !google_monitoring_alert_policy.sensor_sql_connections.enabled
+    error_message = "Connection alert needs a measured capacity threshold."
+  }
+  assert {
+    condition     = length(jsondecode(google_monitoring_dashboard.sensor.dashboard_json).gridLayout.widgets) == 12
+    error_message = "Expected ingestion, queue, SQL and execution evidence charts."
+  }
+}
+
+run "observability_active_with_schedules" {
+  command = plan
+  variables {
+    telemetry_schedules_enabled             = true
+    sensor_sql_connection_alert_threshold   = 65
+  }
+  assert {
+    condition     = google_monitoring_alert_policy.telemetry_heartbeat.enabled && google_monitoring_alert_policy.telemetry_maintenance_heartbeat.enabled && alltrue([for policy in google_monitoring_alert_policy.telemetry_backlog : policy.enabled])
+    error_message = "Processing alert policies must follow schedule activation."
+  }
+  assert {
+    condition     = google_monitoring_alert_policy.sensor_sql_connections.enabled && google_monitoring_alert_policy.sensor_sql_connections.conditions[0].condition_threshold[0].threshold_value == 65
+    error_message = "Apply only the explicitly reviewed connection ceiling."
+  }
+}

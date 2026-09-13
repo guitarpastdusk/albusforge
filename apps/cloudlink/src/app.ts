@@ -28,6 +28,6 @@ export function buildApp({ pool, now, maxInflight = 8, readyTimeoutMs = 2000, lo
       return reply.code(503).send({ error: { code: "unavailable", message: "Database unavailable" } });
     } finally { clearTimeout(timer); }
   });
-  app.register(async (scope) => registerTelemetry(scope, pool, now, maxInflight));
+  app.register(async (scope) => registerTelemetry(scope, pool, now, maxInflight, log));
   return app;
 }

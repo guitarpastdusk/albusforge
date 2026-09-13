@@ -1,0 +1,21 @@
+{
+  "id": "creality-k1c",
+  "name": "Creality K1C",
+  "brand": "Creality",
+  "kinematics": "corexy",
+  "enclosed": true,
+  "build_volume_mm": [
+    220,
+    220,
+    250
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://www.creality.com/products/k1c-carbon-3d-printer",
+    "https://www.creality3dofficial.com/products/creality-k1c-3d-printer-on-sale"
+  ]
+}

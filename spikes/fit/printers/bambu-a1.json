@@ -1,0 +1,21 @@
+{
+  "id": "bambu-a1",
+  "name": "Bambu Lab A1",
+  "brand": "Bambu Lab",
+  "kinematics": "bed-slinger",
+  "enclosed": false,
+  "build_volume_mm": [
+    256,
+    256,
+    256
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://us.store.bambulab.com/products/a1",
+    "https://bambulab.com/en/a1/tech-specs"
+  ]
+}

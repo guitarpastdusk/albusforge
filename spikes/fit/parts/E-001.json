@@ -1,0 +1,15 @@
+{
+  "id": "E-001",
+  "name": "18650 single-cell holder (Keystone 1042 class)",
+  "source": "nominal, unverified: measure before printing (MEASURE.md)",
+  "mechanical": {
+    "bounding_mm": [77.0, 21.0, 19.0],
+    "mount": { "type": "pcb-standoff", "screw": "M2.5" },
+    "exposure": "none",
+    "environment_flags": ["battery"]
+  },
+  "spike_ext": {
+    "holes": [[20.0, 10.5, 3.0], [57.0, 10.5, 3.0]],
+    "ports": []
+  }
+}

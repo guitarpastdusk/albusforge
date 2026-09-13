@@ -1,0 +1,25 @@
+[project]
+name = "fit-spike"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "cadquery>=2.8.0",
+    "manifold3d>=3.5.3",
+    "numpy>=2.3.5",
+    "segno>=1.6.6",
+    "trimesh>=5.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.uv]
+# Newer releases of these ship no Intel-macOS wheel (and llvmlite needs cmake to
+# build from source). These are the latest that do, and satisfy cadquery 2.8.
+constraint-dependencies = ["nlopt==2.9.1", "numba==0.62.1", "llvmlite==0.45.1"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

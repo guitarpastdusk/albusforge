@@ -1,0 +1,37 @@
+{
+  "name": "fridge-v03",
+  "note": "ESP32-S3 and TP4056 rotated 90\u00b0, ports on -y; gland on +x, past the BME280.",
+  "parts": [
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        0.4
+      ],
+      "rot": 90
+    },
+    {
+      "part": "E-004",
+      "at": [
+        29.7,
+        0.4
+      ],
+      "rot": 90
+    },
+    {
+      "part": "P-001",
+      "at": [
+        29.7,
+        30.7
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "+x",
+      "u": 58.0,
+      "v": 7.0
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "fridge-v01",
+  "note": "Fridge monitor, roughly: ESP32-S3, TP4056, BME280, 18650 holder, DS18B20 through a gland. Ports on the -x wall.",
+  "parts": [
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "part": "E-004",
+      "at": [
+        0.4,
+        29.7
+      ]
+    },
+    {
+      "part": "P-001",
+      "at": [
+        31.0,
+        29.7
+      ]
+    },
+    {
+      "part": "E-001",
+      "at": [
+        0.4,
+        49.5
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "+x",
+      "u": 12.0,
+      "v": 8.0
+    }
+  ]
+}

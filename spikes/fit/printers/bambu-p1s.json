@@ -1,0 +1,21 @@
+{
+  "id": "bambu-p1s",
+  "name": "Bambu Lab P1S (P2S shares the 256 mm volume)",
+  "brand": "Bambu Lab",
+  "kinematics": "corexy",
+  "enclosed": true,
+  "build_volume_mm": [
+    256,
+    256,
+    256
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://cdn1.bambulab.com/documentation/quick-start-2024-01-17/Quick-Start-P1S_en.pdf",
+    "https://us.store.bambulab.com/products/p1s"
+  ]
+}

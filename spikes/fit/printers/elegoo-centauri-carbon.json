@@ -1,0 +1,21 @@
+{
+  "id": "elegoo-centauri-carbon",
+  "name": "Elegoo Centauri Carbon",
+  "brand": "Elegoo",
+  "kinematics": "corexy",
+  "enclosed": true,
+  "build_volume_mm": [
+    256,
+    256,
+    256
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://us.elegoo.com/products/centauri-carbon",
+    "https://3dpros.com/printers/elegoo-centauri-carbon"
+  ]
+}

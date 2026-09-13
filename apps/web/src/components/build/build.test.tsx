@@ -158,9 +158,26 @@ describe("chat markup", () => {
 
   it("renders the device-ready card with price, parts and the sign-up gate", () => {
     const html = renderToStaticMarkup(<DesignReadyCard card={READY} />);
+    expect(html).not.toContain("enclosure");
     expect(html).toContain("✓ Device design ready");
     expect(html).toContain("est. $34 · ships in kit form");
     expect(html).toContain("ESP32-WROOM");
     expect(html).toMatch(/href="\/signup"[^>]*>Sign up to continue →/);
+  });
+});
+
+describe("DesignReadyCard enclosure preview", () => {
+  it("offers the 3D viewer as a secondary action when a preview exists (mock mode)", async () => {
+    const { ENCLOSURE_FIXTURE } = await import("@/components/enclosure/fixture");
+    const html = renderToStaticMarkup(<DesignReadyCard card={READY} enclosure={ENCLOSURE_FIXTURE} />);
+    expect(html).toMatch(/<button type="button" aria-haspopup="dialog"[^>]*>View enclosure in 3D →<\/button>/);
+    expect(html).toContain("Sign up to continue →");
+  });
+
+  it("says the preview isn't generated yet in live mode, and links nothing", () => {
+    const html = renderToStaticMarkup(<DesignReadyCard card={READY} enclosure={null} />);
+    expect(html).toContain("3D preview available once the enclosure is generated");
+    expect(html).not.toContain("View enclosure in 3D");
+    expect(html).not.toContain(".glb");
   });
 });

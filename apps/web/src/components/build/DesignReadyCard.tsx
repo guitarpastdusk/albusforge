@@ -1,10 +1,15 @@
 import type { DeviceReadyCard } from "@albusforge/schema";
 import { ButtonLink, Pill } from "@/components/ui";
+import { EnclosureDialogButton } from "@/components/enclosure/EnclosureDialog";
+import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
 
 const usd = (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`);
 
-/** Shown once the plan is solved — the only sign-up ask in the chat. Parts come from the plan, never UI strings. */
-export function DesignReadyCard({ card }: { card: DeviceReadyCard }) {
+/**
+ * Shown once the plan is solved — the only sign-up ask in the chat. Parts come from the plan, never UI strings.
+ * `enclosure`: a preview opens the 3D viewer; null says it isn't generated yet (live mode); omitted shows neither.
+ */
+export function DesignReadyCard({ card, enclosure }: { card: DeviceReadyCard; enclosure?: EnclosurePreviewData | null }) {
   return (
     <section aria-label="Device design ready" className="rounded-[24px] border border-hairline bg-white px-[34px] py-[30px]">
       <div className="flex flex-wrap items-center justify-between gap-5">
@@ -23,6 +28,11 @@ export function DesignReadyCard({ card }: { card: DeviceReadyCard }) {
           </li>
         ))}
       </ul>
+      {enclosure !== undefined ? (
+        <div className="mt-4">
+          <EnclosureDialogButton preview={enclosure} title={card.name} />
+        </div>
+      ) : null}
       <div className="mt-[22px] flex flex-wrap items-center justify-between gap-5 rounded-2xl bg-porcelain px-6 py-5">
         <p className="max-w-[420px] text-[16px] font-light leading-[1.45] text-muted">
           Create an account to save this build, see the full schematic, and order the kit.

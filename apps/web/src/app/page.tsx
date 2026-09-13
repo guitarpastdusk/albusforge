@@ -4,8 +4,10 @@ import { BuildConversation, WhenConversationEmpty } from "@/components/build/Bui
 import { ConversationView } from "@/components/build/ConversationView";
 import { DeviceCarousel, type CarouselCard } from "@/components/carousel/DeviceCarousel";
 import { ChatStart } from "@/components/landing/ChatStart";
+import { enclosurePreviewFor } from "@/components/enclosure/fixture";
 import { apiGet } from "@/lib/api/server";
 import { formatAgo } from "@/lib/format";
+import { loadRuntimeConfig } from "@/lib/runtime-config";
 
 async function loadCarousel(): Promise<CarouselCard[]> {
   try {
@@ -25,7 +27,7 @@ export default async function LandingPage() {
   const cards = await loadCarousel();
 
   return (
-    <BuildConversation>
+    <BuildConversation enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>
       <main className="flex flex-1 flex-col">
         <WhenConversationEmpty>
           <div className="flex flex-1 flex-col items-center px-8 py-[72px] text-center">

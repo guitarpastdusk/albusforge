@@ -15,6 +15,13 @@ locals {
       subnet_cidr           = "10.10.0.0/24"
       psa_address           = "10.110.0.0"
       gateway_min_instances = 0
+      api_max_instances     = 1
+      sensor_max_instances  = 1
+      cloudlink_pool_max    = 2
+      ask_pool_max          = 2
+      cloudlink_concurrency = 4
+      rollup_timeout        = "120s"
+      telemetry_max_retries = 0
       web_min_instances     = 0
       sql_tier              = "db-g1-small" # ARCHITECTURE.md §5.2
       deletion_protection   = false
@@ -32,6 +39,13 @@ locals {
     prod = {
       subnet_cidr           = "10.20.0.0/24"
       psa_address           = "10.120.0.0"
+      api_max_instances     = 10
+      sensor_max_instances  = 2
+      cloudlink_pool_max    = 5
+      ask_pool_max          = 4
+      cloudlink_concurrency = 8
+      rollup_timeout        = "600s"
+      telemetry_max_retries = 1
       gateway_min_instances = 1 # SSE and cold-start UX, ARCHITECTURE.md §12.2
       web_min_instances     = 1 # first page load shouldn't wait on a cold start
       sql_tier              = "db-custom-2-7680"

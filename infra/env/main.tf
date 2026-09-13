@@ -17,6 +17,7 @@ module "gateway" {
   project_id          = local.project_id
   region              = var.region
   name                = "gateway"
+  max_instances       = local.settings.api_max_instances
   network             = module.network.network_id
   subnetwork          = module.network.subnet_id
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"

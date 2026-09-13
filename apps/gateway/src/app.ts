@@ -19,6 +19,7 @@ import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./l
 import type { PartsStore } from "./parts";
 import type { Pool } from "pg";
 import { registerTelemetryReads } from "./telemetry-read";
+import { registerUsageRoutes } from "./usage-routes";
 
 export { HttpError } from "./http";
 
@@ -185,6 +186,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   }
   if (auth) registerAuthRoutes(app, { log, auth });
   if (telemetryPool) registerTelemetryReads(app, telemetryPool);
+  if (telemetryPool) registerUsageRoutes(app, telemetryPool);
 
   return app;
 }

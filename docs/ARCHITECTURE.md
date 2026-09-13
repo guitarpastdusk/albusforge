@@ -902,6 +902,8 @@ Unresolved: the business-model slide makes per-sensor subscription primary; the 
 
 ---
 
+**Usage visibility implementation (`web/usage-dashboard`):** gateway `GET /v1/usage` and the portal `/usage` page now expose the current UTC month of tenant-owned recorded model calls, separate cache/token counters, stored model-cost estimates and accepted sensor payload/readings. Shared `UsageSummary` uses exact decimal strings; the account controls link to the page. This does not measure physical storage or implement billing/plan entitlements, and sensor totals exclude deleted devices. See [`USAGE-UI.md`](USAGE-UI.md) for authorization, attribution, validation and remaining rollout work.
+
 ## 14. Guardrails — six deliberate no's
 
 | No | Reason |

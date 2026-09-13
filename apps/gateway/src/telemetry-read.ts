@@ -60,7 +60,7 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
       const row = await device(client, tenant, id);
       if (!Object.hasOwn(TelemetryChannels.parse(row.channels), q.channel)) throw new HttpError(404, "NOT_FOUND", "Channel not found");
       const boundary = (await client.query<{ raw_before: Date; minute_before: Date }>(`SELECT raw_before,
-        date_trunc('day',CURRENT_TIMESTAMP,'UTC')-interval '7 days' AS minute_before FROM telemetry.retention_state WHERE id=1`)).rows[0];
+        date_trunc('day',statement_timestamp(),'UTC')-interval '7 days' AS minute_before FROM telemetry.retention_state WHERE id=1`)).rows[0];
       if (!boundary) throw new Error("Telemetry retention state missing");
       const start = new Date(q.from), end = new Date(q.to);
       const earliest = q.resolution === "raw" ? boundary.raw_before : q.resolution === "1m" ? boundary.minute_before : null;
@@ -86,6 +86,6 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
         JOIN telemetry.devices d ON d.id=h.device_id WHERE d.tenant_id=$1 AND d.id=$2 AND h.channel=$3
         AND h.bucket < $5 AND h.bucket+interval '1 hour' > $4 LIMIT 1`, args.slice(0, 5))).rowCount !== 0;
       return TelemetryHistory.parse({ device_id: id, channel: q.channel, from: start.toISOString(), to: end.toISOString(), resolution: q.resolution, pending_rollup: pending, points });
-    }));
+    }, { historyLayout: true }));
   });
 }

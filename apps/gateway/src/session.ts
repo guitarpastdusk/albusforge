@@ -29,22 +29,29 @@ function tenantSlug(host: string): string | null {
   return slug;
 }
 
-/** Authentication and reads share a consistent, read-only snapshot. No locks block ingestion. */
+/** Authentication and reads share a consistent, read-only snapshot. */
 export async function withSession<T>(pool: Pool, cookie: string | undefined, host: string,
-  read: (client: PoolClient, tenantId: string) => Promise<T>): Promise<T> {
+  read: (client: PoolClient, tenantId: string) => Promise<T>,
+  options: { historyLayout?: boolean } = {}): Promise<T> {
   const hash = sessionTokenHash(cookie);
   const slug = tenantSlug(host);
   const client = await pool.connect();
   let discard = false;
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    // LOCK is a utility statement: unlike SELECT it does not fix the RR snapshot.
+    // Maintenance takes ACCESS EXCLUSIVE on this parent before moving/dropping
+    // partitions or advancing retention. Lock first so auth/watermark/raw data
+    // share a snapshot taken against that protected layout. Ordinary inserts
+    // remain compatible. ONLY avoids locking every child for unrelated ranges.
+    if (options.historyLayout) await client.query("LOCK TABLE ONLY telemetry.readings IN ACCESS SHARE MODE");
     const session = (await client.query<{ user_id: string; active_tenant_id: string }>(`WITH RECURSIVE family AS (
       SELECT id,parent_session_id,user_id,active_tenant_id,expires_at,revoked_at FROM users.sessions WHERE token_hash=$1
       UNION
       SELECT s.id,s.parent_session_id,s.user_id,s.active_tenant_id,s.expires_at,s.revoked_at
       FROM users.sessions s JOIN family f ON s.id=f.parent_session_id
     ) SELECT user_id,active_tenant_id FROM users.sessions WHERE token_hash=$1
-      AND NOT EXISTS(SELECT 1 FROM family WHERE revoked_at IS NOT NULL OR expires_at <= CURRENT_TIMESTAMP)
+      AND NOT EXISTS(SELECT 1 FROM family WHERE revoked_at IS NOT NULL OR expires_at <= statement_timestamp())
       AND NOT EXISTS(SELECT 1 FROM family WHERE user_id <> (SELECT user_id FROM users.sessions WHERE token_hash=$1))`, [hash])).rows[0];
     if (!session) throw new HttpError(401, "UNAUTHORIZED", "Sign in required");
     const tenant = (await client.query<{ id: string }>(

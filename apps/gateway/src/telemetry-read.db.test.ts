@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createDb, type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
-import { processTelemetryRollups } from "@albusforge/db/telemetry-storage";
+import { setTimeout as delay } from "node:timers/promises";
+import { processTelemetryRollups, maintainTelemetryStorage } from "@albusforge/db/telemetry-storage";
 import { SESSION_COOKIE, TelemetryDeviceDetail, TelemetryFleetPage, TelemetryHistory, TelemetryLatest } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
@@ -204,4 +205,117 @@ it("uses a read-only transaction and releases the connection after authorization
   expect((await f.get(`${f.root}/latest`)).statusCode).toBe(200);
   const activity = await owner.query("SELECT 1 FROM pg_stat_activity WHERE datname='albus' AND state='idle in transaction'");
   expect(activity.rowCount).toBe(0);
+});
+
+
+function pauseQuery(pool: pg.Pool, matches: (sql: string) => boolean) {
+  let resume!: () => void, reached!: () => void, paused = false;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const ready = new Promise<void>((resolve) => { reached = resolve; });
+  const scheduled = new Proxy(pool, { get(target, property) {
+    if (property === "connect") return async () => {
+      const client = await target.connect();
+      return new Proxy(client, { get(connection, key) {
+        if (key === "query") return async (sql: string, values?: unknown[]) => {
+          if (!paused && matches(sql)) { paused = true; reached(); await gate; }
+          return connection.query(sql, values);
+        };
+        const value = Reflect.get(connection, key);
+        return typeof value === "function" ? value.bind(connection) : value;
+      } });
+    };
+    const value = Reflect.get(target, property);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  return { pool: scheduled, ready, resume: () => resume() };
+}
+
+it.each([
+  ["move", "reader"], ["drop", "reader"], ["move", "maintenance"], ["drop", "maintenance"],
+] as const)("keeps raw history complete across partition %s with %s first", async (mode, first) => {
+  const f = await fixture(), offset = -((mode === "move" ? 40 : 100) + (first === "maintenance" ? 1 : 0)) * 86400;
+  await owner.query("UPDATE telemetry.retention_state SET raw_before='1970-01-01' WHERE id=1");
+  if (mode === "drop") await owner.query("SELECT telemetry.ensure_reading_partition($1::date)", [time(offset).slice(0, 10)]);
+  await f.insert(1, offset + 10, 7);
+  if (mode === "drop") while (await processTelemetryRollups(handle.pool)) { /* allow expiry */ }
+  const url = f.series({ from: time(offset), to: time(offset + 3600) });
+  const reader = pauseQuery(handle.pool, (sql) => first === "reader" && sql.startsWith("SELECT r.ts,r.value"));
+  const maintainer = pauseQuery(owner, (sql) => first === "maintenance" && sql === "COMMIT");
+  const concurrent = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: reader.pool, log: () => {} });
+  const read = () => Promise.resolve(concurrent.inject({ url, headers: { cookie: f.cookie } }));
+  // Observe outcomes immediately so assertion failures cannot leave unhandled rejections.
+  const maintain = () => maintainTelemetryStorage(maintainer.pool).then((value) => ({ value }), (error: unknown) => ({ error }));
+  let response: ReturnType<typeof read> | undefined;
+  let maintenance: ReturnType<typeof maintain> | undefined;
+  try {
+    if (first === "reader") {
+      response = read();
+      await Promise.race([reader.ready, response.then(() => { throw new Error("Reader did not reach raw query"); })]);
+      // The parent lock must allow ordinary INSERT while no maintenance is queued.
+      await f.insert(2, 0, 8);
+      maintenance = maintain();
+    } else {
+      maintenance = maintain();
+      await Promise.race([maintainer.ready, maintenance.then(() => { throw new Error("Maintenance did not reach commit"); })]);
+      response = read();
+    }
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      blocked = (await owner.query(`SELECT 1 FROM pg_locks WHERE relation='telemetry.readings'::regclass
+        AND NOT granted AND mode=$1`, [first === "reader" ? "AccessExclusiveLock" : "AccessShareLock"])).rowCount !== 0;
+      if (blocked) break;
+      await delay(10);
+    }
+    reader.resume(); maintainer.resume();
+    const result = await response;
+    const expectedExpiry = mode === "drop" && first === "maintenance";
+    expect(result.statusCode).toBe(expectedExpiry ? 410 : 200);
+    if (!expectedExpiry) expect(result.json().points).toMatchObject([{ t: time(offset + 10), v: 7 }]);
+    expect(blocked).toBe(true);
+    expect(await maintenance).toHaveProperty("value");
+    const fresh = await f.get(url);
+    expect(fresh.statusCode).toBe(mode === "drop" ? 410 : 200);
+    if (mode === "move") expect(fresh.json().points).toHaveLength(1);
+  } finally {
+    reader.resume(); maintainer.resume();
+    await response; await maintenance;
+    await concurrent.close();
+    await owner.query("UPDATE telemetry.retention_state SET raw_before='1970-01-01' WHERE id=1");
+  }
+});
+
+
+it("returns 503 on a bounded parent-lock wait, then rechecks session expiry after a successful wait", async () => {
+  const f = await fixture();
+  const blocker = await owner.connect();
+  let response: Promise<Awaited<ReturnType<typeof f.get>>> | undefined;
+  try {
+    await blocker.query("BEGIN");
+    await blocker.query("LOCK TABLE ONLY telemetry.readings IN ACCESS EXCLUSIVE MODE");
+    // Existing 2s statement_timeout must become a controlled failure, not empty 200.
+    const timedOut = await f.get(f.series());
+    expect(timedOut.statusCode).toBe(503);
+    expect(timedOut.headers["cache-control"]).toBe("private, no-store");
+    await blocker.query("COMMIT");
+    expect((await f.get(f.series())).statusCode).toBe(200);
+    await blocker.query("BEGIN");
+    await blocker.query("LOCK TABLE ONLY telemetry.readings IN ACCESS EXCLUSIVE MODE");
+    response = Promise.resolve(f.get(f.series()));
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      blocked = (await owner.query(`SELECT 1 FROM pg_locks WHERE relation='telemetry.readings'::regclass
+        AND NOT granted AND mode='AccessShareLock'`)).rowCount !== 0;
+      if (blocked) break;
+      await delay(10);
+    }
+    expect(blocked).toBe(true);
+    // Expire after BEGIN but before the first snapshot: transaction-start time is too old.
+    await owner.query("UPDATE users.sessions SET expires_at=clock_timestamp() WHERE id=$1", [f.session]);
+    await blocker.query("COMMIT");
+    expect((await response).statusCode).toBe(401);
+  } finally {
+    await blocker.query("ROLLBACK");
+    blocker.release();
+    await response;
+  }
 });

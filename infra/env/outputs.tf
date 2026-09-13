@@ -25,3 +25,11 @@ output "web_service" {
 output "web_service_account" {
   value = module.web.service_account_email
 }
+
+output "sql_instance" {
+  value = module.sql.instance_name
+}
+
+output "jobs" {
+  value = [module.db_migrate.name, module.registry_load.name]
+}

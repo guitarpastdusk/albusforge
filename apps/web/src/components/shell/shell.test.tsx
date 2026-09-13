@@ -78,6 +78,14 @@ describe("Header below lg", () => {
     expect(html).toMatch(/<button type="submit"[^>]*>Sign out<\/button>/);
   });
 
+  it("caps the menu to the viewport below the header and scrolls it, so Sign out stays reachable in landscape", () => {
+    const html = renderToStaticMarkup(
+      <HeaderMenu id="site-menu" items={items(true)} pathname="/" user={{ email: "review@example.com", displayName: null }} pending={false} onNavigate={() => {}} />,
+    );
+    const panelClass = html.match(/<div id="site-menu" class="([^"]*)"/)?.[1] ?? "";
+    expect(panelClass.split(" ")).toEqual(expect.arrayContaining(["max-h-[calc(100dvh-100%)]", "overflow-y-auto", "overscroll-contain"]));
+  });
+
   it("signed out, the menu holds Build, Marketplace, Sign in and Get started; pending shows the nav only", () => {
     const html = renderToStaticMarkup(<HeaderMenu id="site-menu" items={items(false)} pathname="/" user={null} pending={false} onNavigate={() => {}} />);
     expect(html).toContain(">Sign in</a>");

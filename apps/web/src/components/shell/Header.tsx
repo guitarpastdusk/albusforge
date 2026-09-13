@@ -170,7 +170,9 @@ export function HeaderMenu({
   return (
     <div
       id={id}
-      className="absolute inset-x-0 top-full border-b border-hairline bg-porcelain px-4 pt-3 pb-5 shadow-[0_24px_60px_-30px_rgb(46_42_51/0.2)] sm:px-6 lg:hidden"
+      // Capped to the viewport below the header (100% = the header's height for this absolutely
+      // positioned panel) and scrolls itself, so Sign out stays reachable on a landscape phone.
+      className="absolute inset-x-0 top-full max-h-[calc(100dvh-100%)] overflow-y-auto overscroll-contain border-b border-hairline bg-porcelain px-4 pt-3 pb-5 shadow-[0_24px_60px_-30px_rgb(46_42_51/0.2)] sm:px-6 lg:hidden"
     >
       <nav aria-label="Menu">
         <ul className="flex flex-col gap-1">

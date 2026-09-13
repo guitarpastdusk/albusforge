@@ -338,7 +338,8 @@ compat_matrix(driver_pkg, driver_ver, runtime_ver, brain_id, status)
 orders(id, build_id, kind /*parts|print|bundle*/, status, vendor_refs, total)
 
 -- market
-build_snapshots(id, project_build_id, spec, part_versions, body_ref, code_ref, pipeline_versions)
+build_snapshots(id, project_build_id, spec, part_versions, body_ref, code_ref, pipeline_versions,
+                story)   -- as confirmed at publish; never the chat transcript (PORTAL.md §3)
 listings(id, snapshot_id, creator_id, title, ask_quote, story, tags[],
          hero_media_id, parts_cost_cached, difficulty, status, safety_class)
 media(id, listing_id, kind, original_ref, variants, verified_build)
@@ -396,6 +397,7 @@ erDiagram
         jsonb part_versions "rebuildable years later"
         text body_ref
         text code_ref
+        text story "frozen at publish"
     }
     READINGS {
         uuid device_id FK

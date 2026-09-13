@@ -49,7 +49,11 @@ export interface AuthStore {
   }): Promise<VerifyResult>;
   /** The live session's Me, or null when the token is unknown, revoked or expired. */
   me(sessionToken: string): Promise<Me | null>;
-  /** The live session's active tenant, or null: one indexed lookup for the tenant-scoped routes. */
+  /**
+   * The live session's active tenant, or null when the token is unknown,
+   * revoked or expired, or the user is no longer a member of that tenant
+   * (ADR 0009: membership is checked on every tenant-scoped request).
+   */
   sessionTenant(sessionToken: string): Promise<string | null>;
   /**
    * Revokes the token's session together with its whole family: the root of
@@ -118,6 +122,8 @@ export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: 
       const id = randomUUID();
       const expiresAt = new Date(now.getTime() + CODE_TTL_MS);
       await db.transaction(async (tx) => {
+        // The same lock as verifyCode, so two requests can't both leave a live code, and a verify never interleaves.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`auth-code:${email}`}, 0))`);
         // A new request invalidates the previous code (ADR 0008).
         await tx
           .update(emailCodes)
@@ -218,6 +224,7 @@ export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: 
       const [row] = await db
         .select({ activeTenantId: sessions.activeTenantId })
         .from(sessions)
+        .innerJoin(tenantMembers, and(eq(tenantMembers.tenantId, sessions.activeTenantId), eq(tenantMembers.userId, sessions.userId)))
         .where(and(eq(sessions.tokenHash, hashSessionToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, sql`now()`)))
         .limit(1);
       return row?.activeTenantId ?? null;

@@ -8,6 +8,7 @@ import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { ApiError, BuildList, CreatedBuild, Me, MessageList, PostMessageResponse } from "@albusforge/schema";
+import type { AddressInfo } from "node:net";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -16,7 +17,8 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app";
 import type { AuthOptions } from "./auth-routes";
-import { CODE_MAX_ATTEMPTS, createAuthStore, hashCode, PERSONAL_TENANT_NAME } from "./auth-store";
+import type { ChatOptions } from "./build-routes";
+import { CODE_MAX_ATTEMPTS, createAuthStore, hashCode, normalizeEmail, PERSONAL_TENANT_NAME } from "./auth-store";
 import { createChatStore } from "./chat-store";
 import type { EmailSender, SignInCodeEmail } from "./email";
 import { createTurnScheduler } from "./intake";
@@ -43,16 +45,44 @@ const email: EmailSender = {
 
 const apps: FastifyInstance[] = [];
 
-function makeApp(overrides: Partial<AuthOptions> = {}): FastifyInstance {
+function makeApp(overrides: Partial<AuthOptions> = {}, chat: Partial<ChatOptions> = {}): FastifyInstance {
   const app = buildApp({
     parts: createPartsStore(handle.db),
     ping: async () => void (await handle.pool.query("SELECT 1")),
     log,
-    chat: { store: createChatStore(handle.db), turns: createTurnScheduler({ intake: null, log }), includeDrafts: false },
+    chat: { store: createChatStore(handle.db), turns: createTurnScheduler({ intake: null, log }), includeDrafts: false, ...chat },
     auth: { store: createAuthStore(handle.db, { newSessionToken }), email, ...overrides },
   });
   apps.push(app);
   return app;
+}
+
+/** Reads an event stream until the server closes it or `timeoutMs` passes; runs `then` once `after` events have arrived. */
+async function readUntilClosed(url: string, cookie: string, then?: { afterEvents: number; run: () => Promise<void> }, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let text = "";
+  let ran = false;
+  try {
+    const response = await fetch(url, { headers: { cookie }, signal: controller.signal });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return { closed: true, text };
+      text += decoder.decode(value, { stream: true });
+      if (then && !ran && (text.match(/^event: /gm)?.length ?? 0) >= then.afterEvents) {
+        ran = true;
+        await then.run();
+      }
+    }
+  } catch (error) {
+    if (controller.signal.aborted) return { closed: false, text };
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 beforeAll(async () => {
@@ -155,6 +185,21 @@ describe("POST /v1/auth/code", () => {
     const second = await codeFor(app, address);
     expectError(await verify(app, address, first), 400, "INVALID_CODE");
     expect((await verify(app, address, second)).statusCode).toBe(200);
+  });
+
+  it("serializes concurrent requests for one email, so exactly one code stays live", async () => {
+    const store = createAuthStore(handle.db, { newSessionToken });
+    const address = freshEmail();
+    const issued = await Promise.all(Array.from({ length: 6 }, () => store.issueCode(address)));
+    const rows = await handle.db.select().from(emailCodes).where(eq(emailCodes.email, normalizeEmail(address)));
+    expect(rows).toHaveLength(6);
+    const live = rows.filter((row) => row.consumedAt === null);
+    expect(live).toHaveLength(1);
+    // Only the surviving code verifies, and only once.
+    const codes = issued.map((i) => i.code);
+    const outcomes = await Promise.all(codes.map((code) => store.verifyCode({ email: address, code, anonOwnerHash: undefined, currentSessionToken: undefined, sessionMaxAgeS: 60 })));
+    expect(outcomes.filter((o) => o.kind === "verified")).toHaveLength(1);
+    expect((await store.verifyCode({ email: address, code: codes.find((c) => hashCode(live[0]!.id, c) === live[0]!.codeHash)!, anonOwnerHash: undefined, currentSessionToken: undefined, sessionMaxAgeS: 60 })).kind).toBe("rejected");
   });
 
   it("rejects a malformed body and never logs or stores anything for it", async () => {
@@ -392,6 +437,73 @@ describe("build routes under a session", () => {
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/messages`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}` }), 404, "NOT_FOUND");
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/events`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
+  });
+});
+
+describe("a session that loses access", () => {
+  it("is signed out of the tenant's builds the moment its membership is removed", async () => {
+    const app = makeApp();
+    const { me: signedIn, cookie } = await signIn(app, freshEmail());
+    const created = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Team build" }, headers: { cookie } });
+    const buildId = CreatedBuild.parse(created.json()).id;
+    expect((await app.inject({ method: "GET", url: "/v1/builds", headers: { cookie } })).statusCode).toBe(200);
+
+    // Another admin keeps the tenant alive; this user is removed.
+    const [other] = await handle.db.insert(users).values({ email: freshEmail() }).returning({ id: users.id });
+    await handle.db.insert(tenantMembers).values({ tenantId: signedIn.tenant.id, userId: other!.id, role: "admin" });
+    await handle.db.delete(tenantMembers).where(eq(tenantMembers.userId, signedIn.user.id));
+
+    expectError(await me(app, cookie), 401, "UNAUTHENTICATED");
+    expectError(await app.inject({ method: "GET", url: "/v1/builds", headers: { cookie } }), 401, "UNAUTHENTICATED");
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}`, headers: { cookie } }), 404, "NOT_FOUND");
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/messages`, headers: { cookie } }), 404, "NOT_FOUND");
+    expectError(
+      await app.inject({ method: "POST", url: `/v1/builds/${buildId}/messages`, payload: { text: "still here?", client_message_id: randomUUID() }, headers: { cookie } }),
+      404,
+      "NOT_FOUND",
+    );
+  });
+
+  it("loses an open event stream within a poll of signing out", async () => {
+    const app = makeApp({}, { sse: { pollMs: 50, heartbeatMs: 200, maxMs: 10_000, lookbackMs: 1000, drainTimeoutMs: 1000, maxBufferedBytes: 1_000_000 } });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+    const { cookie } = await signIn(app, freshEmail());
+    const created = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Streaming build" }, headers: { cookie } });
+    const buildId = CreatedBuild.parse(created.json()).id;
+
+    const result = await readUntilClosed(`${base}/v1/builds/${buildId}/events`, cookie, {
+      afterEvents: 1, // the first build.updated: the stream is live
+      run: async () => {
+        expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: { cookie } })).statusCode).toBe(204);
+        // Written after sign-out: must never reach the stream.
+        await handle.db.insert(buildMessages).values({ buildId, role: "assistant", text: "private reply after sign-out" });
+      },
+    });
+    expect(result.closed).toBe(true);
+    expect(result.text).not.toContain("private reply after sign-out");
+  });
+
+  it("loses an open event stream when its session expires or its membership is removed", async () => {
+    const app = makeApp({}, { sse: { pollMs: 50, heartbeatMs: 200, maxMs: 10_000, lookbackMs: 1000, drainTimeoutMs: 1000, maxBufferedBytes: 1_000_000 } });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+
+    const expiring = await signIn(app, freshEmail());
+    const first = CreatedBuild.parse((await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Expiring" }, headers: { cookie: expiring.cookie } })).json()).id;
+    const expired = await readUntilClosed(`${base}/v1/builds/${first}/events`, expiring.cookie, {
+      afterEvents: 1,
+      run: async () => void (await handle.db.update(sessions).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(sessions.tokenHash, hashSessionToken(expiring.token)))),
+    });
+    expect(expired.closed).toBe(true);
+
+    const removed = await signIn(app, freshEmail());
+    const second = CreatedBuild.parse((await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Removed" }, headers: { cookie: removed.cookie } })).json()).id;
+    const dropped = await readUntilClosed(`${base}/v1/builds/${second}/events`, removed.cookie, {
+      afterEvents: 1,
+      run: async () => void (await handle.db.delete(tenantMembers).where(eq(tenantMembers.userId, removed.me.user.id))),
+    });
+    expect(dropped.closed).toBe(true);
   });
 });
 

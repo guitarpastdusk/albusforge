@@ -63,7 +63,7 @@ async function main(): Promise<void> {
   // Sign-in (ADR 0008). The log adapter prints codes: never the production setting.
   const { auth: authConfig } = config;
   if (authConfig.emailAdapter === "log") log("WARNING", "EMAIL_ADAPTER=log: sign-in codes are written to the log, not emailed");
-  if (authConfig.internalAuth === null) log("WARNING", "INTERNAL_AUTH_AUDIENCE is not set: SSR requests rate-limit as web's own IP");
+  if (authConfig.internalAuth === null) log("WARNING", "INTERNAL_AUTH_AUDIENCE is not set: X-Albus-Client-IP is ignored and SSR requests rate-limit as web's own IP");
   const email =
     authConfig.emailAdapter === "resend"
       ? resendEmailSender({ apiKey: authConfig.resendApiKey!, from: authConfig.emailFrom })

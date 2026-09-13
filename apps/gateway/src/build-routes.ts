@@ -293,7 +293,18 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
       });
     }
     try {
-      streamBuildEvents({ request, reply, buildId: build.id, owner, store, log, options: sse, lease });
+      streamBuildEvents({
+        request,
+        reply,
+        buildId: build.id,
+        owner,
+        // A session can end mid-stream; an anonymous cookie can only lose the build, which buildState catches.
+        refreshOwner: owner.tenantId === null ? undefined : () => ownerOf(request),
+        store,
+        log,
+        options: sse,
+        lease,
+      });
     } catch (error) {
       lease.release();
       throw error;

@@ -57,9 +57,15 @@ describe("configFromEnv", () => {
     expect(() => configFromEnv({ ...withoutKey, RESEND_API_KEY: "" })).toThrow(/RESEND_API_KEY/);
   });
 
-  it("requires INTERNAL_AUTH_AUDIENCE and SSR_SERVICE_ACCOUNT together", () => {
+  it("requires SSR_SERVICE_ACCOUNT with INTERNAL_AUTH_AUDIENCE, but tolerates the account alone (today's Terraform)", () => {
     expect(() => configFromEnv({ ...DB, INTERNAL_AUTH_AUDIENCE: "https://gateway-123.us-central1.run.app" })).toThrow(/SSR_SERVICE_ACCOUNT/);
-    expect(() => configFromEnv({ ...DB, SSR_SERVICE_ACCOUNT: "web@project.iam.gserviceaccount.com" })).toThrow(/INTERNAL_AUTH_AUDIENCE/);
+    expect(configFromEnv({ ...DB, SSR_SERVICE_ACCOUNT: "web@project.iam.gserviceaccount.com" }).auth.internalAuth).toBeNull();
+  });
+
+  it("refuses the log email adapter on Cloud Run", () => {
+    expect(() => configFromEnv({ ...DB, EMAIL_ADAPTER: "log", K_SERVICE: "gateway" })).toThrow(/K_SERVICE/);
+    expect(configFromEnv({ ...DB, EMAIL_ADAPTER: "log" }).auth.emailAdapter).toBe("log");
+    expect(configFromEnv({ ...DB, K_SERVICE: "gateway" }).auth.emailAdapter).toBe("resend");
   });
 
   it("reads the intake URL, its auth mode, REGISTRY_INCLUDE_DRAFTS and ANON_BUILDS_PER_HOUR", () => {

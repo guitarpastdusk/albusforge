@@ -160,7 +160,7 @@ jobs:
       # fallbacks answer JSON.
       - name: Smoke-test gateway without a database
         run: |
-          docker run -d --name gateway-nodb -p 8081:8080 \
+          docker run -d --name gateway-nodb -p 8081:8080 -e EMAIL_ADAPTER=log \
             -e DB_HOST=127.0.0.1 -e DB_PORT=1 -e DB_NAME=none -e DB_USER=none -e DB_PASSWORD=none -e DB_SSL=disable \
             gateway:ci
           for i in $(seq 1 30); do
@@ -175,7 +175,7 @@ jobs:
           }
           check /healthz 200
           check /readyz 503
-          check /v1/builds 501
+          check /v1/builds 401
           check /nope 404
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/ingest/v1)" = 404 ]
 
@@ -198,7 +198,7 @@ jobs:
 
       - name: Smoke-test gateway against the loaded database
         run: |
-          docker run -d --name gateway --network host ${DB} -e PORT=8080 \
+          docker run -d --name gateway --network host ${DB} -e PORT=8080 -e EMAIL_ADAPTER=log \
             -e DB_USER=albus_app -e DB_PASSWORD=app-secret \
             gateway:ci
           for i in $(seq 1 30); do

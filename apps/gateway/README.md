@@ -125,11 +125,11 @@ Browsers only send `__Host-` cookies over HTTPS, but curl doesn't enforce that l
 | `ANON_BUILDS_PER_HOUR` | `60` | builds that create a new anonymous owner (no stored build has its hash), per instance per sliding hour |
 | `SSE_MAX_STREAMS_PER_OWNER` | `3` | open event streams per owner, per instance |
 | `SSE_MAX_STREAMS` | `100` | open event streams per instance |
-| `EMAIL_ADAPTER` | `resend` | `resend`: sign-in codes go through Resend. `log`: they are written to the log at INFO, for local runs and tests only |
+| `EMAIL_ADAPTER` | `resend` | `resend`: sign-in codes go through Resend. `log`: they are written to the log at INFO, for local runs and CI only; refused when `K_SERVICE` (Cloud Run) is set |
 | `RESEND_API_KEY` | unset | required unless `EMAIL_ADAPTER=log` |
 | `AUTH_EMAIL_FROM` | `Albusforge <sign-in@auth.albusforge.ai>` | the From mailbox; the domain must be verified in Resend (`infra/bootstrap/email_dns.tf`) |
-| `INTERNAL_AUTH_AUDIENCE` | unset | gateway's own `https://…run.app` URL, the `aud` of web's `X-Albus-Internal-Auth` token. Set together with `SSR_SERVICE_ACCOUNT`. Unset: the forwarded client IP is never trusted, and every SSR request counts against web's own IP (a startup WARNING) |
-| `SSR_SERVICE_ACCOUNT` | unset | web's runtime service account, the token's `email` |
+| `INTERNAL_AUTH_AUDIENCE` | unset | gateway's own `https://…run.app` URL, the `aud` of web's `X-Albus-Internal-Auth` token. Requires `SSR_SERVICE_ACCOUNT`. Unset: the forwarded client IP is never trusted, and every SSR request counts against web's own IP (a startup WARNING) |
+| `SSR_SERVICE_ACCOUNT` | unset | web's runtime service account, the token's `email`. Terraform sets it already; alone it enables nothing |
 | `TRUSTED_PROXY_HOPS` | `1` | `X-Forwarded-For` entries at the right end that are our own proxies (the load balancer) |
 | `AUTH_CODES_PER_EMAIL` | `5` | sign-in code requests per email in a sliding 15 minutes, per instance |
 | `AUTH_CODES_PER_IP` | `20` | sign-in code requests per client IP in a sliding 15 minutes, per instance |
@@ -164,7 +164,7 @@ Email code sign-in per [ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md),
 
 Verify, in one transaction under an advisory lock per email: checks the code, finds or creates the user (`users.users` is unique on `lower(email)`; the address is stored lowercased), creates the personal tenant named `Personal` with the user as `admin` on a first sign-in, opens a 30-day session whose active tenant is the current session's when the caller is already signed in as the same user and otherwise the oldest membership, and claims anonymous work (PORTAL.md §5): `builds` and `llm_calls` carrying the `__Host-albus_anon` cookie's hash get the tenant and lose the hash. The build routes then serve the claimed build to the session (Ownership, above) and `GET /v1/builds` lists it.
 
-Sessions are 32 random bytes as base64url in `__Host-albus_session` (`Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`, no `Domain`), stored as their SHA-256. There is no sliding renewal yet: a session lasts 30 days from sign-in.
+Sessions are 32 random bytes as base64url in `__Host-albus_session` (`Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`, no `Domain`), stored as their SHA-256. There is no sliding renewal yet: a session lasts 30 days from sign-in. Resolving a session to its tenant also checks `tenant_members` (ADR 0009), so a removed member loses the tenant's builds at once, and an open event stream re-resolves the session before every poll and closes when it is signed out, expired or no longer a member.
 
 `PUT /v1/me/active-tenant` (ADR 0009) is not built: every user has exactly one tenant until teams arrive.
 

@@ -27,8 +27,9 @@ export interface AuthConfig {
   emailFrom: string;
   /**
    * Gateway's own URL, the `aud` of web's X-Albus-Internal-Auth ID token, with
-   * the SSR service account it must be issued to. Null: the forwarded client IP
-   * is never trusted and SSR requests rate-limit as web's own IP.
+   * the SSR service account it must be issued to. Null when INTERNAL_AUTH_AUDIENCE
+   * is unset (Terraform sets SSR_SERVICE_ACCOUNT on its own today): the forwarded
+   * client IP is never trusted and SSR requests rate-limit as web's own IP.
    */
   internalAuth: { audience: string; serviceAccount: string } | null;
   /** X-Forwarded-For entries at the right end that belong to our proxies. */
@@ -100,8 +101,14 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
   if (e.EMAIL_ADAPTER === "resend" && e.RESEND_API_KEY === undefined) {
     throw new Error("Invalid gateway environment:\nRESEND_API_KEY is required unless EMAIL_ADAPTER=log");
   }
-  if ((e.INTERNAL_AUTH_AUDIENCE === undefined) !== (e.SSR_SERVICE_ACCOUNT === undefined)) {
-    throw new Error("Invalid gateway environment:\nINTERNAL_AUTH_AUDIENCE and SSR_SERVICE_ACCOUNT must be set together");
+  // The log adapter prints every code. Cloud Run sets K_SERVICE; refuse it there whatever the intent.
+  if (e.EMAIL_ADAPTER === "log" && cleaned.K_SERVICE !== undefined) {
+    throw new Error("Invalid gateway environment:\nEMAIL_ADAPTER=log is not allowed on Cloud Run (K_SERVICE is set)");
+  }
+  // An audience without the account it must belong to can verify nothing. The
+  // reverse (account set, audience not) is today's Terraform and only disables the check.
+  if (e.INTERNAL_AUTH_AUDIENCE !== undefined && e.SSR_SERVICE_ACCOUNT === undefined) {
+    throw new Error("Invalid gateway environment:\nINTERNAL_AUTH_AUDIENCE requires SSR_SERVICE_ACCOUNT");
   }
   return {
     port: e.PORT,

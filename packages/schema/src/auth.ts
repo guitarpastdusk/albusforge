@@ -41,6 +41,10 @@ export const Me = z.object({
 });
 export type Me = z.infer<typeof Me>;
 
+/** POST /v1/auth/verify returns the session in the same shape as GET /v1/me, plus Set-Cookie. */
+export const VerifyCodeResponse = Me;
+export type VerifyCodeResponse = Me;
+
 /** PUT /v1/me/active-tenant → 204. */
 export const SetActiveTenantRequest = z.object({
   tenant_id: Id,

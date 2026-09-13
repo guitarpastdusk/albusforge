@@ -24,10 +24,12 @@ function byId(method: Method, pattern: string): Route<[id: string]> {
 export const routes = {
   auth: {
     requestCode: fixed("POST", "/v1/auth/code"),
+    /** Body VerifyCodeRequest → VerifyCodeResponse (= Me) + Set-Cookie. */
     verify: fixed("POST", "/v1/auth/verify"),
     signOut: fixed("POST", "/v1/auth/signout"),
   },
   me: {
+    /** GET /v1/me → Me | 401 */
     get: fixed("GET", "/v1/me"),
     /** Body SetActiveTenantRequest → 204. */
     setActiveTenant: fixed("PUT", "/v1/me/active-tenant"),

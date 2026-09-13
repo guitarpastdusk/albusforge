@@ -484,6 +484,8 @@ POST   /v1/devices/:id/ask         { text } → answer; /v1/ask with device boun
 
 The web portal is a client of this contract and adds no API of its own. Its routes, the screens that read each endpoint, and how anonymous builds are claimed are in [`PORTAL.md`](PORTAL.md).
 
+**Project workspace UI:** the authenticated projects list opens a build overview backed by `BuildDetail`, with stored spec/version, capability matches, server display state and a link to the existing transcript/reply flow. `SpecPanel` derives its defensive draft display from shared `Spec` fields, including capabilities, assumptions and open questions. Candidate matches remain distinct from supplied ready summaries. Ready-card actions use server session state: open the current project when signed in, otherwise preserve its encoded destination through signup and anonymous-build claim. Generated artifacts and order tracking remain explicit unavailable states until their APIs land; fixture enclosure assets are not shown as project outputs. See [`PROJECT-WORKSPACE.md`](PROJECT-WORKSPACE.md) for delivered behavior, validation and remaining B3–B8 work.
+
 ### 6.1 Edge and service-to-service auth
 
 - Global External HTTPS LB → serverless NEG → gateway, with Cloud Armor rate-limit rules. The in-app rate-limit plugin stays as defense in depth.

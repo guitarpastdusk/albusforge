@@ -1,3 +1,4 @@
+import { getHeaderSession } from "@/lib/session";
 import { BuildConversation, WhenConversationEmpty } from "@/components/build/BuildConversation";
 import { ConversationView } from "@/components/build/ConversationView";
 import { DeviceCarousel } from "@/components/carousel/DeviceCarousel";
@@ -10,7 +11,7 @@ export default async function LandingPage() {
   const { cards, examples } = await loadShowcaseCards();
 
   return (
-    <BuildConversation enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>
+    <BuildConversation signedIn={Boolean(await getHeaderSession())} enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>
       <main className="flex flex-1 flex-col">
         <WhenConversationEmpty>
           <div className="flex flex-1 flex-col items-center px-8 py-[72px] text-center">

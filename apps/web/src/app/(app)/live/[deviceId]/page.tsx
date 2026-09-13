@@ -62,7 +62,7 @@ export default async function DevicePage({
     }
   }
   const { device } = detail;
-  const input = "border border-current/20 rounded-lg px-3 py-2 bg-transparent";
+  const input = "min-w-0 w-full max-w-full border border-current/20 rounded-lg px-3 py-2 bg-transparent";
   return (
     <PageContainer>
       <Link href="/live" className="text-muted">
@@ -97,7 +97,7 @@ export default async function DevicePage({
           return (
             <li
               key={channel}
-              className="rounded-2xl border border-current/10 p-5"
+              className="min-w-0 break-all rounded-2xl border border-current/10 p-5"
             >
               <h3>{channel}</h3>
               <p className="text-2xl mt-2">
@@ -117,7 +117,7 @@ export default async function DevicePage({
           Reading history
         </h2>
         <form className="flex flex-wrap items-end gap-4 mt-4">
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Channel
             <select
               name="channel"
@@ -133,7 +133,7 @@ export default async function DevicePage({
               ))}
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Window
             <select
               name="window"
@@ -147,7 +147,7 @@ export default async function DevicePage({
               ))}
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Resolution
             <select
               name="resolution"
@@ -163,7 +163,7 @@ export default async function DevicePage({
               <option value="1h">Hourly averages</option>
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             End time (UTC, blank = now)
             <input
               type="datetime-local"

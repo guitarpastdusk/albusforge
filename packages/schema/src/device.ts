@@ -85,6 +85,8 @@ export const DeviceAction = z.object({
   via: z.string(),
   enabled: z.boolean(),
   sync: ActionSync.optional(),
+  /** Increments on every write; the device acks a version, so a late ack can't regress a newer change (ADR 0010). */
+  version: z.number().int().nonnegative().optional(),
 });
 export type DeviceAction = z.infer<typeof DeviceAction>;
 

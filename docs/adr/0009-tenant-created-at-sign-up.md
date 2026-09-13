@@ -1,6 +1,6 @@
 # 0009 — A tenant is created at sign-up; builds, orders and devices belong to it
 
-**Status:** Proposed, 2026-09-13
+**Status:** Accepted, 2026-09-13
 
 ## Context
 

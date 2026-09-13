@@ -442,7 +442,7 @@ stateDiagram-v2
 
 ## 6. Gateway API contract
 
-All routes under `/v1`, zod-validated, cookie session auth (6-digit email code, sessions in Postgres — proposed in [ADR 0008](adr/0008-sign-in-by-email-code.md), replacing Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
+All routes under `/v1`, zod-validated, cookie session auth (6-digit email code, sessions in Postgres — [ADR 0008](adr/0008-sign-in-by-email-code.md), replacing Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
 
 ```
 POST   /v1/builds                  { ask_text } → { build_id, status }
@@ -651,7 +651,7 @@ The deck adds public build/remix counts and an **earn** promise: remixes route t
 
 **The spec has no tenant concept at all.** Everything hangs off `build_id`; the deck hangs everything off a tenant.
 
-- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output. [ADR 0009](adr/0009-tenant-created-at-sign-up.md) (proposed) keeps order-time provisioning but **takes `tenant_id` from the build, not from `h(order)`**: the tenant exists from sign-up, and checkout requires a session, so every order already has one. `/v1/devices/claim` likewise takes the tenant from the session.
+- **Provisioning at order time.** The deck ships devices already knowing their cloud identity — keys, endpoint and schema flashed at order time, with `tenant_id = h(order)` joining a customer's devices into one tenant automatically. The spec does the opposite: `POST /v1/devices/claim` issues credentials after the fact. Pre-provisioning means credentials are minted during checkout and baked into the code bundle — which changes both the orders flow and codegen's output. [ADR 0009](adr/0009-tenant-created-at-sign-up.md) keeps order-time provisioning but **takes `tenant_id` from the build, not from `h(order)`**: the tenant exists from sign-up, and checkout requires a session, so every order already has one. `/v1/devices/claim` likewise takes the tenant from the session.
 - **Multi-user tenants.** The platform slide shows twelve members and three roles (ops manager as admin; maintenance crew with alerts + acknowledge; customer auditor read-only), plus SSO, an audit log and per-tenant keys. The spec has `users`, session cookies, and anonymous builds. No organisation, membership, role, audit table, or per-tenant key material. This is a schema addition, an authorization layer across **every** route, and an SSO integration.
 - **Per-tenant app hosting** at `acme-plant.albusforge.ai` — subdomain routing and per-tenant isolation, against an LB config that assumes one public hostname.
 
@@ -759,7 +759,7 @@ This is simultaneously the strongest differentiator — it answers the complianc
 | CAD | Python 3.12 + CadQuery, containerized, queue-invoked |
 | Firmware | PlatformIO, ESP32-S3 only for MVP; compile gate in `workers/fwbuild` |
 | Device ingest | MQTT (EMQX) → ingest → partitioned Postgres |
-| Auth | ~~Lucia session cookies + magic link~~ — proposed: 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
+| Auth | ~~Lucia session cookies + magic link~~ — 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
 | Web portal | Next.js App Router in `apps/web`, a client of the gateway only ([`PORTAL.md`](PORTAL.md)) |
 | API style | REST + zod-to-openapi; one gateway, no GraphQL |
 | Testing | vitest, supertest, testcontainers |
@@ -1043,7 +1043,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | Decision | The fork |
 | --- | --- |
 | **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
-| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) recommends **tenant, added in M1** — every cloud surface it specifies is tenant-scoped. Its original "from `h(order)`" is superseded: the portal's Projects screen lists builds before any order exists, so [ADR 0009](adr/0009-tenant-created-at-sign-up.md) proposes **a tenant created at sign-up**, with orders and devices taking it from the build |
+| ~~**Tenant or build as the root**~~ | **Resolved:** tenant created at sign-up; orders and devices take it from the build. See [ADR 0009](adr/0009-tenant-created-at-sign-up.md) |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
 | ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |
 | **Connector standard** | `hsx-3pin-v1` (invent, adapt every part) vs Qwiic/Grove (I²C-only for data, separate power convention). The solver enforces whichever is chosen |

@@ -160,11 +160,16 @@ The portal is built against mocks from M0 and connected screen by screen as the 
 
 ---
 
-## 10. Open decisions
+## 10. Decisions
+
+| Decision | Outcome | Record |
+| --- | --- | --- |
+| Sign-in method | 6-digit email code, implemented in gateway, sessions in Postgres | [ADR 0008](adr/0008-sign-in-by-email-code.md) — Accepted |
+| Tenant root | tenant created at sign-up, not derived from an order | [ADR 0009](adr/0009-tenant-created-at-sign-up.md) — Accepted |
+
+### Still open
 
 | Decision | Recommendation | Record |
 | --- | --- | --- |
-| Sign-in method | 6-digit email code, implemented in gateway, sessions in Postgres | [ADR 0008](adr/0008-sign-in-by-email-code.md) — Proposed |
-| Tenant root | tenant created at sign-up, not derived from an order | [ADR 0009](adr/0009-tenant-created-at-sign-up.md) — Proposed |
 | Node version | Node 22 LTS; §12.1's Node 20 reached end of life on 2026-04-30 | this document |
 | Showcase at launch | hand-curated static list, no live feed | §3 |

@@ -1,6 +1,6 @@
 # 0008 — Sign in with a 6-digit email code, implemented in gateway
 
-**Status:** Proposed, 2026-09-13
+**Status:** Accepted, 2026-09-13
 
 ## Context
 

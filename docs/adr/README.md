@@ -11,3 +11,5 @@ Architecture decision records. Each records one decision: its context, what was 
 | [0005](0005-ci-owns-images-terraform-owns-shape.md) | CI owns images; Terraform owns everything else | Accepted |
 | [0006](0006-terraform-layout.md) | Terraform layout: a bootstrap root and a workspace-per-environment root | Accepted |
 | [0007](0007-portal-routing.md) | Portal on the apex; `/v1` to gateway, everything else to web, on every hostname | Accepted |
+| [0008](0008-sign-in-by-email-code.md) | Sign in with a 6-digit email code; sessions implemented in gateway | Accepted |
+| [0009](0009-tenant-created-at-sign-up.md) | A tenant is created at sign-up; builds, orders and devices belong to it | Accepted |

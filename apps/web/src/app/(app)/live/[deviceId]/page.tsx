@@ -7,6 +7,7 @@ import {
 } from "@albusforge/schema";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DeviceChat } from "@/components/devices/DeviceChat";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
@@ -26,7 +27,7 @@ export default async function DevicePage({
   searchParams: Promise<Search>;
 }) {
   const { deviceId } = await params;
-  await requireSession(`/live/${encodeURIComponent(deviceId)}`);
+  const me = await requireSession(`/live/${encodeURIComponent(deviceId)}`);
   if (!TelemetryDeviceParams.safeParse({ id: deviceId }).success) notFound();
   const detail = await orNotFound(
     apiGet(routes.telemetry.device.path(deviceId), TelemetryDeviceDetail),
@@ -61,7 +62,7 @@ export default async function DevicePage({
     }
   }
   const { device } = detail;
-  const input = "border border-current/20 rounded-lg px-3 py-2 bg-transparent";
+  const input = "min-w-0 w-full max-w-full border border-current/20 rounded-lg px-3 py-2 bg-transparent";
   return (
     <PageContainer>
       <Link href="/live" className="text-muted">
@@ -96,7 +97,7 @@ export default async function DevicePage({
           return (
             <li
               key={channel}
-              className="rounded-2xl border border-current/10 p-5"
+              className="min-w-0 break-all rounded-2xl border border-current/10 p-5"
             >
               <h3>{channel}</h3>
               <p className="text-2xl mt-2">
@@ -116,7 +117,7 @@ export default async function DevicePage({
           Reading history
         </h2>
         <form className="flex flex-wrap items-end gap-4 mt-4">
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Channel
             <select
               name="channel"
@@ -132,7 +133,7 @@ export default async function DevicePage({
               ))}
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Window
             <select
               name="window"
@@ -146,7 +147,7 @@ export default async function DevicePage({
               ))}
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             Resolution
             <select
               name="resolution"
@@ -162,7 +163,7 @@ export default async function DevicePage({
               <option value="1h">Hourly averages</option>
             </select>
           </label>
-          <label className="grid gap-2">
+          <label className="grid min-w-0 max-w-full gap-2">
             End time (UTC, blank = now)
             <input
               type="datetime-local"
@@ -200,6 +201,14 @@ export default async function DevicePage({
             />
           </>
         )}
+      </section>
+      <section className="mt-10 max-w-2xl" aria-label="Sensor questions">
+        <DeviceChat
+          key={`${me.tenant.id}:${deviceId}`}
+          deviceId={deviceId}
+          greeting="Choose a channel and time window, then ask about its stored readings."
+          channels={channels.map((key) => ({ key, label: key, unit: detail.channels[key]!.unit }))}
+        />
       </section>
     </PageContainer>
   );

@@ -319,3 +319,29 @@ it("returns 503 on a bounded parent-lock wait, then rechecks session expiry afte
     await response;
   }
 });
+
+it("binds Ask identity to the session and releases the database before invoking the service", async () => {
+  const a = await fixture(), b = await fixture();
+  const calls: unknown[] = [];
+  const serviceApp = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool, log: () => {}, sensorAsk: { async ask(input) {
+    calls.push(input);
+    expect(handle.pool.waitingCount).toBe(0);
+    return { request_id: input.request_id, device_id: input.device_id, channel: input.channel, answer: "No readings in this window.", mode: "evidence_only", limitations: ["Stored readings only"], evidence: { from: input.from, to: input.to, unit: "C", count: 0, min: null, max: null, mean: null, latest: null } };
+  } } });
+  try {
+    const post = (id: string, payload: Record<string, unknown>, cookie = a.cookie) => serviceApp.inject({ method: "POST", url: `/v1/devices/${id}/ask`, headers: { cookie }, payload });
+    const body = { text: "What happened?", channel: "temperature_c", from: time(), to: time(3600) };
+    expect((await post(a.device, body, "")).statusCode).toBe(401);
+    expect((await post(b.device, body)).statusCode).toBe(404);
+    expect((await post(a.device, { ...body, tenant_id: b.tenant })).statusCode).toBe(400);
+    expect((await post(a.device, { text: "Hello" })).statusCode).toBe(400);
+    expect((await post(a.device, { ...body, channel: "private" })).statusCode).toBe(404);
+    expect(calls).toHaveLength(0);
+    const result = await post(a.device, body);
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["cache-control"]).toBe("private, no-store");
+    expect(calls).toEqual([expect.objectContaining({ tenant_id: a.tenant, actor_id: a.user, device_id: a.device, question: body.text })]);
+    expect(result.json().message.text).toContain("Latest means latest in this window");
+    expect(result.json().queries[0].input.device_id).toBe(a.device);
+  } finally { await serviceApp.close(); }
+});

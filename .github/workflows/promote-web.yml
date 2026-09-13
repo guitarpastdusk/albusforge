@@ -64,6 +64,14 @@ jobs:
           gcloud artifacts docker images describe "${REPO}/${SERVICE}@${DIGEST}" \
             --format='value(image_summary.digest)'
 
+      # gcloud run deploy creates a missing service, and deploy-prod is allowed
+      # to. Services come only from Terraform (ADR 0005).
+      - name: Require the Terraform-managed service
+        run: |
+          gcloud run services describe "${SERVICE}" --project albusforge-prod --region "${REGION}" \
+            --format='value(metadata.name)' >/dev/null \
+            || { echo "::error::Cloud Run service ${SERVICE} not found in albusforge-prod. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
+
       # Image only: Terraform owns env vars and everything else (ADR 0005).
       - name: Deploy to prod
         env:

@@ -78,6 +78,7 @@ Deploys authenticate through WIF, with no JSON keys. The trust is bound to **Git
 - Environments `staging` and `prod` exist (created 2026-09-13). Both accept deployments from `main` only.
 - **Prod promotion is a manual run of `promote-web.yml`** with the digest staging deployed. That run is the manual promotion step in §12.3. There is no approval gate: GitHub refused required reviewers on `prod` for this private repository's plan. See [ADR 0001](../docs/adr/0001-shared-ci-project.md).
 - A workflow job must declare `environment: staging` or `environment: prod` to get credentials. `terraform output github_actions` prints the provider and SA values for `google-github-actions/auth`.
+- The repository uses GitHub's **immutable OIDC subject**, `repo:<owner>@<owner_id>/<name>@<repo_id>:environment:<env>`, and the deployer bindings match that exact form. If deploys fail with `iam.serviceAccounts.getAccessToken` denied, compare `gh api repos/guitarpastdusk/albusforge/actions/oidc/customization/sub` with the bindings in `bootstrap/wif.tf`.
 
 The staging deployer can push images; the prod deployer can only read them. That enforces "never build twice" in IAM, not just in convention.
 

@@ -1,5 +1,6 @@
 billing_account            = "XXXXXX-XXXXXX-XXXXXX"
-github_repository_owner_id = "858665" # guitarpastdusk
+github_repository_owner_id = "858665"     # guitarpastdusk
+github_repository_id       = "1367511121" # albusforge
 
 # project_suffix = "-a7"   # if albusforge-{ci,staging,prod} is taken
 # prod_budget_usd = 500

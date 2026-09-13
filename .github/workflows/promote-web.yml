@@ -24,6 +24,8 @@ env:
   SERVICE: web
   PROJECT: albusforge-prod
   WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+  # The service account this workflow deploys as (ADR 0001).
+  DEPLOYER: deploy-prod@albusforge-ci.iam.gserviceaccount.com
 
 jobs:
   prod:
@@ -57,7 +59,7 @@ jobs:
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: deploy-prod@albusforge-ci.iam.gserviceaccount.com
+          service_account: ${{ env.DEPLOYER }}
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
@@ -67,7 +69,7 @@ jobs:
       - name: Verify GCP credentials
         run: |
           gcloud auth print-access-token >/dev/null \
-            || { echo "::error::Could not get credentials for deploy-prod@albusforge-ci.iam.gserviceaccount.com through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
+            || { echo "::error::Could not get credentials for ${DEPLOYER} through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
 
       # Being in the registry isn't enough: deploy-web pushes before it deploys,
       # so a failed staging deploy leaves an image behind. Require the

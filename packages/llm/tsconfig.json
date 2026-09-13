@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // Consumed as TypeScript source and bundled by the apps, so Bundler resolution.
+  "include": ["src", "test", "*.ts"]
+}

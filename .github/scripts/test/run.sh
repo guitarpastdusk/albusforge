@@ -530,6 +530,69 @@ promote_gateway "$C,staging-deployed-$C" "$C"
 run_workflow "$root/.github/workflows/promote-gateway.yml"
 expect '[ "$code" != 0 ] && has "never successfully deployed to staging" && ! mutated'
 
+# --- intake: a single service, SERVICE=intake -----------------------------------------
+in1="$REPO/intake@$d1"
+
+setup "intake freshness: the service reads its own image repository"
+export SERVICE=intake
+serving "$in1"
+tagged "$d1" "$B,staging-deployed-$B"
+run staging-freshness.sh
+expect '[ "$code" = 0 ] && [ "$out" = "action=deploy" ] && called "run services describe intake" && called "artifacts docker images list $REPO/intake "'
+
+setup "intake freshness: already serving this commit -> skip"
+export SERVICE=intake
+serving "$in1"
+tagged "$d1" "$C,staging-deployed-$C"
+run staging-freshness.sh
+expect '[ "$code" = 0 ] && [ "$out" = "action=skip" ]'
+
+setup "intake mark: the service must serve the intake image, not the same digest from gateway"
+export SERVICE=intake
+serving "$gw1"
+tagged "$d1" "$C"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$code" = 1 ] && has "not $in1" && ! called "tags add"'
+
+setup "intake mark: serving the intake digest -> tags it"
+export SERVICE=intake
+serving "$in1"
+tagged "$d1" "$C"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$code" = 0 ] && called "artifacts docker tags add $in1 $REPO/intake:staging-deployed-$C"'
+
+# promote_intake TAGS: prod env and inputs for promote-intake.yml.
+promote_intake() {
+  export SERVICE=intake PROJECT=albusforge-prod INPUT_digest="$d1" GITHUB_ACTOR=tester \
+    GITHUB_STEP_SUMMARY="$STUB/summary" GITHUB_OUTPUT="$STUB/output" DEPLOYER=deploy-prod@example.com
+  unset JOBS IMAGE DIGEST JOBS_DIGEST
+  printf '%s\n' "[{\"version\":\"$d1\",\"tags\":\"$1\"}]" >"$STUB/images-intake.json"
+}
+
+setup "workflow: promote-intake extracts its run steps"
+workflow_steps "$root/.github/workflows/promote-intake.yml" "$STUB"
+expect '[ "$(cat "$STUB"/*.name | tr "\n" "|")" = "Validate digest|Verify GCP credentials|Require a successful staging deploy|Require the Terraform-managed service|Deploy intake to prod|" ]'
+
+setup "workflow: deploy-intake extracts its run steps, with no database jobs"
+workflow_steps "$root/.github/workflows/deploy-intake.yml" "$STUB"
+expect '[ "$(cat "$STUB"/*.name | tr "\n" "|")" = "Verify GCP credentials|Require the Terraform-managed service|Check staging freshness|Configure Docker for Artifact Registry|Look for an existing image for this commit|Resolve digest|Deploy intake to staging|Mark the digest as deployed to staging|Summary|" ] && ! grep -q "jobs update\|jobs execute" "$root/.github/workflows/deploy-intake.yml"'
+
+setup "workflow: promote-intake with a staging-deployed digest -> deploys intake only"
+promote_intake "$C,staging-deployed-$C"
+run_workflow "$root/.github/workflows/promote-intake.yml"
+expect '[ "$code" = 0 ] && [ "$(grep -E "^run (jobs update|jobs execute|deploy) " "$STUB/calls" | cut -d" " -f1-4 | tr "\n" "|")" = "run deploy intake --image|" ] && called "run deploy intake --image $REPO/intake@$d1 --project albusforge-prod"'
+
+setup "workflow: promote-intake with a digest never deployed to staging -> stops before any mutation"
+promote_intake "$C"
+run_workflow "$root/.github/workflows/promote-intake.yml"
+expect '[ "$code" != 0 ] && has "never successfully deployed to staging" && [ "$(tail -n 1 "$STUB/steps")" = "Require a successful staging deploy" ] && ! mutated'
+
+setup "workflow: promote-intake with a malformed digest -> stops at validation"
+promote_intake "$C,staging-deployed-$C"
+export INPUT_digest="latest"
+run_workflow "$root/.github/workflows/promote-intake.yml"
+expect '[ "$code" != 0 ] && [ "$(cat "$STUB/steps")" = "Validate digest" ] && ! called "artifacts"'
+
 # A pipeline's status is its last command's unless pipefail is on, so a failing
 # check piped into head/tee/grep passes under `bash -e`. Deploy and promote
 # workflows either set `shell: bash` (which adds pipefail) or pipe nothing.

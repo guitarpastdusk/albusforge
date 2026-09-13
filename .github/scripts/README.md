@@ -5,9 +5,9 @@ Shell scripts the deploy workflows call. They live outside the YAML so they can 
 | Script | Called by | What it does |
 | --- | --- | --- |
 | `lib.sh` | the others, sourced | `serving_image`: the image of the revision serving all traffic; `job_image`: the image of a job's latest successful execution; `image_tags`: the tag names on a digest; argument checks |
-| `staging-freshness.sh` | `deploy-web.yml`, `deploy-gateway.yml` | refuses to replace the commit staging runs with an older or diverged one; prints `action=deploy` or `action=skip` |
-| `mark-staging-deployed.sh` | `deploy-web.yml`, `deploy-gateway.yml` | tags a digest `staging-deployed-<commit>`, but only after confirming staging runs exactly that digest |
-| `require-staging-deployed.sh` | `promote-web.yml`, `promote-gateway.yml` | refuses to promote a digest that doesn't have that tag |
+| `staging-freshness.sh` | `deploy-web.yml`, `deploy-gateway.yml`, `deploy-intake.yml` | refuses to replace the commit staging runs with an older or diverged one; prints `action=deploy` or `action=skip` |
+| `mark-staging-deployed.sh` | `deploy-web.yml`, `deploy-gateway.yml`, `deploy-intake.yml` | tags a digest `staging-deployed-<commit>`, but only after confirming staging runs exactly that digest |
+| `require-staging-deployed.sh` | `promote-web.yml`, `promote-gateway.yml`, `promote-intake.yml` | refuses to promote a digest that doesn't have that tag |
 | `require-same-commit.sh` | `promote-gateway.yml` | refuses to promote images that different staging commits deployed (gateway with another commit's migrations); prints the shared commit |
 
 ## What runs the image

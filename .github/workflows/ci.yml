@@ -216,6 +216,59 @@ jobs:
           docker logs gateway-nodb || true
           docker logs gateway || true
 
+  docker-intake:
+    # The image deploy-intake.yml ships, built on every PR and started with no
+    # database and a placeholder key: it must boot (config and prompt files
+    # load), answer liveness, and report the database as unavailable. The model
+    # is never called; the database paths are covered by intake's tests.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build intake image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/intake/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: intake:ci
+          provenance: false
+          sbom: false
+
+      - name: Smoke-test intake without a database
+        run: |
+          docker run -d --name intake -p 8082:8080 \
+            -e DB_HOST=127.0.0.1 -e DB_PORT=1 -e DB_NAME=none -e DB_USER=none -e DB_PASSWORD=none -e DB_SSL=disable \
+            -e DB_CONNECT_TIMEOUT_MS=2000 \
+            -e LLM_PROVIDER=anthropic -e LLM_MODEL=claude-opus-5 -e ANTHROPIC_API_KEY=placeholder-not-a-key \
+            intake:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8082/healthz; then break; fi
+            sleep 1
+          done
+          check() { # check METHOD PATH STATUS [BODY]
+            code=$(curl -s -o /tmp/body -w '%{http_code}' -X "$1" -H 'content-type: application/json' ${4:+-d "$4"} "http://localhost:8082$2")
+            echo "$1 $2 $code $(head -c 200 /tmp/body)"
+            [ "$code" = "$3" ] && jq -e . /tmp/body >/dev/null || { docker logs intake; exit 1; }
+          }
+          check GET /healthz 200
+          check GET /readyz 503
+          check POST /v1/turns 400 '{"build_id":"nope"}'
+          check POST /v1/turns 503 '{"build_id":"00000000-0000-4000-8000-000000000001"}'
+          check GET /nope 404
+          # Configuration is logged, secrets never are.
+          docker logs intake 2>&1 | grep -q '"message":"intake listening"'
+          if docker logs intake 2>&1 | grep -q placeholder-not-a-key; then echo "API key in logs"; exit 1; fi
+
+      - name: Container logs
+        if: failure()
+        run: docker logs intake || true
+
   deploy-scripts:
     # The deploy workflows' freshness and promotion checks, against a stub
     # gcloud and a throwaway git history. No cloud access.

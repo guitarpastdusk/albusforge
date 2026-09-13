@@ -1,0 +1,112 @@
+# Promote an intake image that deploy-intake.yml successfully deployed to
+# staging. Dispatched by hand with the digest from that run's job summary; this
+# is the manual promotion step (ARCHITECTURE.md §12.3, docs/adr/0001). It never
+# builds, and runs no database jobs: promote gateway first when intake needs
+# its migrations.
+#
+# The plan doesn't allow required reviewers on the prod environment, so the
+# protection is: only a person can dispatch this, and the environment accepts
+# dispatches from main only.
+name: promote-intake
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "intake image digest from a successful deploy-intake staging run's summary (sha256:…)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: intake
+  PROJECT: albusforge-prod
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+  # The service account this workflow deploys as (ADR 0001).
+  DEPLOYER: deploy-prod@albusforge-ci.iam.gserviceaccount.com
+
+jobs:
+  prod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # WIF trust is bound to the GitHub environment (ADR 0001); its branch
+    # policy refuses dispatches from anything but main.
+    environment: prod
+    # One intake promotion at a time; a running one is never interrupted. Not
+    # another workflow's group, for the reason in deploy-intake.yml.
+    concurrency:
+      group: deploy-prod-intake
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Validate before the input touches anything else.
+      - name: Validate digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::digest must match ^sha256:[0-9a-f]{64}\$"
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Only the scripts are needed; nothing uses git credentials.
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # google-github-actions/auth only writes a credentials file; the token
+      # exchange and impersonation happen on the first gcloud call. Fail here,
+      # clearly, if this job can't act as the deployer.
+      - name: Verify GCP credentials
+        run: |
+          gcloud auth print-access-token >/dev/null \
+            || { echo "::error::Could not get credentials for ${DEPLOYER} through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
+
+      # Being in the registry isn't enough: deploy-intake pushes before it
+      # deploys, so a failed staging deploy leaves an image behind. Require the
+      # staging-deployed-<commit> tag it adds only after a successful deploy.
+      - name: Require a successful staging deploy
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: bash .github/scripts/require-staging-deployed.sh "$DIGEST"
+
+      # gcloud run deploy creates a missing service, and deploy-prod is allowed
+      # to. Services come only from Terraform (ADR 0005).
+      - name: Require the Terraform-managed service
+        run: |
+          if ! gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
+              --format='value(metadata.name)' >/dev/null; then
+            echo "::error::Could not confirm Cloud Run service ${SERVICE} exists in ${PROJECT}; see the gcloud error above. If it's missing, apply infra/env first. CI never creates services (ADR 0005)."
+            exit 1
+          fi
+
+      # Image only: Terraform owns env vars, secrets and everything else (ADR 0005).
+      - name: Deploy intake to prod
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          echo "Promoted \`${REPO}/${SERVICE}@${DIGEST}\` to prod (dispatched by ${GITHUB_ACTOR})" >> "$GITHUB_STEP_SUMMARY"

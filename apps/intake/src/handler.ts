@@ -1,0 +1,202 @@
+import { buildMessages, builds, type Db, specs } from "@albusforge/db";
+import { type IntakeTurnResponse, Spec } from "@albusforge/schema";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
+import type pg from "pg";
+import type { Log, TraceContext } from "./log";
+import { FALLBACK_REPLY } from "./replies";
+import { runTurn, type TurnContext, type TurnOutcome } from "./turn";
+
+/**
+ * POST /v1/turns: answer the latest unanswered user message on a build.
+ *
+ * Concurrency. A session-level advisory lock per build serializes answering.
+ * A caller that can't take the lock returns noop: whoever holds it answers.
+ * The holder re-checks for an unanswered message after releasing, so a message
+ * that arrives while it works is never stranded between the holder's last
+ * check and a late caller's failed try.
+ *
+ * Every answered user message gets exactly one assistant message: success,
+ * refusal, limit, deadline and failure all end in the same write.
+ */
+
+export interface HandlerDeps {
+  db: Db;
+  pool: pg.Pool;
+  turn: TurnContext;
+  /** The whole turn, retries included. */
+  deadlineMs: number;
+  log: Log;
+}
+
+/** First key of the two-key advisory lock; the second is hashtext(build_id). Arbitrary, fixed. */
+export const TURN_LOCK_CLASS = 424_200_001;
+/** Turns one call answers at most, when messages keep arriving. */
+const MAX_PASSES = 3;
+
+type Answered = Extract<IntakeTurnResponse, { message_id: string }>;
+
+export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<IntakeTurnResponse | null> {
+  const [build] = await deps.db.select({ id: builds.id }).from(builds).where(eq(builds.id, buildId));
+  if (!build) return null;
+
+  let last: Answered | undefined;
+  let passes = 0;
+  while (passes < MAX_PASSES) {
+    const client = await deps.pool.connect();
+    let broken: Error | undefined;
+    try {
+      const { rows } = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock($1, hashtext($2)) AS locked", [TURN_LOCK_CLASS, buildId]);
+      if (!rows[0]?.locked) break;
+      try {
+        while (passes < MAX_PASSES) {
+          const answered = await answerLatest(deps, buildId, trace);
+          if (!answered) break;
+          last = answered;
+          passes++;
+        }
+      } finally {
+        await client.query("SELECT pg_advisory_unlock($1, hashtext($2))", [TURN_LOCK_CLASS, buildId]).catch((error: Error) => {
+          // Closing the connection releases a session lock, so discard the client.
+          broken = error;
+        });
+      }
+    } catch (error) {
+      broken ??= error as Error;
+      throw error;
+    } finally {
+      client.release(broken);
+    }
+    if (!(await latestIsUnanswered(deps.db, buildId))) break;
+  }
+  return last ?? { noop: true };
+}
+
+async function latestMessage(db: Db, buildId: string) {
+  const [latest] = await db
+    .select({ id: buildMessages.id, role: buildMessages.role, createdAt: buildMessages.createdAt })
+    .from(buildMessages)
+    .where(eq(buildMessages.buildId, buildId))
+    .orderBy(desc(buildMessages.createdAt), desc(buildMessages.id))
+    .limit(1);
+  return latest;
+}
+
+async function latestIsUnanswered(db: Db, buildId: string): Promise<boolean> {
+  return (await latestMessage(db, buildId))?.role === "user";
+}
+
+/** Answers the latest message if it's from the user; undefined if there's nothing to answer. Needs the lock. */
+async function answerLatest(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<Answered | undefined> {
+  const { db, log } = deps;
+  const [build] = await db
+    .select({ tenantId: builds.tenantId, anonOwnerHash: builds.anonOwnerHash })
+    .from(builds)
+    .where(eq(builds.id, buildId));
+  if (!build) return undefined;
+
+  const transcript = await db
+    .select({ id: buildMessages.id, role: buildMessages.role, text: buildMessages.text, createdAt: buildMessages.createdAt })
+    .from(buildMessages)
+    .where(eq(buildMessages.buildId, buildId))
+    .orderBy(asc(buildMessages.createdAt), asc(buildMessages.id));
+  const target = transcript.at(-1);
+  if (!target || target.role !== "user") return undefined;
+
+  const [latestSpec] = await db
+    .select({ version: specs.version, data: specs.data })
+    .from(specs)
+    .where(eq(specs.buildId, buildId))
+    .orderBy(desc(specs.version))
+    .limit(1);
+  const previous = latestSpec ? Spec.parse(latestSpec.data) : null;
+  const [{ rounds } = { rounds: 0 }] = await db
+    .select({ rounds: sql<number>`count(*)::int` })
+    .from(specs)
+    .where(and(eq(specs.buildId, buildId), sql`jsonb_array_length(${specs.openQuestions}) > 0`));
+
+  await db.update(builds).set({ status: "specifying", updatedAt: new Date() }).where(eq(builds.id, buildId));
+
+  const outcome = await withDeadline(deps, buildId, trace, (signal) =>
+    runTurn(deps.turn, {
+      buildId,
+      attribution: { buildId, tenantId: build.tenantId, anonOwnerHash: build.anonOwnerHash, trace },
+      transcript: transcript.map((m) => ({ role: m.role, text: m.text })),
+      previous,
+      roundsUsed: rounds,
+      signal,
+    }),
+  );
+
+  const idleStatus = previous?.settled ? "planning" : "asking";
+  const reply = outcome.kind === "spec" ? outcome.decision.reply : outcome.reply;
+  const status = outcome.kind === "spec" ? outcome.decision.status : idleStatus;
+
+  const written = await db.transaction(async (tx) => {
+    const [message] = await tx
+      .insert(buildMessages)
+      .values({
+        buildId,
+        role: "assistant",
+        text: reply,
+        // Directly after the message it answers, read in SQL (a JS Date drops the
+        // microseconds). Not now(): a user message sent while this turn ran would
+        // then sort before the reply and look answered.
+        createdAt: sql`(SELECT ${buildMessages.createdAt} + interval '1 microsecond' FROM ${buildMessages} WHERE ${buildMessages.id} = ${target.id})`,
+      })
+      .returning({ id: buildMessages.id });
+
+    let specVersion = latestSpec?.version ?? null;
+    if (outcome.kind === "spec" && outcome.decision.newVersion) {
+      specVersion = (latestSpec?.version ?? 0) + 1;
+      await tx.insert(specs).values({
+        buildId,
+        version: specVersion,
+        data: outcome.decision.spec,
+        confidence: outcome.decision.confidence,
+        openQuestions: outcome.decision.spec.open_questions,
+      });
+    }
+    await tx.update(builds).set({ status, updatedAt: new Date() }).where(eq(builds.id, buildId));
+    return { message_id: message!.id, spec_version: specVersion, status };
+  });
+
+  log("INFO", "turn answered", {
+    trace,
+    fields: { buildId, outcome: outcome.kind === "spec" ? "spec" : outcome.reason, status, specVersion: written.spec_version },
+  });
+  return written;
+}
+
+/**
+ * Runs the turn under the deadline. The signal cancels the model request; the
+ * race also covers anything that ignores it, and any error becomes the
+ * fallback reply, so the caller always has something to write.
+ */
+async function withDeadline(
+  deps: HandlerDeps,
+  buildId: string,
+  trace: TraceContext | undefined,
+  run: (signal: AbortSignal) => Promise<TurnOutcome>,
+): Promise<TurnOutcome> {
+  const controller = new AbortController();
+  const deadline: TurnOutcome = { kind: "reply", reason: "deadline", reply: FALLBACK_REPLY };
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<TurnOutcome>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(deadline);
+    }, deps.deadlineMs);
+  });
+  try {
+    return await Promise.race([
+      run(controller.signal).catch((error: unknown): TurnOutcome => {
+        deps.log("ERROR", "turn failed", { error, trace, fields: { buildId } });
+        return { kind: "reply", reason: "error", reply: FALLBACK_REPLY };
+      }),
+      expired,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}

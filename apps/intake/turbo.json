@@ -1,0 +1,11 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Route tests start Postgres with testcontainers. CI's default Docker
+    // socket needs none of these; Colima and remote Docker hosts do.
+    "test": {
+      "passThroughEnv": ["DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "TESTCONTAINERS_*"]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // Bundled by esbuild (package.json build), so Bundler resolution: workspace
+  // packages are TypeScript source and imports carry no extension.
+  "include": ["src", "scripts", "test", "*.ts"]
+}

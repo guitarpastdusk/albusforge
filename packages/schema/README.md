@@ -21,3 +21,4 @@ Consumed as TypeScript source (`exports` points at `src/index.ts`); Next.js comp
 | `src/part.ts` | the Part Definition (ARCHITECTURE.md §4) that [`registry/`](../../registry/) validates against |
 | `src/parts.ts` | `GET /v1/parts` and `/v1/parts/:id`: the query, and the list and detail responses around the Part Definition |
 | `src/connector.ts` | connector standards referenced by `electrical.connector` |
+| `src/spec.ts` | the `Spec` intake produces (ARCHITECTURE.md §7.1, plus `capabilities`, `assumptions`, `open_questions`, `settled`), the per-turn `SpecTurn` the model returns, and intake's internal `POST /v1/turns` request and response |

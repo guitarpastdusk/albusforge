@@ -202,3 +202,48 @@ describe("app role", () => {
     });
   });
 });
+
+describe("app role memberships", () => {
+  /** A database with `name` provisioned, and a NOLOGIN role that can CREATE in an app schema. */
+  async function setUp(name: string, ddlRole: string) {
+    const config = await freshDatabase();
+    await runMigrations(config, { appRole: { name, password: "app-secret" } });
+    await admin.query(`CREATE ROLE ${ddlRole} NOLOGIN`);
+    await withClient({ ...config, user: container.getUsername(), password: container.getPassword() }, (c) =>
+      c.query(`GRANT USAGE, CREATE ON SCHEMA builds TO ${ddlRole}`),
+    );
+    return { config, app: { ...config, user: name, password: "app-secret" } };
+  }
+
+  const canCreateViaSetRole = (app: DbConfig, ddlRole: string) =>
+    sqlState(withClient(app, (c) => c.query(`SET ROLE ${ddlRole}; CREATE TABLE builds.sneaky (id int)`)));
+
+  // SET-only: NOINHERIT, and INHERIT FALSE on the grant, still allow SET ROLE.
+  const setOnly = "WITH INHERIT FALSE, SET TRUE";
+
+  it("revokes a SET-only membership the migrator can revoke as its grantor", async () => {
+    const { config, app } = await setUp("albus_app_revocable", "ddl_revocable");
+    await admin.query("GRANT ddl_revocable TO albus_migrate WITH ADMIN TRUE, INHERIT FALSE, SET FALSE");
+    await admin.query(`GRANT ddl_revocable TO albus_app_revocable ${setOnly} GRANTED BY albus_migrate`);
+    // The attack works before the rerun, so the test below proves the fix.
+    expect(await canCreateViaSetRole(app, "ddl_revocable")).toBeUndefined();
+    await withClient(app, (c) => c.query("SET ROLE ddl_revocable; DROP TABLE builds.sneaky"));
+
+    await runMigrations(config, { appRole: { name: "albus_app_revocable", password: "app-secret" } });
+
+    expect(await canCreateViaSetRole(app, "ddl_revocable")).toBe("42501");
+  });
+
+  it("fails closed on a membership from a grantor it can't act for", async () => {
+    const { config, app } = await setUp("albus_app_stuck", "ddl_stuck");
+    // Granted by the bootstrap superuser, which the migrator can't act for.
+    await admin.query(`GRANT ddl_stuck TO albus_app_stuck ${setOnly}`);
+
+    await expect(
+      runMigrations(config, { appRole: { name: "albus_app_stuck", password: "app-secret" } }),
+    ).rejects.toThrow(/still a member of ddl_stuck .*login has been disabled/);
+
+    // 28000: role is not permitted to log in.
+    expect(await canCreateViaSetRole(app, "ddl_stuck")).toBe("28000");
+  });
+});

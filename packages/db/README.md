@@ -39,10 +39,10 @@ Services consume it as TypeScript source (`exports` points at `src/index.ts`). O
 Terraform doesn't create `albus_app`. Cloud SQL puts every user created through its API into `cloudsqlsuperuser`, which carries `CREATE` on the database, so an API-created app user could run DDL. When `DB_APP_ROLE` and `DB_APP_PASSWORD` are both set, the runner does this after migrating, in one transaction:
 
 1. `CREATE ROLE … LOGIN NOINHERIT PASSWORD …` if the role is missing, or `ALTER ROLE … WITH LOGIN NOINHERIT PASSWORD …` if it exists. That also covers password rotation.
-2. Revokes every role membership the app role holds.
+2. Revokes every role membership the app role holds, one `REVOKE … GRANTED BY <grantor>` per grant. NOINHERIT isn't enough on its own: a SET-only membership still allows `SET ROLE`. If a grant remains that the migrator can't revoke as its grantor, the run fails closed (step 5).
 3. `REVOKE CREATE ON DATABASE <db> FROM PUBLIC` and `REVOKE CREATE ON SCHEMA public FROM PUBLIC`.
 4. For each schema in `APP_SCHEMAS`, grants the privileges in the table above, with `ALTER DEFAULT PRIVILEGES` so tables from later migrations are covered too.
-5. Checks that the role has no superuser, `CREATEDB` or `CREATEROLE` attribute, and no `CREATE` on the database, `public` or any app schema. If it has any, the transaction rolls back and the Job fails.
+5. Checks that the role has no memberships left, no superuser, `CREATEDB` or `CREATEROLE` attribute, and no `CREATE` on the database, `public` or any app schema. If any check fails, the transaction rolls back, the runner sets the role `NOLOGIN`, and the Job fails. Connections already open stay open. The next clean run restores `LOGIN`.
 
 ## Commands
 
@@ -88,6 +88,7 @@ Locally, the compose superuser stands in for `albus_migrate`.
 - `client_message_id` is unique per build
 - `llm_calls` rows survive deleting their build
 - the app role can log in, can read and write, and cannot create a table in any app schema or `public`, create a schema, or drop a table
+- a SET-only membership in a role with `CREATE` on an app schema is revoked when the migrator can revoke it as the grantor. When it can't, the run fails and the role can no longer log in. Either way, `SET ROLE` plus `CREATE TABLE` fails afterwards
 
 Docker has to be running. With Colima, point testcontainers at its socket:
 

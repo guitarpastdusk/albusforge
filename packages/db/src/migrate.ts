@@ -68,16 +68,7 @@ async function provisionAppRole(client: pg.Client, role: AppRole): Promise<void>
         : `CREATE ROLE ${ident} WITH LOGIN NOINHERIT PASSWORD ${password}`,
     );
 
-    const memberships = await client.query<{ rolname: string }>(
-      `SELECT r.rolname FROM pg_auth_members m
-         JOIN pg_roles r ON r.oid = m.roleid
-         JOIN pg_roles u ON u.oid = m.member
-        WHERE u.rolname = $1`,
-      [role.name],
-    );
-    for (const { rolname } of memberships.rows) {
-      await client.query(`REVOKE ${pg.escapeIdentifier(rolname)} FROM ${ident}`);
-    }
+    await removeMemberships(client, role.name);
 
     // PostgreSQL 15+ already withholds these from PUBLIC; Cloud SQL and older
     // clusters may not, and either would let the app role run DDL.
@@ -99,8 +90,73 @@ async function provisionAppRole(client: pg.Client, role: AppRole): Promise<void>
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
+    if (error instanceof UnsafeAppRoleError) await disableLogin(client, role.name, error);
     throw error;
   }
+}
+
+/** The app role could run DDL and the runner can't take that away. */
+class UnsafeAppRoleError extends Error {}
+
+type Membership = { role: string; grantor: string };
+
+const listMemberships = async (client: pg.Client, name: string) =>
+  (
+    await client.query<Membership>(
+      `SELECT r.rolname AS role, g.rolname AS grantor FROM pg_auth_members m
+         JOIN pg_roles r ON r.oid = m.roleid
+         JOIN pg_roles g ON g.oid = m.grantor
+         JOIN pg_roles u ON u.oid = m.member
+        WHERE u.rolname = $1`,
+      [name],
+    )
+  ).rows;
+
+/**
+ * The model allows the app role no memberships at all. NOINHERIT doesn't make
+ * one safe: a SET-only grant still allows `SET ROLE x; CREATE TABLE …`. In
+ * PostgreSQL 16 each grantor's grant is separate, so a bare REVOKE can leave
+ * another grantor's in place; revoke each by its grantor, then re-check.
+ */
+async function removeMemberships(client: pg.Client, name: string): Promise<void> {
+  for (const { role, grantor } of await listMemberships(client, name)) {
+    // A failed REVOKE aborts the transaction; the savepoint keeps it usable.
+    await client.query("SAVEPOINT revoke_membership");
+    try {
+      await client.query(
+        `REVOKE ${pg.escapeIdentifier(role)} FROM ${pg.escapeIdentifier(name)} GRANTED BY ${pg.escapeIdentifier(grantor)}`,
+      );
+      await client.query("RELEASE SAVEPOINT revoke_membership");
+    } catch {
+      // Not this grantor's to revoke as the migrator; the re-check below reports it.
+      await client.query("ROLLBACK TO SAVEPOINT revoke_membership");
+    }
+  }
+
+  const remaining = await listMemberships(client, name);
+  if (remaining.length) {
+    const list = remaining.map((m) => `${m.role} (granted by ${m.grantor})`).join(", ");
+    throw new UnsafeAppRoleError(
+      `App role ${name} is still a member of ${list}, which the migrator can't revoke. Revoke it as its grantor, then rerun.`,
+    );
+  }
+}
+
+/**
+ * Fail closed: the transaction rolled back, so whatever let the role run DDL is
+ * still there. Take its login away until a clean run restores it. Connections
+ * already open stay open until they close.
+ */
+async function disableLogin(client: pg.Client, name: string, cause: UnsafeAppRoleError): Promise<void> {
+  try {
+    const existing = await client.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [name]);
+    if (existing.rowCount) await client.query(`ALTER ROLE ${pg.escapeIdentifier(name)} NOLOGIN`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    cause.message += ` Disabling its login also failed: ${reason}`;
+    return;
+  }
+  cause.message += " Its login has been disabled.";
 }
 
 /** Refuses to finish if the app role could still change the schema by any path. */
@@ -118,7 +174,7 @@ async function assertNoDdl(client: pg.Client, name: string): Promise<void> {
   const held = Object.entries(rows[0] ?? {})
     .filter(([, value]) => value)
     .map(([key]) => key);
-  if (held.length) throw new Error(`App role ${name} still holds ${held.join(", ")}; refusing to continue`);
+  if (held.length) throw new UnsafeAppRoleError(`App role ${name} still holds ${held.join(", ")}; refusing to continue.`);
 }
 
 /** One JSON object per line, in the shape Cloud Logging parses from a Cloud Run Job. */

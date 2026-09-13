@@ -29,6 +29,11 @@ const MAX = 2;
  * so widening them costs a few seconds, not correctness. READ_MS stays well
  * above STATEMENT_MS so the server's cancel (57014) wins over the client's
  * read timeout, which would report a terminated connection instead.
+ *
+ * Wider budgets raise the threshold; they don't remove the race. If this file
+ * fails again with "expected 503 to be 200" on the recovery half, the durable
+ * fix is to let expectHealthy retry against a slack deadline (waitFor) so it
+ * asserts "the pool recovered", not "within one fixed window".
  */
 const CONNECT_MS = 1500;
 const STATEMENT_MS = 1500;

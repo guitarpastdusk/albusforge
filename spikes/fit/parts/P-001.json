@@ -1,0 +1,16 @@
+{
+  "id": "P-001",
+  "name": "BME280 breakout (Adafruit 2652, STEMMA QT)",
+  "source": "nominal, unverified: measure before printing (MEASURE.md)",
+  "mechanical": {
+    "bounding_mm": [25.4, 17.8, 4.5],
+    "pcb_thickness_mm": 1.6,
+    "mount": { "type": "pcb-standoff", "screw": "M2.5" },
+    "exposure": "vent",
+    "environment_flags": []
+  },
+  "spike_ext": {
+    "holes": [[2.54, 2.54, 2.5], [22.86, 2.54, 2.5]],
+    "ports": []
+  }
+}

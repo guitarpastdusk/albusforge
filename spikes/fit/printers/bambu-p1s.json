@@ -1,0 +1,21 @@
+{
+  "id": "bambu-p1s",
+  "name": "Bambu Lab P1S (P2S shares the 256 mm volume)",
+  "brand": "Bambu Lab",
+  "kinematics": "corexy",
+  "enclosed": true,
+  "build_volume_mm": [
+    256,
+    256,
+    256
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://us.store.bambulab.com/products/p1s",
+    "https://bambureviews.com/posts/bambu-build-volume-and-footprint/"
+  ]
+}

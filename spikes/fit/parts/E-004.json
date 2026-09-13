@@ -1,0 +1,40 @@
+{
+  "id": "E-004",
+  "name": "TP4056 USB-C charger module",
+  "source": "nominal, unverified: measure before printing (MEASURE.md)",
+  "mechanical": {
+    "bounding_mm": [
+      28.0,
+      17.5,
+      5.0
+    ],
+    "pcb_thickness_mm": 1.2,
+    "mount": {
+      "type": "cradle"
+    },
+    "exposure": "none",
+    "environment_flags": []
+  },
+  "spike_ext": {
+    "holes": [],
+    "ports": [
+      {
+        "name": "usb-c-charge",
+        "side": "-x",
+        "center": [
+          8.75,
+          2.8
+        ],
+        "size": [
+          9.0,
+          3.3
+        ],
+        "plug": [
+          12.35,
+          6.5
+        ]
+      }
+    ],
+    "plug_note": "plug = USB Type-C plug overmold maximum per the USB-IF Type-C Compliance Document rev 1.2, p. 46: width 12.35 max, height 6.5 max, with a 6.65 mm plug in front of it. Any compliant cable fits; Type-C spec R2.0 Fig. 3-80 needs the seated overmold to clear the product surface, so the opening passes the overmold."
+  }
+}

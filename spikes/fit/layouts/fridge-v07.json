@@ -1,0 +1,28 @@
+{
+  "name": "fridge-v07",
+  "note": "Gland on the same wall as the ports (-x), behind the BME280.",
+  "parts": [
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "part": "P-001",
+      "at": [
+        20.0,
+        28.2
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "-x",
+      "u": 38.0,
+      "v": 6.0
+    }
+  ]
+}

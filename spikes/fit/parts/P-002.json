@@ -1,0 +1,12 @@
+{
+  "id": "P-002",
+  "name": "DS18B20 waterproof temperature probe",
+  "source": "nominal, unverified: measure before printing (MEASURE.md)",
+  "mechanical": {
+    "bounding_mm": [6.0, 6.0, 50.0],
+    "mount": { "type": "cable-gland", "d_mm": 6.2, "cable_d_mm": 4.0 },
+    "exposure": "probe-external",
+    "environment_flags": ["waterproof", "temp:-55..125C"]
+  },
+  "spike_ext": { "holes": [], "ports": [] }
+}

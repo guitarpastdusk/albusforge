@@ -1,0 +1,29 @@
+{
+  "profile": "generic-fdm-0.4",
+  "version": 0,
+  "note": "Shared FDM defaults (0.4 mm nozzle, PLA), uncalibrated. Printers inherit this table; coupons printed on a printer replace values through its overrides.",
+  "wall_mm": 2.0,
+  "floor_mm": 2.0,
+  "part_clearance_mm": 0.4,
+  "cradle_clearance_mm": 0.3,
+  "cradle_lip_mm": 1.2,
+  "port_clearance_mm": 0.5,
+  "gland_clearance_mm": 0.3,
+  "standoff_od_mm": 5.5,
+  "standoff_height_mm": 3.0,
+  "self_tap_hole_d_mm": {
+    "M2.5": 2.2,
+    "M3": 2.6
+  },
+  "lid_lip_mm": 3.0,
+  "lid_lip_clearance_mm": 0.3,
+  "vent_slot_mm": [
+    1.6,
+    12.0
+  ],
+  "vent_pitch_mm": 3.4,
+  "lint": {
+    "min_wall_mm": 1.6,
+    "max_overhang_deg": 55
+  }
+}

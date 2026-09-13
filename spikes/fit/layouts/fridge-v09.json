@@ -1,0 +1,28 @@
+{
+  "name": "fridge-v09",
+  "note": "Battery first, ESP32-S3 behind it with ports on -x; gland on +y past the board.",
+  "parts": [
+    {
+      "part": "E-001",
+      "at": [
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        23.7
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "+y",
+      "u": 70.0,
+      "v": 14.0
+    }
+  ]
+}

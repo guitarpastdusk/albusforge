@@ -1,0 +1,45 @@
+{
+  "name": "fridge-v08",
+  "note": "Everything in columns: ESP32-S3, 18650 holder and TP4056 rotated 90\u00b0, ports on -y; gland on +x.",
+  "parts": [
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        0.4
+      ],
+      "rot": 90
+    },
+    {
+      "part": "E-001",
+      "at": [
+        28.2,
+        0.4
+      ],
+      "rot": 90
+    },
+    {
+      "part": "E-004",
+      "at": [
+        51.5,
+        0.4
+      ],
+      "rot": 90
+    },
+    {
+      "part": "P-001",
+      "at": [
+        51.5,
+        30.7
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "+x",
+      "u": 65.0,
+      "v": 10.0
+    }
+  ]
+}

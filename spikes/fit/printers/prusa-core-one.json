@@ -1,0 +1,21 @@
+{
+  "id": "prusa-core-one",
+  "name": "Prusa CORE One",
+  "brand": "Prusa Research",
+  "kinematics": "corexy",
+  "enclosed": true,
+  "build_volume_mm": [
+    250,
+    220,
+    270
+  ],
+  "nozzle_mm": 0.4,
+  "tolerances": "generic-fdm-0.4",
+  "version": 0,
+  "calibrated": false,
+  "overrides": {},
+  "sources": [
+    "https://www.prusa3d.com/product/prusa-core-one/",
+    "https://www.printedsolid.com/pages/prusa-core-one-technical-parameters"
+  ]
+}

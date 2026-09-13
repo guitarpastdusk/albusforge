@@ -1,0 +1,35 @@
+{
+  "name": "fridge-v04",
+  "note": "Power stack: TP4056, 18650 holder, ESP32-S3 in rows, ports on -x; gland on +y.",
+  "parts": [
+    {
+      "part": "E-004",
+      "at": [
+        0.4,
+        0.4
+      ]
+    },
+    {
+      "part": "E-001",
+      "at": [
+        0.4,
+        20.2
+      ]
+    },
+    {
+      "part": "C-001",
+      "at": [
+        0.4,
+        43.5
+      ]
+    }
+  ],
+  "glands": [
+    {
+      "part": "P-002",
+      "side": "+y",
+      "u": 70.0,
+      "v": 10.0
+    }
+  ]
+}

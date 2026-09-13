@@ -77,12 +77,13 @@ export function ClosedLoopActions({
   const toggle = async ({ action, status }: RuleRow) => {
     if (!canEdit || status === "writing" || status === "unknown") return;
     const next = !action.enabled;
-    const atStart = latest.current;
+    const generationAtStart = local.generation;
     setError(null);
     setLocal((current) => startWrite(current, { ...action, enabled: next }));
     const outcome = await writeOnce(() => setActionEnabled(deviceId, action.id, next));
     if (outcome.ok) {
-      setLocal((current) => finishWrite(current, outcome.data, latest.current, atStart));
+      const current = latest.current.find((a) => a.id === action.id);
+      setLocal((state) => finishWrite(state, outcome.data, current, generationAtStart));
       return;
     }
     setError(outcome.message);

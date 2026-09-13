@@ -94,18 +94,27 @@ describe("closed-loop flow helpers", () => {
     await expect(writeOnce(async () => ({ ok: true, data: ACTIONS[0]! }))).resolves.toEqual({ ok: true, data: ACTIONS[0] });
   });
 
-  it("supersedes: same or higher version wins; without versions the snapshot wins; a missing rule never does", () => {
-    expect(supersedes({ ...v1, version: 2 }, disabled2)).toBe(true);
-    expect(supersedes(v1, disabled2)).toBe(false);
-    expect(supersedes(ACTIONS[0], { ...disabled2, version: undefined })).toBe(true);
-    expect(supersedes(undefined, disabled2)).toBe(false);
+  const known = (action: DeviceAction, generation = 0) => ({ action, generation });
+
+  it("supersedes: same or higher version wins; without versions only a later generation wins; a missing rule never does", () => {
+    expect(supersedes({ ...v1, version: 2 }, known(disabled2), 0)).toBe(true);
+    expect(supersedes(v1, known(disabled2), 5)).toBe(false);
+    expect(supersedes(ACTIONS[0], known({ ...disabled2, version: undefined }, 1), 1)).toBe(false);
+    expect(supersedes(ACTIONS[0], known({ ...disabled2, version: undefined }, 1), 2)).toBe(true);
+    // Mixed: only one side versioned falls back to generation ordering.
+    expect(supersedes(v1, known({ ...disabled2, version: undefined }, 1), 1)).toBe(false);
+    expect(supersedes(undefined, known(disabled2), 9)).toBe(false);
   });
 
-  it("mergeRules: a confirmed response shows over an older snapshot, not over a newer one", () => {
-    const local: LocalRules = { overrides: { a1: { confirmed: disabled2 } }, added: [] };
+  it("mergeRules: a confirmed response shows over the snapshot it followed, not over a newer one", () => {
+    const local: LocalRules = { overrides: { a1: { confirmed: known(disabled2, 0) } }, added: [], generation: 0 };
     expect(mergeRules([v1], local)[0]).toEqual({ action: disabled2, status: "written" });
     const newer = { ...v1, version: 3 };
     expect(mergeRules([newer], local)[0]).toEqual({ action: newer, status: null });
+    // Unversioned: the same generation keeps the response; the next generation's snapshot takes over.
+    const unversioned: LocalRules = { overrides: { a1: { confirmed: known({ ...disabled2, version: undefined }, 0) } }, added: [], generation: 0 };
+    expect(mergeRules([ACTIONS[0]!], unversioned)[0]!.action.enabled).toBe(false);
+    expect(mergeRules([ACTIONS[0]!], { ...unversioned, generation: 1 })[0]!.action.enabled).toBe(true);
   });
 
   it("mergeRules: writing shows the attempt; unknown shows the confirmed or server copy; additions append", () => {
@@ -113,9 +122,10 @@ describe("closed-loop flow helpers", () => {
     const rows = mergeRules([ACTIONS[0]!, { ...ACTIONS[1]!, version: 1 }], {
       overrides: {
         a1: { attempt: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" } },
-        a2: { confirmed: { ...ACTIONS[1]!, enabled: true, version: 5 }, attempt: { action: ACTIONS[1]!, state: "unknown" } },
+        a2: { confirmed: known({ ...ACTIONS[1]!, enabled: true, version: 5 }), attempt: { action: ACTIONS[1]!, state: "unknown" } },
       },
       added: [added],
+      generation: 0,
     });
     expect(rows.map((r) => [r.action.id, r.action.enabled, r.status])).toEqual([
       ["a1", false, "writing"],
@@ -124,35 +134,45 @@ describe("closed-loop flow helpers", () => {
     ]);
   });
 
-  it("reconcile keeps in-flight writes and unsuperseded confirmations, drops unknown attempts and carried additions", () => {
+  it("reconcile bumps the generation, keeps in-flight writes and unsuperseded confirmations, drops unknown attempts and carried additions", () => {
     const local: LocalRules = {
       overrides: {
         a1: { attempt: { action: { ...ACTIONS[0]!, enabled: false }, state: "writing" } },
-        a2: { confirmed: { ...ACTIONS[1]!, version: 2 }, attempt: { action: ACTIONS[1]!, state: "unknown" } },
+        a2: { confirmed: known({ ...ACTIONS[1]!, version: 2 }), attempt: { action: ACTIONS[1]!, state: "unknown" } },
       },
       added: [{ id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true }],
+      generation: 0,
     };
     const next = reconcile([...ACTIONS.map((a) => ({ ...a, version: 1 })), { id: "a3", kind: "API", rule: "x → y", via: "z", enabled: true, sync: "synced" }], local);
+    expect(next.generation).toBe(1);
     expect(next.overrides).toEqual({ a1: local.overrides.a1, a2: { confirmed: local.overrides.a2!.confirmed } });
     expect(next.added).toEqual([]);
     expect(reconcile([{ ...ACTIONS[1]!, version: 2 }], next).overrides).toEqual({ a1: local.overrides.a1 });
+    // Unversioned confirmation: retired by the next snapshot, whatever it says.
+    const unversioned: LocalRules = { overrides: { a1: { confirmed: known({ ...ACTIONS[0]!, enabled: false }, 0) } }, added: [], generation: 0 };
+    expect(reconcile([ACTIONS[0]!], unversioned).overrides).toEqual({});
   });
 
-  it("finishWrite installs the response unless a snapshot that changed meanwhile already supersedes it", () => {
+  it("finishWrite keeps the response unless a snapshot that changed meanwhile already supersedes it", () => {
     const started = startWrite(NO_LOCAL_RULES, { ...v1, enabled: false });
-    expect(finishWrite(started, disabled2, [v1], [v1]).overrides.a1).toEqual({ confirmed: disabled2 });
-    const newer = [{ ...v1, version: 3, sync: "synced" as const }];
-    expect(finishWrite(started, disabled2, newer, [v1]).overrides.a1).toBeUndefined();
+    expect(finishWrite(started, disabled2, v1, 0).overrides.a1).toEqual({ confirmed: known(disabled2, 0) });
+    // The snapshot moved on (generation 1) and is newer by version.
+    const moved = { ...started, generation: 1 };
+    expect(finishWrite(moved, disabled2, { ...v1, version: 3, sync: "synced" }, 0).overrides.a1).toBeUndefined();
     // Same version, acked: the snapshot's synced copy wins over the response's pending one.
-    expect(finishWrite(started, disabled2, [{ ...disabled2, sync: "synced" }], [v1]).overrides.a1).toBeUndefined();
+    expect(finishWrite(moved, disabled2, { ...disabled2, sync: "synced" }, 0).overrides.a1).toBeUndefined();
+    // Unversioned and the snapshot moved on: the snapshot wins, since the two can't be ordered.
+    expect(finishWrite(moved, { ...disabled2, version: undefined }, ACTIONS[0], 0).overrides.a1).toBeUndefined();
+    // Unversioned and the snapshot didn't move: the response is the baseline for this generation.
+    expect(finishWrite(started, { ...disabled2, version: undefined }, ACTIONS[0], 0).overrides.a1).toEqual({ confirmed: known({ ...disabled2, version: undefined }, 0) });
   });
 
   it("refuseWrite drops only the attempt; loseWrite keeps the confirmation and marks unknown", () => {
-    const confirmed: LocalRules = { overrides: { a1: { confirmed: disabled2 } }, added: [] };
+    const confirmed: LocalRules = { overrides: { a1: { confirmed: known(disabled2) } }, added: [], generation: 0 };
     const attempting = startWrite(confirmed, { ...disabled2, enabled: true });
     expect(refuseWrite(attempting, "a1")).toEqual(confirmed);
     expect(refuseWrite(startWrite(NO_LOCAL_RULES, v1), "a1")).toEqual(NO_LOCAL_RULES);
-    expect(loseWrite(attempting, disabled2).overrides.a1).toEqual({ confirmed: disabled2, attempt: { action: disabled2, state: "unknown" } });
+    expect(loseWrite(attempting, disabled2).overrides.a1).toEqual({ confirmed: known(disabled2), attempt: { action: disabled2, state: "unknown" } });
   });
 
   it("withAdded replaces by id", () => {

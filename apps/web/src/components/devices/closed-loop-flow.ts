@@ -31,7 +31,8 @@ export async function writeOnce<T extends DeviceAction | ActionProposal>(write: 
  *   "unconfirmed" badge). A refusal removes only the attempt; `confirmed` stays.
  */
 export interface Override {
-  confirmed?: DeviceAction;
+  /** The accepted response and the snapshot generation it is known to be newer than. */
+  confirmed?: { action: DeviceAction; generation: number };
   attempt?: { action: DeviceAction; state: "writing" | "unknown" };
 }
 
@@ -39,9 +40,11 @@ export interface LocalRules {
   overrides: Record<string, Override>;
   /** Rules created here that the snapshot doesn't carry yet. */
   added: DeviceAction[];
+  /** Counts snapshots seen; lets an unversioned response be ordered against the snapshot it followed. */
+  generation: number;
 }
 
-export const NO_LOCAL_RULES: LocalRules = { overrides: {}, added: [] };
+export const NO_LOCAL_RULES: LocalRules = { overrides: {}, added: [], generation: 0 };
 
 export type RowStatus = "writing" | "unknown" | "written" | null;
 
@@ -50,26 +53,32 @@ export interface RuleRow {
   status: RowStatus;
 }
 
-/** Whether the snapshot's copy is at least as new as a response the server gave us. */
-export function supersedes(server: DeviceAction | undefined, confirmed: DeviceAction): boolean {
+/**
+ * Whether the snapshot's copy is at least as new as a response the server
+ * gave us. With versions on both sides, same or higher wins. Without them, a
+ * snapshot supersedes the response only if it arrived after it (a later
+ * generation); the snapshot the response followed never does.
+ */
+export function supersedes(server: DeviceAction | undefined, confirmed: NonNullable<Override["confirmed"]>, generation: number): boolean {
   if (!server) return false;
-  if (server.version !== undefined && confirmed.version !== undefined) return server.version >= confirmed.version;
-  return true;
+  if (server.version !== undefined && confirmed.action.version !== undefined) return server.version >= confirmed.action.version;
+  return generation > confirmed.generation;
 }
 
-function resolve(server: DeviceAction | undefined, override: Override | undefined, fallback: DeviceAction): RuleRow {
-  const base = override?.confirmed && !supersedes(server, override.confirmed) ? override.confirmed : (server ?? fallback);
+function resolve(server: DeviceAction | undefined, override: Override | undefined, fallback: DeviceAction, generation: number): RuleRow {
+  const confirmed = override?.confirmed;
+  const base = confirmed && !supersedes(server, confirmed, generation) ? confirmed.action : (server ?? fallback);
   const attempt = override?.attempt;
   if (attempt?.state === "writing") return { action: attempt.action, status: "writing" };
   if (attempt?.state === "unknown") return { action: base, status: "unknown" };
-  return { action: base, status: base === override?.confirmed ? "written" : null };
+  return { action: base, status: base === confirmed?.action ? "written" : null };
 }
 
 /** The rows to render: the snapshot with local knowledge applied, then local additions. Supersession is checked here, on every render. */
 export function mergeRules(server: readonly DeviceAction[], local: LocalRules): RuleRow[] {
-  const rows = server.map((action) => resolve(action, local.overrides[action.id], action));
+  const rows = server.map((action) => resolve(action, local.overrides[action.id], action, local.generation));
   const seen = new Set(server.map((a) => a.id));
-  for (const action of local.added) if (!seen.has(action.id)) rows.push(resolve(undefined, local.overrides[action.id], action));
+  for (const action of local.added) if (!seen.has(action.id)) rows.push(resolve(undefined, local.overrides[action.id], action, local.generation));
   return rows;
 }
 
@@ -79,15 +88,16 @@ export function mergeRules(server: readonly DeviceAction[], local: LocalRules): 
  * now carries. Writes in flight keep their optimistic state.
  */
 export function reconcile(server: readonly DeviceAction[], local: LocalRules): LocalRules {
+  const generation = local.generation + 1;
   const byId = new Map(server.map((a) => [a.id, a]));
   const overrides: Record<string, Override> = {};
   for (const [id, override] of Object.entries(local.overrides)) {
     const next: Override = {};
-    if (override.confirmed && !supersedes(byId.get(id), override.confirmed)) next.confirmed = override.confirmed;
+    if (override.confirmed && !supersedes(byId.get(id), override.confirmed, generation)) next.confirmed = override.confirmed;
     if (override.attempt?.state === "writing") next.attempt = override.attempt;
     if (next.confirmed || next.attempt) overrides[id] = next;
   }
-  return { overrides, added: local.added.filter((a) => !byId.has(a.id)) };
+  return { overrides, added: local.added.filter((a) => !byId.has(a.id)), generation };
 }
 
 /** The switch flipped; the write is in flight. */
@@ -96,18 +106,20 @@ export function startWrite(local: LocalRules, action: DeviceAction): LocalRules 
 }
 
 /**
- * The server accepted the write. `latest` is the snapshot at settlement and
- * `atStart` the one when the write began: a snapshot that changed meanwhile
- * and already supersedes the response wins, so a late response can't undo
- * newer server state.
+ * The server accepted the write. `current` is the snapshot's copy of the rule
+ * at settlement and `generationAtStart` the generation when the write began:
+ * a snapshot that changed meanwhile and already supersedes the response wins,
+ * so a late response can't undo newer server state. Otherwise the response
+ * is kept as the baseline, known newer than the snapshot generation it was
+ * settled against.
  */
-export function finishWrite(local: LocalRules, data: DeviceAction, latest: readonly DeviceAction[], atStart: readonly DeviceAction[]): LocalRules {
-  const current = latest.find((a) => a.id === data.id);
-  const stale = latest !== atStart && supersedes(current, data);
+export function finishWrite(local: LocalRules, data: DeviceAction, current: DeviceAction | undefined, generationAtStart: number): LocalRules {
+  const settled = { action: data, generation: generationAtStart };
+  const stale = local.generation !== generationAtStart && supersedes(current, settled, local.generation);
   return patch(local, data.id, (o) => {
     const next: Override = {};
-    if (!stale) next.confirmed = data;
-    else if (o.confirmed && !supersedes(current, o.confirmed)) next.confirmed = o.confirmed;
+    if (!stale) next.confirmed = { action: data, generation: local.generation };
+    else if (o.confirmed && !supersedes(current, o.confirmed, local.generation)) next.confirmed = o.confirmed;
     return next;
   });
 }

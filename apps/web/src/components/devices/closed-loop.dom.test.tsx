@@ -110,6 +110,24 @@ describe("ClosedLoopActions: the snapshot is the truth", () => {
     expect(text()).not.toContain(PENDING_LABEL);
   });
 
+  it.each([
+    ["an unversioned response", undefined],
+    ["a versioned response", 2],
+  ])("an unversioned rule stays changed after a successful toggle with no refresh (%s), then a new snapshot takes over", async (_label, version) => {
+    const unversioned: DeviceAction = { ...RULE, version: undefined, sync: "synced" };
+    write.mockResolvedValue({ ok: true, data: { ...unversioned, enabled: false, sync: "pending", version } });
+    await render([unversioned]);
+    await click(firstSwitch());
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("false");
+    expect(text()).toContain(PENDING_LABEL);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+
+    // A genuinely new unversioned snapshot is authoritative, whatever it says.
+    await render([{ ...unversioned }]);
+    expect(firstSwitch().getAttribute("aria-checked")).toBe("true");
+    expect(text()).not.toContain(PENDING_LABEL);
+  });
+
   it("a refused second click keeps the accepted first write, with no refresh in between", async () => {
     write.mockResolvedValueOnce({ ok: true, data: { ...RULE, enabled: false, sync: "pending", version: 2 } });
     write.mockResolvedValueOnce({ ok: false, message: "Not now.", outcome: "refused" });

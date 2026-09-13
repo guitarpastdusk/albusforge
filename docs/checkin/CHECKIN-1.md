@@ -17,7 +17,7 @@ This first 12 hours built the ground floor: everything the product runs on, in t
 | **Working infrastructure, all in Terraform** | ✅ Done | Three GCP projects, staging and prod environments applied, 0 drift on `terraform plan` |
 | **First iteration of the front end** | ✅ Live | Portal deployed to `staging.albusforge.ai` and `albusforge.ai` |
 | **Tests and quality gates in place** | ✅ Done | 152 web tests, 25 deploy-script tests, 3 CI jobs, independent review of every PR |
-| **Automated delivery** | ✅ Proven | A merge to `main` reaches staging with no human involved. Prod is promoted by hand. |
+| **Automated delivery** | ✅ Proven | A merge that changes the web app reaches staging with no human involved. Prod is promoted by hand. |
 
 ---
 
@@ -30,7 +30,7 @@ This first 12 hours built the ground floor: everything the product runs on, in t
 | Project | Role | Public endpoint |
 | --- | --- | --- |
 | `albusforge-ci` | Terraform state, container registry, GitHub identity trust | none |
-| `albusforge-staging` | Every merge lands here automatically | https://staging.albusforge.ai |
+| `albusforge-staging` | Merges that change the web app land here automatically | https://staging.albusforge.ai |
 | `albusforge-prod` | Only images that passed staging, promoted by hand | https://albusforge.ai |
 
 ---
@@ -53,6 +53,9 @@ flowchart LR
         LB2 -->|"/v1/*"| GW2["gateway · Cloud Run"]
     end
 
+    WEB1 -.->|"server-side calls, internal"| GW1
+    WEB2 -.->|"server-side calls, internal"| GW2
+
     AR -->|"automatic deploy"| WEB1
     AR -->|"same digest, manual promote"| WEB2
     DNS["Cloud DNS<br/>albusforge.ai"] --> LB1 & LB2
@@ -61,14 +64,14 @@ flowchart LR
 
 **How a request flows.**
 - A request enters through a **global HTTPS load balancer** protected by **Cloud Armor**. `/v1/*` goes to the API gateway, and everything else goes to the **Next.js portal**. Tenant subdomains (`acme.albusforge.ai`) route the same way.
-- The Cloud Run services **accept traffic only from the load balancer**. Their direct URLs return 404.
+- **Public traffic can only reach the services through the load balancer.** Their direct `run.app` URLs return 404 from the internet. Internal callers are still allowed: the portal's server-side rendering calls the gateway directly over the VPC.
 - Outbound traffic leaves through **Cloud NAT**.
 
 **How code ships.**
-- CI builds **one image per commit** and deploys it to staging.
+- When a merge changes the web app or its deploy files, CI builds **one deployable image for that commit** and deploys it to staging. Docs-only and Terraform-only merges don't deploy.
 - A freshness check stops an older commit from overwriting a newer one.
 - After a successful staging deploy, the image is tagged `staging-deployed-<commit>`.
-- Prod accepts **only images carrying that tag, by exact digest**. We never build twice.
+- Prod accepts **only images carrying that tag, by exact digest**. Promotion reuses the image staging ran, and nothing is rebuilt for prod.
 
 **Design decisions** are recorded as 9 ADRs in `docs/adr/`: project layout, DNS, edge routing, egress, image ownership, Terraform layout, portal routing, sign-in and tenancy.
 
@@ -104,7 +107,7 @@ flowchart LR
 
 ---
 
-## 5. Pull requests: 14 merged, 0 open
+## 5. Pull requests: 14 merged by hour 12
 
 | Area | PRs | What landed |
 | --- | --- | --- |

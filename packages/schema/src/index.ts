@@ -14,3 +14,5 @@ export * from "./connector";
 export * from "./spec";
 export * from "./telemetry";
 export * from "./telemetry-read";
+
+export * from "./sensor-ask";

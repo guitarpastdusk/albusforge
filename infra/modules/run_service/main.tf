@@ -12,6 +12,14 @@ resource "google_project_iam_member" "runtime" {
   member  = google_service_account.runtime.member
 }
 
+resource "google_secret_manager_secret_iam_member" "secret_env" {
+  for_each = var.secret_env
+
+  secret_id = each.value.secret
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.runtime.member
+}
+
 resource "google_cloud_run_v2_service" "this" {
   project             = var.project_id
   name                = var.name
@@ -54,6 +62,19 @@ resource "google_cloud_run_v2_service" "this" {
           value = env.value
         }
       }
+
+      dynamic "env" {
+        for_each = var.secret_env
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value.secret
+              version = env.value.version
+            }
+          }
+        }
+      }
     }
   }
 
@@ -66,6 +87,9 @@ resource "google_cloud_run_v2_service" "this" {
       template[0].containers[0].image,
     ]
   }
+
+  # A revision that can't read its secrets fails to start.
+  depends_on = [google_secret_manager_secret_iam_member.secret_env]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "public" {

@@ -67,9 +67,18 @@ variable "cpu_idle" {
 }
 
 variable "env" {
-  description = "Plain environment variables. Secrets go through Secret Manager references, added with M1."
+  description = "Plain environment variables. Secrets go in secret_env."
   type        = map(string)
   default     = {}
+}
+
+variable "secret_env" {
+  description = "Env var name => Secret Manager secret (full id) and version. The runtime SA gets accessor on each."
+  type = map(object({
+    secret  = string
+    version = optional(string, "latest")
+  }))
+  default = {}
 }
 
 variable "runtime_roles" {

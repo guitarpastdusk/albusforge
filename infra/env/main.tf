@@ -8,8 +8,9 @@ module "network" {
   psa_address = local.settings.psa_address
 }
 
-# M0 placeholder: the real gateway image arrives from CI. Ingress, egress and
-# scaling are already the production shape.
+# Placeholder until the gateway deploy workflow ships its image. Ingress, egress
+# and scaling are already the production shape. It connects to Postgres as the
+# app role, which can read and write but not change the schema.
 module "gateway" {
   source = "../modules/run_service"
 
@@ -23,9 +24,14 @@ module "gateway" {
   min_instances       = local.settings.gateway_min_instances
   deletion_protection = local.settings.deletion_protection
 
-  env = {
-    PUBLIC_DOMAIN       = local.domain
-    SSR_SERVICE_ACCOUNT = module.web.service_account_email
+  env = merge(local.db_env, {
+    PUBLIC_DOMAIN        = local.domain
+    SSR_SERVICE_ACCOUNT  = module.web.service_account_email
+    GOOGLE_CLOUD_PROJECT = local.project_id
+    DB_USER              = local.db_app_role
+  })
+  secret_env = {
+    DB_PASSWORD = { secret = module.sql.app_password_secret }
   }
 }
 

@@ -4,7 +4,23 @@
 
 **Team:** Albus · **Solo hacker:** Sukrit Dasgupta · **Email:** sukritd@mit.edu · **Website:** [albusforge.ai](https://albusforge.ai)
 
-> **One question in. Cart, enclosure, firmware and dashboard out.** Albus Forge turns a plain-language request ("tell me when my fridge gets warm") into a real parts cart, a 3D-printable enclosure, working firmware and a cloud dashboard. All of it is generated from a single curated part registry.
+> **One question in. A working device out, and an AI cloud that closes the loop.** Albus Forge turns a plain-language request ("keep my greenhouse soil moist") into a real parts cart, a 3D-printable enclosure and working firmware, all generated from a single curated part registry. Then it doesn't stop at a dashboard: the device connects to an **AI cloud platform** that watches its data, reasons about it and **acts back on the device**.
+
+---
+
+## The moat: AI closed-loop control
+
+Dashboards and alerts are a commodity. The moat is an AI cloud platform that closes the control loop for every device it generates: **sense → detect → reason → act → confirm**.
+
+| Step | What happens |
+| --- | --- |
+| **Sense** | Telemetry arrives already typed. The part registry declares each channel's unit, range and meaning before the first packet, so there's nothing for the user to configure. |
+| **Detect** | Statistics run on every data window: learned baselines, seasonality and drift. This finds the anomalies cheaply, without a model. |
+| **Reason** | A small model names and triages each detection. A frontier model answers questions ("why is bed B drying faster?") through typed queries, so **every number comes from the data, never from the model**. |
+| **Act** | The platform sends commands back to the device (thresholds, setpoints, schedules) or opens a work order. Actions a model proposes need a person, or a policy, to confirm them. |
+| **Confirm** | The next telemetry shows whether the action worked, and every confirmed outcome improves the baselines for that tenant. |
+
+The loop starts on the device: reflex rules keep working offline, and the cloud adds judgment on top. In this version, commands ride back on the device's next check-in. Real-time actuation comes later over MQTT. The full design is in [`docs/CLOUD-PLATFORM.md`](../CLOUD-PLATFORM.md).
 
 ---
 
@@ -144,7 +160,7 @@ Things verified against the real environments, not just in tests:
 ## 7. Where the build stands at hour 12
 
 - **Live now:** landing page, docs, sign-in and pricing on both domains. Data pages (`/projects`, `/live`, `/marketplace`) render a designed "service unavailable" state, because the API gateway is still a placeholder.
-- **Honest gaps:** no database yet, no real API behind `/v1`, and no AI pipeline wired in yet. This check-in was about foundations.
+- **Honest gaps:** no database yet, no real API behind `/v1`, and neither the AI pipeline nor the closed loop is wired in yet. This check-in laid the foundations the loop runs on: per-environment infrastructure, safe delivery, and request-traced structured logs.
 
 **Next check-in (hour 24):**
 - Cloud SQL and the database schema

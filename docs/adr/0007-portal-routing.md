@@ -46,3 +46,21 @@ Gateway resolves the tenant from the hostname (ADR 0009) and rate-limits by clie
 Terraform sets `PUBLIC_DOMAIN` and `GATEWAY_INTERNAL_URL` on web, and `PUBLIC_DOMAIN` and `SSR_SERVICE_ACCOUNT` on gateway.
 
 Why not rely on Cloud Run IAM: gateway is publicly invokable behind the load balancer (`allUsers`), so Cloud Run does not check who the caller is. Gateway has to verify web's identity itself.
+
+### Verified on staging (2026-09-13)
+
+A header-echo image ran briefly on staging's `web` behind the real load balancer, and requests were sent through `https://staging.albusforge.ai`:
+
+| Request | `X-Forwarded-For` the app received |
+| --- | --- |
+| plain | `<client>,<lb-ip>` |
+| sends `X-Forwarded-For: 1.2.3.4` | `1.2.3.4,<client>,<lb-ip>` |
+| sends `X-Forwarded-For: 1.2.3.4, 5.6.7.8` | `1.2.3.4, 5.6.7.8,<client>,<lb-ip>` |
+
+- **The visitor's IP is the second-to-last `X-Forwarded-For` entry.** The global external load balancer appends `<client-ip>,<lb-ip>` after whatever the client sent, and Cloud Run adds no further entry. The request's source address is the load balancer's IP. Web reads `X-Albus-Client-IP` with `TRUSTED_PROXY_HOPS=1`, the default, so Terraform does not set it. Entries can be separated by `,` or `, `, so parsing must trim.
+- **Everything before the second-to-last entry is client-controlled** and must never be trusted.
+- **The load balancer removes `X-Albus-Internal-Auth`, `X-Albus-Original-Host` and `X-Albus-Client-IP`** sent by a client. None of the three reached the app.
+- **`Host` is preserved.** A request to `acme-plant.staging.albusforge.ai` reached `web` with that `Host`.
+- The load balancer also sends `Forwarded: for="<client>";proto=https`, carrying only the real client even when `X-Forwarded-For` is spoofed. The contract still uses `X-Forwarded-For`, since that's what was tested.
+
+Re-check this if the load balancer type changes, or if anything is added in front of it (a CDN, or a second proxy). Either adds entries and changes the hop count.

@@ -459,9 +459,9 @@ GET    /v1/parts/:id               part page, all blocks
 
 # portal additions — PORTAL.md §3
 POST   /v1/auth/code               { email } → 204
-POST   /v1/auth/verify             { email, code } → { user, tenant } + session cookie
+POST   /v1/auth/verify             { email, code } → Me = { user, tenant, tenants } + session cookie
 POST   /v1/auth/signout            → 204
-GET    /v1/me                      → { user, tenant } | 401
+GET    /v1/me                      → Me = { user, tenant, tenants } | 401
 PUT    /v1/me/active-tenant        { tenant_id } → 204, membership checked
 GET    /v1/builds?status=          tenant's builds + display_status
 GET    /v1/builds/:id/messages     chat transcript

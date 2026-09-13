@@ -51,9 +51,9 @@ Routes the design needs that §6 does not have. They are added to the §6 contra
 
 ```
 POST   /v1/auth/code               { email } → 204           rate-limited per email and per IP
-POST   /v1/auth/verify             { email, code } → { user, tenant } + Set-Cookie; claims anonymous builds
+POST   /v1/auth/verify             { email, code } → Me = { user, tenant, tenants } + Set-Cookie; claims anonymous builds
 POST   /v1/auth/signout            → 204
-GET    /v1/me                      → { user, tenant } | 401
+GET    /v1/me                      → Me = { user, tenant, tenants } | 401
 PUT    /v1/me/active-tenant        { tenant_id } → 204           membership checked; apex only
 
 GET    /v1/builds?status=          the session tenant's builds, with display_status
@@ -70,7 +70,7 @@ POST   /v1/devices/:id/ask         { text } → answer + executed queries; /v1/a
 
 Notes:
 
-- **`/v1/auth/*`** — see [ADR 0008](adr/0008-sign-in-by-email-code.md). Replaces the magic link.
+- **`/v1/auth/*`** — see [ADR 0008](adr/0008-sign-in-by-email-code.md). Replaces the magic link. `POST /v1/auth/verify` and `GET /v1/me` return the same `Me` shape: `user`, `tenant` (the active tenant, with the caller's `role`) and `tenants` (every tenant the user belongs to, active one included, so the portal can show a switcher without a second call).
 - **Chat messages are the intake conversation, stored.** `POST /v1/builds` still takes `{ ask_text }` and becomes the first message. Clarifying questions from intake arrive as assistant messages, and user replies are what `PATCH /v1/builds/:id/spec { answers }` receives today. The transcript needs a `build_messages` table so a refreshed tab and a resumed project read the same record.
 - **`build_messages` is private to the build's tenant** (or its anonymous owner) and is never readable through a listing. A marketplace **story is written at publish time**. It can be pre-filled as a draft from the transcript, but the user edits and confirms it, it passes the same `policy.ts` `safety_class` check as the rest of the listing, and it is stored on the listing and the immutable `build_snapshot` (ARCHITECTURE.md §7.7). Chat that continues after publishing never changes it, and remix copies the snapshot, never the transcript.
 - **`/v1/showcase`** is curated and opt-in, not a live query across other people's devices. At launch it can be a static list maintained by hand. A real feed needs a per-build `showcase_opt_in` and must never expose location — the prototype shows coordinates on a fleet card, which is fine for an owner and not for the public.

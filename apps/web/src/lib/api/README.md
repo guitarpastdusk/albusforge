@@ -6,7 +6,7 @@ The gateway client. Every response is validated against `@albusforge/schema`; a 
 | --- | --- | --- |
 | `server.ts` | Server Components, route handlers | `API_MODE=mock` → answers from `src/mocks`. `live` (default) → calls `GATEWAY_INTERNAL_URL` with the headers below. Calls `connection()`, so the page renders per request. Guarded by `server-only`. |
 | `browser.ts` | Client Components | relative `/v1/...` — same origin via the load balancer; sets none of the internal headers |
-| `core.ts` | both | `request()`, `fetchTransport()`, `ApiRequestError` |
+| `core.ts` | both | `request()`, `fetchTransport()`, `ApiRequestError` (the API error shape), `GatewayError` (anything that isn't the contract: non-JSON, wrong shape, a failure without the error shape). Neither is logged here — `onRequestError` logs once per request. |
 | `gateway-headers.server.ts` | `server.ts` only | builds the SSR → gateway headers |
 | `id-token.server.ts` | `server.ts` only | ID token from the metadata server, cached until 5 min before `exp` |
 

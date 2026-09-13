@@ -34,7 +34,7 @@ import { localMessageId, transcriptFrom, type BuildTranscript } from "@/lib/buil
 /** Client-generated per message, so a retried send is idempotent: gateway returns the stored message instead of a new turn. */
 const ClientMessageId = z.uuid();
 const READ_TIMEOUT_MS = 10_000;
-const REFRESH_FAILED_MESSAGE = "We couldn’t load the latest reply. Try again in a moment.";
+const REFRESH_FAILED_MESSAGE = "We couldn’t load the latest build details. Try again in a moment.";
 
 function retryAfterSeconds(error: ApiRequestError): number | null {
   const details = error.details as { retry_after_s?: unknown } | undefined;

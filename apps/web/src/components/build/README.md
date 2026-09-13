@@ -8,10 +8,12 @@ The build conversation — the landing chat and `/build/[buildId]`.
 - `CandidateParts` — registry parts matching the spec's capabilities, labelled as a match, not a plan.
 - `useReplyWatchdog` — calls back once if a reply stays due for 60 s.
 - `DesignReadyCard` — "✓ Device design ready", the estimate, part chips from the plan, and the sign-up gate linking to `/signup`.
-- `conversation.ts` — the pure reducer, `runSend` / `runRefresh` (through `settle()`, never reject) and `clientMessageIdFor` (a failed send's id is reused when the same text is sent again).
+- `conversation.ts` — the pure reducer, `runSend` (through `settle()`, never rejects) and `clientMessageIdFor` (a failed send's id is reused when the same text is sent again). Tracks the stream's observed spec version separately from the version whose details have loaded.
+- `useBuildRefresh` — reads the detail after stream opens, spec/status changes and manual checks. A failed read or one older than the observed spec retries after 1 s and 2 s; after that, an independent “Refresh build details” action remains available even if the assistant reply has arrived. A new request cancels old retry timers and ignores superseded results; unmount cancels the remaining work.
 
 Failure handling:
 - A send that **rejects** (lost connection, aborted dispatch) or returns **`{ ok: false }`** (including 409 `TURN_IN_PROGRESS` and 429 `RATE_LIMITED`): the optimistic bubble is removed, the text goes back into the input, and a retryable message shows. Sending the same text again reuses its `client_message_id`, so a send that did land isn't duplicated.
 - A reply that hasn't arrived after **60 s**: the typing dots stop and "Check for a reply" reads the build again (gateway restarts a lost turn on that read). The message is never resent.
+- Detail freshness is independent of reply timing: “Updating build details…” remains until the observed version is hydrated, or the bounded retries finish with a visible refresh error. Arrival of an assistant message does not clear that error. Refreshing details never sends another message.
 
-In mock mode the replies are the prototype's script, about 1.5 s after each message, streamed by the dev route handler (`src/mocks`); the card appears after the third exchange. Tests in `build.test.tsx`, `useReplyWatchdog.test.tsx` and `src/actions/actions.test.ts`.
+In mock mode the replies are the prototype's script, about 1.5 s after each message, streamed by the dev route handler (`src/mocks`); the card appears after the third exchange. Tests in `build.test.tsx`, `build-refresh.test.tsx`, `useReplyWatchdog.test.tsx` and `src/actions/actions.test.ts`.

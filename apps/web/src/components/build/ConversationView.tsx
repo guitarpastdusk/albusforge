@@ -34,6 +34,16 @@ export function ConversationView({ active = false }: { active?: boolean }) {
             ) : null}
           </div>
         ) : null}
+        {state.refreshError ? (
+          <div role="alert" className="flex flex-wrap items-center gap-3 text-[15px] text-coral-deep">
+            <span>{state.refreshError}</span>
+            <button type="button" onClick={checkAgain} className="font-semibold hover:text-coral">
+              Refresh build details
+            </button>
+          </div>
+        ) : state.detailsStale ? (
+          <p role="status" className="text-[14px] text-muted">Updating build details…</p>
+        ) : null}
         <SpecPanel spec={state.spec} status={state.status} />
         <CandidateParts parts={state.candidateParts} />
         {state.ready ? <DesignReadyCard card={state.ready} enclosure={enclosurePreview} /> : null}

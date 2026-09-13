@@ -16,6 +16,11 @@ export interface ConversationState {
   /** The input's text. Restored when a send fails, so nothing typed is lost. */
   draft: string;
   error: string | null;
+  /** Detail reads can fail even after the assistant message has arrived. */
+  refreshError: string | null;
+  detailsStale: boolean;
+  /** Highest spec version observed on the stream, not yet necessarily hydrated. */
+  observedSpecVersion: number | null;
   /** A send is on its way to gateway and not yet accepted. */
   sending: boolean;
   /** The reply is past REPLY_CHECK_AFTER_MS: stop the typing dots and offer "Check for a reply" (a refetch, never a resend). */
@@ -37,6 +42,7 @@ export type ConversationEvent =
   /** build.updated on the event stream. */
   | { type: "buildUpdated"; status: BuildStatus; specVersion: number | null }
   | { type: "refreshed"; transcript: BuildTranscript }
+  | { type: "refreshRequested" }
   | { type: "refreshFailed"; message: string }
   | { type: "overdue"; message: string }
   /** "Check for a reply": back to waiting, with a fresh clock. */
@@ -55,6 +61,9 @@ export function initConversation(initial?: Partial<BuildTranscript>): Conversati
     candidateParts: initial?.candidateParts ?? [],
     draft: "",
     error: null,
+    refreshError: null,
+    detailsStale: false,
+    observedSpecVersion: initial?.specVersion ?? null,
     sending: false,
     overdue: false,
     unsent: null,
@@ -64,16 +73,22 @@ export function initConversation(initial?: Partial<BuildTranscript>): Conversati
 /** Waiting for a reply and not yet overdue: show the typing dots, and don't take another send. */
 export const isTyping = (state: ConversationState): boolean => awaitingReply(state.messages) && !state.overdue;
 
-const withTranscript = (state: ConversationState, transcript: BuildTranscript): ConversationState => ({
-  ...state,
-  buildId: transcript.buildId,
-  messages: mergeMessages(state.messages, transcript.messages),
-  ready: transcript.ready,
-  status: transcript.status,
-  specVersion: transcript.specVersion,
-  spec: transcript.spec,
-  candidateParts: transcript.candidateParts,
-});
+const withTranscript = (state: ConversationState, transcript: BuildTranscript): ConversationState => {
+  const merged = { ...state, buildId: transcript.buildId, messages: mergeMessages(state.messages, transcript.messages) };
+  // A stream event can announce a newer version while a detail read is in flight.
+  if ((transcript.specVersion ?? 0) < (state.observedSpecVersion ?? 0)) return merged;
+  return {
+    ...merged,
+    ready: transcript.ready,
+    status: transcript.status,
+    specVersion: transcript.specVersion,
+    spec: transcript.spec,
+    candidateParts: transcript.candidateParts,
+    observedSpecVersion: transcript.specVersion,
+    detailsStale: false,
+    refreshError: null,
+  };
+};
 
 /** A reply arrived (or nothing is pending): clear the overdue offer and its message. */
 const settleOverdue = (state: ConversationState): ConversationState =>
@@ -112,11 +127,17 @@ export function conversationReducer(state: ConversationState, event: Conversatio
     case "messageCreated":
       return settleOverdue({ ...state, messages: mergeMessages(state.messages, [event.message]) });
     case "buildUpdated":
-      return { ...state, status: event.status, specVersion: event.specVersion };
+      return {
+        ...state, status: event.status,
+        observedSpecVersion: Math.max(state.observedSpecVersion ?? 0, event.specVersion ?? 0) || null,
+        detailsStale: state.detailsStale || event.specVersion !== state.specVersion || event.status !== state.status,
+      };
+    case "refreshRequested":
+      return { ...state, detailsStale: true, refreshError: null };
     case "refreshed":
       return settleOverdue(withTranscript(state, event.transcript));
     case "refreshFailed":
-      return { ...state, error: event.message, overdue: awaitingReply(state.messages) };
+      return { ...state, refreshError: event.message, detailsStale: true, overdue: awaitingReply(state.messages) };
     case "overdue":
       return awaitingReply(state.messages) ? { ...state, overdue: true, error: event.message } : state;
     case "checking":
@@ -158,15 +179,4 @@ export async function runSend(
   if (result.ok) dispatch({ type: "accepted", message: result.data.message });
   else dispatch({ type: "failed", message: result.message, text, clientMessageId });
   return null;
-}
-
-/**
- * Read the build again and merge it. Never rejects. `report`: show a failure
- * ("Check for a reply"); background refreshes (stream opened, spec changed)
- * stay quiet and are retried on the next event.
- */
-export async function runRefresh(buildId: string, actions: ConversationActions, dispatch: Dispatch, { report }: { report: boolean }): Promise<void> {
-  const result = await settle(() => actions.refreshBuild(buildId));
-  if (result.ok) dispatch({ type: "refreshed", transcript: result.data });
-  else if (report) dispatch({ type: "refreshFailed", message: result.message });
 }

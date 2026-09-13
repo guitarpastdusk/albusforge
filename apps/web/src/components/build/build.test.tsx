@@ -11,7 +11,6 @@ import {
   initConversation,
   isTyping,
   OVERDUE_MESSAGE,
-  runRefresh,
   runSend,
   type ConversationActions,
   type ConversationEvent,
@@ -163,13 +162,13 @@ describe("conversationReducer", () => {
     const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi")] });
     h.dispatch({ type: "checking" });
     h.dispatch({ type: "refreshFailed", message: "We couldn’t load the latest reply." });
-    expect(h.state).toMatchObject({ overdue: true, error: "We couldn’t load the latest reply." });
+    expect(h.state).toMatchObject({ overdue: true, refreshError: "We couldn’t load the latest reply." });
   });
 
-  it("build.updated records the status and spec version", () => {
+  it("build.updated records the observed version without claiming the details were hydrated", () => {
     const h = harness({ buildId: "bld_1" });
     h.dispatch({ type: "buildUpdated", status: "specifying", specVersion: 3 });
-    expect(h.state).toMatchObject({ status: "specifying", specVersion: 3 });
+    expect(h.state).toMatchObject({ status: "specifying", observedSpecVersion: 3, specVersion: null, detailsStale: true });
   });
 });
 
@@ -204,20 +203,6 @@ describe("runSend", () => {
     h.dispatch({ type: "sent", text: "two", at: LATER, clientMessageId: ID_1 });
     await runSend("bld_1", "two", ID_1, actions({ sendBuildMessage: vi.fn().mockResolvedValue({ ok: false, message: "Still working on the last reply." }) }), h.dispatch);
     expect(h.state).toMatchObject({ error: "Still working on the last reply.", draft: "two" });
-  });
-});
-
-describe("runRefresh", () => {
-  it("merges the build; a failure is shown only when reported", async () => {
-    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi")] });
-    await runRefresh("bld_1", actions({ refreshBuild: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch, { report: false });
-    expect(h.state.error).toBeNull();
-    await runRefresh("bld_1", actions({ refreshBuild: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch, { report: true });
-    expect(h.state.error).toBe(CONNECTION_MESSAGE);
-
-    const parts: CandidatePart[] = [];
-    await runRefresh("bld_1", actions({ refreshBuild: vi.fn().mockResolvedValue({ ok: true, data: transcript([msg("m1", "user", "hi")], { status: "planning", candidateParts: parts, ready: READY }) }) }), h.dispatch, { report: true });
-    expect(h.state).toMatchObject({ status: "planning", ready: READY });
   });
 });
 

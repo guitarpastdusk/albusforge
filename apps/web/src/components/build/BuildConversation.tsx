@@ -11,13 +11,13 @@ import {
   initConversation,
   isTyping,
   OVERDUE_MESSAGE,
-  runRefresh,
   runSend,
   type BuildTranscript,
   type ConversationActions,
   type ConversationState,
 } from "./conversation";
 import { useReplyWatchdog } from "./useReplyWatchdog";
+import { useBuildRefresh } from "./useBuildRefresh";
 
 const ACTIONS: ConversationActions = { startBuild, sendBuildMessage, refreshBuild };
 
@@ -72,6 +72,7 @@ export function BuildConversation({
   const [state, dispatch] = useReducer(conversationReducer, initial, initConversation);
   const typing = isTyping(state);
   const { buildId } = state;
+  const requestRefresh = useBuildRefresh(ACTIONS, dispatch);
 
   const send = (text: string): boolean => {
     const trimmed = text.trim();
@@ -88,7 +89,7 @@ export function BuildConversation({
   const checkAgain = () => {
     if (!buildId) return;
     dispatch({ type: "checking" });
-    void runRefresh(buildId, ACTIONS, dispatch, { report: true });
+    requestRefresh(buildId, state.observedSpecVersion);
   };
 
   const setDraft = (text: string) => dispatch({ type: "draft", text });
@@ -106,11 +107,11 @@ export function BuildConversation({
       const changed = update.status !== state.status || update.spec_version !== state.specVersion;
       dispatch({ type: "buildUpdated", status: update.status, specVersion: update.spec_version });
       // A new spec version or status: read the detail for the spec, candidate parts and ready card.
-      if (changed) void runRefresh(buildId, ACTIONS, dispatch, { report: false });
+      if (changed) requestRefresh(buildId, update.spec_version);
     },
     // A fresh connection may have missed a spec change: read the build once.
     onOpen: () => {
-      if (buildId) void runRefresh(buildId, ACTIONS, dispatch, { report: false });
+      if (buildId) requestRefresh(buildId, state.observedSpecVersion);
     },
   });
 

@@ -9,7 +9,8 @@ const usd = (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${a
  * Shown once the plan is solved — the only sign-up ask in the chat. Parts come from the plan, never UI strings.
  * `enclosure`: a preview opens the 3D viewer; null says it isn't generated yet (live mode); omitted shows neither.
  */
-export function DesignReadyCard({ card, enclosure }: { card: DeviceReadyCard; enclosure?: EnclosurePreviewData | null }) {
+export function DesignReadyCard({ card, buildId, signedIn = false, enclosure }: { card: DeviceReadyCard; buildId: string; signedIn?: boolean; enclosure?: EnclosurePreviewData | null }) {
+  const projectHref = `/projects/${encodeURIComponent(buildId)}`;
   return (
     <section aria-label="Device design ready" className="rounded-[24px] border border-hairline bg-white px-[34px] py-[30px]">
       <div className="flex flex-wrap items-center justify-between gap-5">
@@ -35,10 +36,10 @@ export function DesignReadyCard({ card, enclosure }: { card: DeviceReadyCard; en
       ) : null}
       <div className="mt-[22px] flex flex-wrap items-center justify-between gap-5 rounded-2xl bg-porcelain px-6 py-5">
         <p className="max-w-[420px] text-[16px] font-light leading-[1.45] text-muted">
-          Create an account to save this build, see the full schematic, and order the kit.
+          {signedIn ? "Your design is saved in your workspace. Open the project to review it." : "Create an account to save this build and return to its project."}
         </p>
-        <ButtonLink href="/signup" variant="coral" className="rounded-[14px] px-[26px] py-[13px] text-[16px] font-semibold">
-          Sign up to continue →
+        <ButtonLink href={signedIn ? projectHref : `/signup?next=${encodeURIComponent(projectHref)}`} variant="coral" className="rounded-[14px] px-[26px] py-[13px] text-[16px] font-semibold">
+          {signedIn ? "Open project →" : "Sign up to continue →"}
         </ButtonLink>
       </div>
     </section>

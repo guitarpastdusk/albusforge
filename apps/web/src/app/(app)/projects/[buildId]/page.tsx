@@ -3,9 +3,11 @@ import Link from "next/link";
 import { PageContainer, PageTitle, Pill } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { buildStatus } from "@/lib/build-status";
+import { requireSession } from "@/lib/session";
 
 export default async function ProjectPage({ params }: { params: Promise<{ buildId: string }> }) {
   const { buildId } = await params;
+  await requireSession(`/projects/${encodeURIComponent(buildId)}`);
   const build = await orNotFound(apiGet(routes.builds.get.path(buildId), BuildDetail));
   const status = buildStatus[build.display_status];
 

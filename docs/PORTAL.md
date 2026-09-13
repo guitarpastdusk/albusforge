@@ -11,6 +11,7 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
 - **One app, `apps/web`.** Next.js App Router, TypeScript, zod types imported from `packages/schema`. It is a pure client of the gateway. **No Next.js API routes**, so §6's "one gateway" rule holds.
 - **Cloud Run service `web`** behind the same load balancer as gateway ([ADR 0007](adr/0007-portal-routing.md)): `/v1` and `/v1/*` → gateway, everything else → web, identically on the apex and on every tenant subdomain.
 - **Browser code calls relative `/v1/...`.** Same origin on every host, no CORS.
+- **Mutations and chat go through Next.js Server Functions** (`apps/web/src/actions`): build chat, device ask, and sign-in or sign-out. They reuse the server API client, so the internal-auth token and the two-cookie allowlist apply. They relay only `__Host-albus_session` and `__Host-albus_anon` from gateway responses back to the browser. Every argument is untrusted and validated at runtime.
 - **Server-side rendering calls `GATEWAY_INTERNAL_URL`** (gateway's `run.app` URL over the VPC), never the public domain. A server call through the public domain exits through Cloud NAT, and Cloud Armor would then count every visitor as one IP against the 600 req/min limit.
 - **SSR forwards the visitor's host and IP through a verified contract** ([ADR 0007](adr/0007-portal-routing.md)). On a `run.app` call the `Host` header is gateway's own hostname, so without this SSR on `acme-plant.albusforge.ai` could not resolve its tenant. Every SSR call to gateway sends:
   - `X-Albus-Internal-Auth: Bearer <ID token>`: a Google-signed ID token for web's runtime service account, with audience `GATEWAY_INTERNAL_URL`
@@ -66,6 +67,7 @@ GET    /v1/usage                   current period for the resolved tenant: model
                                    readings and storage added in M6
 
 POST   /v1/devices/:id/ask         { text } → answer + executed queries; /v1/ask with device_id bound
+PATCH  /v1/devices/:id/actions/:actionId  { enabled } → Action   proposed, not implemented; the live UI is read-only
 ```
 
 Notes:
@@ -75,6 +77,19 @@ Notes:
 - **`build_messages` is private to the build's tenant** (or its anonymous owner) and is never readable through a listing. A marketplace **story is written at publish time**. It can be pre-filled as a draft from the transcript, but the user edits and confirms it, it passes the same `policy.ts` `safety_class` check as the rest of the listing, and it is stored on the listing and the immutable `build_snapshot` (ARCHITECTURE.md §7.7). Chat that continues after publishing never changes it, and remix copies the snapshot, never the transcript.
 - **`/v1/showcase`** is curated and opt-in, not a live query across other people's devices. At launch it can be a static list maintained by hand. A real feed needs a per-build `showcase_opt_in` and must never expose location — the prototype shows coordinates on a fleet card, which is fine for an owner and not for the public.
 - **`/v1/devices/:id/ask`** is a thin wrapper. The tool loop is [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §7.4 unchanged, with `tenant_id` from the session and `device_id` from the path, both bound server-side. Answers the design shows ("you'll cross the 22% threshold in ~2 days — want me to alert you at 24%?") map to `compare_to_baseline` plus a proposed alert rule the user confirms — the same proposal pattern as `create_work_order`.
+- **Closed-loop actions (device dashboard, design v2).** `GET /v1/devices/:id/dashboard` may carry, all optional so older responses still parse:
+  - `actions[]`: `{ id, kind: SERVO | API | ALERT, rule, via, enabled }`
+  - `last_action`
+  - `greeting`, the device chat's opening line
+  - `value_tone` and `caption_tone` on stat widgets
+
+  **No write route exists yet**, so in live mode the portal renders the switches and "+ New action" read-only, marked "Not connected yet". They're interactive only against mock data. Before `PATCH /v1/devices/:id/actions/:actionId` is enabled, it needs:
+  - the tenant resolved and membership checked (ADR 0009), with `operator` or `admin` role
+  - an `audit_log` entry for every change
+  - the device picking the change up on its next check-in (CLOUD-PLATFORM.md §3.4)
+  - optimistic UI state rolled back on failure
+
+  Creating a rule from plain words ("water for 5 min when soil drops below 22%") becomes a proposal a person or policy confirms, never a direct write.
 
 ---
 

@@ -70,9 +70,27 @@ jobs:
             if curl -fsS -o /dev/null http://localhost:8080/; then break; fi
             sleep 1
           done
-          for path in / /projects /live /live/bed-c /marketplace; do
+          # Public pages render for a signed-out visitor.
+          for path in / /about /marketplace /signin /signup; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080${path}")
             echo "${path} ${code}"
+            [ "$code" = 200 ] || { docker logs web; exit 1; }
+          done
+          # Signed-in pages redirect a signed-out visitor to sign-in, keeping the destination.
+          for path in /projects /live /live/bed-c; do
+            read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://localhost:8080${path}")
+            echo "${path} ${code} -> ${location}"
+            [ "$code" = 307 ] || { docker logs web; exit 1; }
+            case "$location" in
+              */signin\?next=*) ;;
+              *) echo "expected a redirect to /signin?next=, got '${location}'"; docker logs web; exit 1 ;;
+            esac
+          done
+          # With a session (mock-issued cookie: "mock-session." + base64url(email)), they render.
+          session="mock-session.$(printf '%s' smoke@example.com | base64 | tr '+/' '-_' | tr -d '=')"
+          for path in /projects /live /live/bed-c; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: __Host-albus_session=${session}" "http://localhost:8080${path}")
+            echo "${path} (signed in) ${code}"
             [ "$code" = 200 ] || { docker logs web; exit 1; }
           done
 

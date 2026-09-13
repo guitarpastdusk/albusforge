@@ -6,5 +6,6 @@ Primitives, imported from `@/components/ui`.
 - `Pill` — a pastel chip in one of the four accents.
 - `Card` — white, hairline border, 24px radius; `interactive` adds the hover shadow.
 - `Kicker` — the mono uppercase label above titles.
+- `Toggle` — the design's on/off switch (`role="switch"`), green when on.
 - `PulseDot` — the green "online" dot; stops pulsing under reduced motion.
-- `PageContainer` / `PageTitle` — the 1180px page column and the kicker + Fraunces 46px title.
+- `PageContainer` / `PageTitle` — the 1180px page column (`compact` for the dashboard's 44 px top) and the kicker + Fraunces 46px title.

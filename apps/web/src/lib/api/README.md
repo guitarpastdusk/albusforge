@@ -20,3 +20,15 @@ The gateway client. Every response is validated against `@albusforge/schema`; a 
 | `Cookie` | only `__Host-albus_session` and `__Host-albus_anon` (`FORWARDED_COOKIES` in `@albusforge/schema`); the full incoming Cookie header is never forwarded |
 
 There is deliberately no `index.ts`: a barrel would drag `server.ts` into client bundles.
+
+## Server Functions: cookies and credentials
+
+`sessionClient()` (in `server.ts`) is for Server Functions only. It wraps the same transport, and for mutations it reads the response's `Set-Cookie` lines (`requestWithCookies` in `core.ts`) and relays **only** `__Host-albus_session` and `__Host-albus_anon` through `cookies().set` / `.delete` (`cookies.ts`):
+
+- host-only: no `Domain`, `Path=/`, `Secure` — the `__Host-` prefix requires all three — and `HttpOnly`, `SameSite`, `Max-Age` / `Expires` as gateway sent them;
+- `Max-Age<=0`, a past `Expires`, or an empty value deletes the cookie;
+- any other cookie is ignored.
+
+A newly issued credential also replaces the one in the Cookie header the client sends on its own follow-up reads, so `startBuild`'s transcript read carries the anonymous owner cookie it was just given. Credentials never appear in an action's return value or in a log line. The logic lives in `session-client.ts` (no Next imports) and is tested against a local HTTP gateway stub.
+
+Credentials: server calls forward only `__Host-albus_session` and `__Host-albus_anon`, read from the current `cookies()` store (`credential-cookies.ts`), so a render inside a Server Action — the header after verify — carries the cookie the action just set. The request's Cookie header is the fallback where the store can't be read.

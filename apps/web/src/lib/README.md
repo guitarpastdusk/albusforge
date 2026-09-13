@@ -7,8 +7,16 @@ Code with no markup.
 | [`api/`](api/) | the typed gateway client — server and browser variants, mock mode |
 | [`format/`](format/) | relative time, plurals, compact numbers |
 | [`sse/`](sse/) | `useEventStream`, the one EventSource hook for builds and telemetry |
+| `build-transcript.ts` | build transcript and result types, and `waitForReply` — polls the transcript with backoff until the assistant replies; one total deadline bounds every read, aborting an in-flight one through its `AbortSignal` |
+| `session.ts` | server-only session data access: `getSession()` (memoized per request); `requireSession(path)`, which every signed-in page calls first — logged out redirects to `/signin?next=`, gateway failures throw to the error boundary; and `getHeaderSession()` for the header on every page — a gateway failure shows it signed out and logs one WARNING, so public pages keep rendering |
+| `session-core.ts` | `resolveSession` — the pure rules: no cookie is logged out; live asks GET /v1/me (401 = logged out, anything else throws); mock validates its own cookie |
+| `next-path.ts` | `safeNextPath` (same-origin relative paths only — no `//`, `\\`, schemes or sign-in loops), `signinHref`, `authHref` |
+| `safe-action.ts` | `settle()` — a Server Function call that rejects (network failure, aborted dispatch) becomes a retryable `{ ok: false }` |
+| `action-result.ts` | `ActionResult<T>` — what every Server Function in `src/actions` returns |
+| `action-errors.ts` | a Server Function failure as a value, logged once with the request's trace |
+| `chart.ts` | line-chart geometry: value domain, y mapping, polyline points |
 | `accent.ts` | schema `Accent` → pastel Tailwind classes |
-| `build-status.ts` | display status → pill label, accent, card action |
+| `build-status.ts` | display status → pill label, accent, card action, and where the card links |
 | `cx.ts` | class-name joiner |
 | `runtime-config.ts` | `API_MODE` (default `live`) and `TRUSTED_PROXY_HOPS` (default 1); mock mode is refused on Cloud Run |
 | `log.ts` | structured server logs: one JSON line per call on stdout — `severity`, `message`, a single-string `stack`, and the Cloud Trace fields when `GOOGLE_CLOUD_PROJECT` is set |

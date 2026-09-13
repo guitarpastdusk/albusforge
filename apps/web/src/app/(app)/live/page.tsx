@@ -1,4 +1,4 @@
-import { Fleet, Me, routes } from "@albusforge/schema";
+import { Fleet, routes } from "@albusforge/schema";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { DeviceTileBody } from "@/components/devices/DeviceTileBody";
@@ -7,11 +7,13 @@ import { accentClasses } from "@/lib/accent";
 import { apiGet } from "@/lib/api/server";
 import { cx } from "@/lib/cx";
 import { formatCompact, pluralize } from "@/lib/format";
+import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Live systems" };
 
 export default async function LiveSystemsPage() {
-  const me = await apiGet(routes.me.get.path(), Me);
+  // The session is GET /v1/me: its active tenant scopes the fleet.
+  const me = await requireSession("/live");
   const fleet = await apiGet(routes.tenants.devices.path(me.tenant.id), Fleet);
   const now = new Date();
 
@@ -41,7 +43,7 @@ export default async function LiveSystemsPage() {
         }
       />
 
-      {/* Stub: proves the data path. Live values arrive over SSE (/v1/tenants/:id/stream) later. */}
+      {/* TODO: live values arrive over SSE (/v1/tenants/:id/stream); today they refresh per request. */}
       <div className="mt-9 flex flex-col gap-7">
         {fleet.systems.map((system) => (
           <section key={system.build_id} className="rounded-[26px] border border-hairline bg-white px-[34px] py-[30px]">

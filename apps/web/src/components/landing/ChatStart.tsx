@@ -1,7 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useConversation } from "@/components/build/BuildConversation";
 import { Button } from "@/components/ui";
 
 const STARTERS = [
@@ -10,28 +9,24 @@ const STARTERS = [
   "Track light + humidity for my orchids",
 ];
 
+/** The landing input and starter chips. Sending starts the conversation in place. */
 export function ChatStart() {
-  const router = useRouter();
-  const [text, setText] = useState("");
-
-  function start(ask: string) {
-    if (!ask.trim()) return;
-    // TODO(M2): POST /v1/builds { ask_text: ask } and open the returned build_id.
-    router.push("/build/mock-build");
-  }
+  const { state, send, setDraft } = useConversation();
 
   return (
     <>
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          start(text);
+          // Read the field, not state: an Enter right after typing can fire before React re-renders.
+          send(String(new FormData(event.currentTarget).get("ask") ?? ""));
         }}
         className="mt-9 flex w-full max-w-[720px] items-center gap-4 rounded-[24px] border border-hairline bg-white py-3 pr-3 pl-[26px] shadow-hero"
       >
         <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
+          value={state.draft}
+          onChange={(event) => setDraft(event.target.value)}
+          name="ask"
           aria-label="Describe the device you want"
           placeholder="I want a sensor that tells me when my greenhouse soil is dry…"
           className="min-w-0 flex-1 bg-transparent py-3.5 text-[19px] text-ink outline-none"
@@ -41,12 +36,19 @@ export function ChatStart() {
         </Button>
       </form>
 
+      {/* The first send failed before the chat started: the draft is back in the input. */}
+      {state.error ? (
+        <p role="alert" className="mt-4 text-[15px] text-coral-deep">
+          {state.error}
+        </p>
+      ) : null}
+
       <div className="mt-5 flex flex-wrap justify-center gap-2.5">
         {STARTERS.map((label) => (
           <button
             key={label}
             type="button"
-            onClick={() => start(label)}
+            onClick={() => send(label)}
             className="rounded-full border border-hairline bg-white px-[18px] py-2 text-[14px] text-muted hover:border-coral hover:text-coral-deep"
           >
             {label}

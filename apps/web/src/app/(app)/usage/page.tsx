@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { PageContainer, PageTitle } from "@/components/ui";
 import { apiGet } from "@/lib/api/server";
 import { formatBytes, formatCompact } from "@/lib/format";
+import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Usage" };
 
@@ -21,6 +22,7 @@ function TierRow({ label, tier }: { label: string; tier: TierUsage }) {
 
 /** Not in the header nav — the design has four items. Reached from the account menu later. */
 export default async function UsagePage() {
+  await requireSession("/usage");
   const usage = await apiGet(routes.usage.path(), Usage);
   // `end` is exclusive; show the last day inside the period.
   const lastDay = new Date(Date.parse(usage.period.end) - 1);

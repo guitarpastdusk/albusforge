@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AWAITING_FIRST_READING,
+  formatChannelValue,
+  formatWhen,
+  joinReading,
   formatAgo,
   formatBytes,
   formatCompact,
@@ -114,5 +117,40 @@ describe("device status for a device that may never have reported", () => {
     expect(formatDeviceStatus({ status: "online", last_reading_at: at }, NOW)).toBe("Online · last reading 40s ago");
     expect(formatDeviceStatus({ status: "offline", last_reading_at: at }, NOW)).toBe("Offline · last reading 40s ago");
     expect(isAwaitingFirstReading({ status: "offline", last_reading_at: at })).toBe(false);
+  });
+});
+
+describe("formatChannelValue and joinReading", () => {
+  const number = (unit: string, precision = 0) => ({ kind: "number" as const, precision, unit });
+
+  it("formats numbers at the channel's precision", () => {
+    expect(formatChannelValue(number("% VWC", 1), 31.2)).toEqual({ value: "31.2", unit: "% VWC" });
+    expect(joinReading(formatChannelValue(number("%"), 87))).toBe("87%");
+  });
+
+  it("uses a true minus sign and a spaced unit", () => {
+    expect(joinReading(formatChannelValue(number("dBm"), -61))).toBe("−61 dBm");
+  });
+
+  it("formats durations in days and statuses verbatim", () => {
+    expect(joinReading(formatChannelValue({ kind: "duration", precision: 0, unit: "s" }, 34 * 86_400))).toBe("34 days");
+    expect(joinReading(formatChannelValue({ kind: "status", precision: 0, unit: "" }, "PASS"))).toBe("PASS");
+  });
+
+  it("falls back to the raw value without a channel", () => {
+    expect(joinReading(formatChannelValue(undefined, 12))).toBe("12");
+  });
+});
+
+describe("formatWhen", () => {
+  const now = new Date(2026, 8, 13, 12, 0);
+
+  it("says today or yesterday with a 24-hour time", () => {
+    expect(formatWhen(new Date(2026, 8, 13, 6, 12), now)).toBe("today 06:12");
+    expect(formatWhen(new Date(2026, 8, 12, 6, 12), now)).toBe("yesterday 06:12");
+  });
+
+  it("uses the date further back", () => {
+    expect(formatWhen(new Date(2026, 8, 1, 18, 5), now)).toBe("1 Sept 18:05");
   });
 });

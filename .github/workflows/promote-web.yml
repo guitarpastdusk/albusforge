@@ -1,4 +1,4 @@
-# Promote an image that deploy-web.yml built and deployed to staging.
+# Promote an image that deploy-web.yml successfully deployed to staging.
 # Dispatched by hand with the digest from that run's job summary; this is the
 # manual promotion step (ARCHITECTURE.md §12.3, docs/adr/0001). It never builds.
 #
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       digest:
-        description: "Image digest from the deploy-web staging run summary (sha256:…)"
+        description: "Image digest from a successful deploy-web staging run's summary (sha256:…)"
         required: true
         type: string
 
@@ -22,6 +22,7 @@ env:
   REGION: us-central1
   REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
   SERVICE: web
+  PROJECT: albusforge-prod
   WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
 
 jobs:
@@ -48,6 +49,8 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ env.WIF_PROVIDER }}
@@ -55,22 +58,23 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
-      # deploy-prod can read the registry but never push, so a digest that exists
-      # is one deploy-web pushed from main.
-      - name: Check the image exists
+      # Being in the registry isn't enough: deploy-web pushes before it deploys,
+      # so a failed staging deploy leaves an image behind. Require the
+      # staging-deployed-<commit> tag deploy-web adds only after a successful
+      # deploy. deploy-prod can read the registry, so prod needs no access to
+      # the staging project.
+      - name: Require a successful staging deploy
         env:
           DIGEST: ${{ inputs.digest }}
-        run: |
-          gcloud artifacts docker images describe "${REPO}/${SERVICE}@${DIGEST}" \
-            --format='value(image_summary.digest)'
+        run: bash .github/scripts/require-staging-deployed.sh "$DIGEST"
 
       # gcloud run deploy creates a missing service, and deploy-prod is allowed
       # to. Services come only from Terraform (ADR 0005).
       - name: Require the Terraform-managed service
         run: |
-          gcloud run services describe "${SERVICE}" --project albusforge-prod --region "${REGION}" \
+          gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
             --format='value(metadata.name)' >/dev/null \
-            || { echo "::error::Cloud Run service ${SERVICE} not found in albusforge-prod. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
+            || { echo "::error::Cloud Run service ${SERVICE} not found in ${PROJECT}. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
 
       # Image only: Terraform owns env vars and everything else (ADR 0005).
       - name: Deploy to prod
@@ -79,7 +83,7 @@ jobs:
         run: |
           gcloud run deploy "${SERVICE}" \
             --image "${REPO}/${SERVICE}@${DIGEST}" \
-            --project albusforge-prod \
+            --project "${PROJECT}" \
             --region "${REGION}" \
             --quiet
           echo "Promoted \`${REPO}/${SERVICE}@${DIGEST}\` to prod (dispatched by ${GITHUB_ACTOR})" >> "$GITHUB_STEP_SUMMARY"

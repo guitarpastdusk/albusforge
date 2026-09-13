@@ -79,3 +79,14 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs web || true
+
+  deploy-scripts:
+    # The deploy workflows' freshness and promotion checks, against a stub
+    # gcloud and a throwaway git history. No cloud access.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Test deploy scripts
+        run: bash .github/scripts/test/run.sh

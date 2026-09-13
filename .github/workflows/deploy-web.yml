@@ -6,7 +6,7 @@ name: deploy-web
 on:
   push:
     branches: [main]
-    # Everything that changes the image, plus this file.
+    # Everything that changes the image or how it deploys, plus this file.
     paths:
       - apps/web/**
       - packages/**
@@ -16,6 +16,7 @@ on:
       - turbo.json
       - tsconfig*.json
       - .dockerignore
+      - .github/scripts/**
       - .github/workflows/deploy-web.yml
   workflow_dispatch:
 
@@ -26,6 +27,7 @@ env:
   REGION: us-central1
   REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
   SERVICE: web
+  PROJECT: albusforge-staging
   WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
 
 jobs:
@@ -35,17 +37,20 @@ jobs:
     runs-on: ubuntu-latest
     # WIF trust is bound to the GitHub environment, not the branch (ADR 0001).
     environment: staging
-    # Deploys run in push order; a newer push waits rather than racing.
+    # Staging deploys never overlap. That alone doesn't keep them in commit
+    # order, so the freshness check below refuses to replace a newer deployment
+    # with an older commit.
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
-    outputs:
-      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Full history for the freshness check's ancestry test.
+          fetch-depth: 0
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
@@ -59,9 +64,16 @@ jobs:
       # building if infra/env hasn't created web yet.
       - name: Require the Terraform-managed service
         run: |
-          gcloud run services describe "${SERVICE}" --project albusforge-staging --region "${REGION}" \
+          gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
             --format='value(metadata.name)' >/dev/null \
-            || { echo "::error::Cloud Run service ${SERVICE} not found in albusforge-staging. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
+            || { echo "::error::Cloud Run service ${SERVICE} not found in ${PROJECT}. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
+
+      # Inside the concurrency lock, compare with what staging actually runs. An
+      # older or diverged commit is refused before anything is built; the same
+      # commit is a no-op. Rolling back is not possible from this workflow.
+      - name: Check staging freshness
+        id: fresh
+        run: bash .github/scripts/staging-freshness.sh >> "$GITHUB_OUTPUT"
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
@@ -120,20 +132,39 @@ jobs:
 
       # Image only: Terraform owns env vars and everything else (ADR 0005).
       - name: Deploy to staging
+        if: steps.fresh.outputs.action == 'deploy'
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           gcloud run deploy "${SERVICE}" \
             --image "${REPO}/${SERVICE}@${DIGEST}" \
-            --project albusforge-staging \
+            --project "${PROJECT}" \
             --region "${REGION}" \
             --quiet
+
+      # Runs only if the deploy succeeded, or staging already runs this commit.
+      # promote-web refuses any digest without this tag, so an image whose
+      # staging deploy failed can't reach prod.
+      - name: Mark the digest as deployed to staging
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: bash .github/scripts/mark-staging-deployed.sh "$DIGEST"
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          ACTION: ${{ steps.fresh.outputs.action }}
+        run: |
           {
-            echo "### Deployed to staging"
+            if [ "$ACTION" = skip ]; then
+              echo "### Staging already runs this commit"
+            else
+              echo "### Deployed to staging"
+            fi
             echo
             echo "Commit \`${GITHUB_SHA}\`"
             echo
-            echo "Image \`${REPO}/${SERVICE}@${DIGEST}\`"
+            echo "Image \`${REPO}/${SERVICE}@${DIGEST}\`, tagged \`staging-deployed-${GITHUB_SHA}\`"
             echo
             echo "To promote this image, run **promote-web** with \`digest\`:"
             echo

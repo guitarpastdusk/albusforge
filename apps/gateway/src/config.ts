@@ -42,6 +42,7 @@ export interface AuthConfig {
 
 export interface GatewayConfig {
   port: number;
+  sensorAsk: IntakeConfig;
   db: DbConfig;
   dbTimeouts: DbTimeouts;
   intake: IntakeConfig;
@@ -62,6 +63,8 @@ const ServerEnv = z.object({
   DB_CONNECT_TIMEOUT_MS: Millis.default(5000),
   DB_QUERY_TIMEOUT_MS: Millis.default(10_000),
   DB_IDLE_TIMEOUT_MS: Millis.default(30_000),
+  ASK_URL: z.url({ protocol: /^https?$/ }).optional(),
+  ASK_AUTH: z.enum(["google", "none"]).default("google"),
   INTAKE_URL: z.url({ protocol: /^https?$/ }).optional(),
   INTAKE_AUTH: z.enum(["google", "none"]).default("google"),
   REGISTRY_INCLUDE_DRAFTS: z.enum(["true", "false"]).default("false"),
@@ -110,8 +113,16 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
   if (e.INTERNAL_AUTH_AUDIENCE !== undefined && e.SSR_SERVICE_ACCOUNT === undefined) {
     throw new Error("Invalid gateway environment:\nINTERNAL_AUTH_AUDIENCE requires SSR_SERVICE_ACCOUNT");
   }
+  if (e.ASK_URL) {
+    const askUrl = new URL(e.ASK_URL);
+    if (askUrl.username || askUrl.password || askUrl.search || askUrl.hash || askUrl.pathname !== "/" || (cleaned.K_SERVICE && askUrl.protocol !== "https:")) {
+      throw new Error("ASK_URL must be a service origin, HTTPS on Cloud Run");
+    }
+  }
+  if (cleaned.K_SERVICE && e.ASK_AUTH === "none") throw new Error("ASK_AUTH=none is local only");
   return {
     port: e.PORT,
+    sensorAsk: { url: e.ASK_URL ?? null, auth: e.ASK_AUTH },
     db,
     dbTimeouts: {
       connectMs: e.DB_CONNECT_TIMEOUT_MS,

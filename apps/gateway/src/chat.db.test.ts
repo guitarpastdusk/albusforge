@@ -55,7 +55,7 @@ function makeApp(overrides: Partial<ChatOptions> = {}, parts?: PartsStore): { ap
     ping: async () => void (await handle.pool.query("SELECT 1")),
     log,
     chat: {
-      store: createChatStore(handle.db),
+      store: createChatStore(handle.db, handle.pool),
       turns,
       includeDrafts: false,
       ...overrides,

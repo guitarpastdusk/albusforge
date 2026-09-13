@@ -133,8 +133,9 @@ describe("cleanup rejection handling", () => {
     const buildId = await newBuild("A fridge temperature sensor");
     let blackhole = false;
     const lateQueries: string[] = [];
+    let reachedMeter!: () => void;
+    const metering = new Promise<void>(resolve => { reachedMeter = resolve; });
     const { deps, catalogue } = setup([async () => {
-      await new Promise(resolve => setTimeout(resolve, 50));
       blackhole = true;
       return goldenTurn("fridge-monitor", 1);
     }], { deadlineMs: 300, budgetMs: 380 });
@@ -144,6 +145,7 @@ describe("cleanup rejection handling", () => {
       get(target, property) {
         if (property === "query") return (...args: unknown[]) => {
           if (!blackhole) return (target.query as (...args: unknown[]) => unknown).apply(target, args);
+          reachedMeter();
           lateQueries.push(typeof args[0] === "string" ? args[0] : (args[0] as {text: string}).text);
           // Cleanup promises settle at different times, as independent query timeouts do.
           return new Promise((_resolve, reject) => setTimeout(() => reject(new Error("Query read timeout")), 110));
@@ -156,7 +158,6 @@ describe("cleanup rejection handling", () => {
     const entries: unknown[] = [];
     let attempts = 0;
     let serverDone: Promise<unknown> | undefined;
-    const started = Date.now();
     const scheduler = createTurnScheduler({
       timeoutMs: 1500,
       retryDelayMs: 5,
@@ -169,13 +170,24 @@ describe("cleanup rejection handling", () => {
         catch { throw new IntakeError("intake answered 503", 503); }
       } },
     });
-    scheduler.trigger(buildId);
-    await scheduler.idle();
-    await serverDone?.catch(() => undefined);
-    expect(Date.now() - started).toBeLessThan(1500);
-    expect(lateQueries.length).toBeGreaterThan(0);
-    expect(entries.length).toBeGreaterThan(0);
-    expect(attempts).toBe(2);
+    // Keep real PostgreSQL setup outside the short fault schedule. Only advance
+    // the test clock after metering has reached the injected failure boundary.
+    // The separate lost-connection test still checks the real wall-clock budget.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const started = Date.now();
+      scheduler.trigger(buildId);
+      await metering;
+      await vi.advanceTimersByTimeAsync(400);
+      await scheduler.idle();
+      await serverDone?.catch(() => undefined);
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(lateQueries.length).toBeGreaterThan(0);
+      expect(entries.length).toBeGreaterThan(0);
+      expect(attempts).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
 });
@@ -466,16 +478,37 @@ describe("one connection per turn", () => {
     const buildId = await newBuild("A fridge temperature sensor");
     const short = createDb(appConfig, { max: 1, statementTimeoutMs: 500 });
     const blocker = await handle.pool.connect();
-    let unblocked: Promise<void> | undefined;
+    let reachedMeter!: () => void;
+    const metering = new Promise<void>(resolve => { reachedMeter = resolve; });
+    let cancellations = 0;
+    const client = await short.pool.connect();
+    const gated = new Proxy(client, {
+      get(target, property) {
+        if (property === "query") return (...args: unknown[]) => {
+          const text = typeof args[0] === "string" ? args[0] : (args[0] as { text: string }).text;
+          const work = (target.query as (...args: unknown[]) => Promise<unknown>).apply(target, args);
+          if (!/for update/i.test(text)) return work;
+          reachedMeter();
+          return work.catch(async (error: { code?: string }) => {
+            if (error.code === "57014") {
+              cancellations++;
+              // Release only after the actual metering statement is cancelled,
+              // but before its rejection permits cleanup/the fallback FK write.
+              await blocker.query("ROLLBACK");
+            }
+            throw error;
+          });
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
 
     const { deps, catalogue } = setup(
       [
         async () => {
           await blocker.query("BEGIN");
           await blocker.query("SELECT id FROM builds.builds WHERE id = $1 FOR UPDATE", [buildId]);
-          unblocked = new Promise<void>((resolve, reject) => {
-            setTimeout(() => void blocker.query("ROLLBACK").then(() => resolve(), reject), 650);
-          });
           return goldenTurn("fridge-monitor", 1);
         },
       ],
@@ -483,13 +516,21 @@ describe("one connection per turn", () => {
       // should ride it out and answer rather than give the work to a retry.
       { deadlineMs: 250, budgetMs: 3000 },
     );
-    deps.pool = short.pool;
+    deps.pool = { connect: async () => gated } as unknown as pg.Pool;
     // Warm the catalogue first: only the model call and metering should race the deadline.
     await catalogue.get(handle.db);
 
+    // Advance the deadline only after real metering reaches its locked row.
+    // PostgreSQL's 500ms statement_timeout remains real; JS timers are advanced
+    // explicitly so a busy runner cannot reorder deadline, cancellation and release.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
-      const result = await handleTurn(deps, buildId);
-      if (unblocked) await unblocked;
+      const pending = handleTurn(deps, buildId);
+      void pending.catch(() => undefined);
+      await metering;
+      await vi.advanceTimersByTimeAsync(250);
+      const result = await pending;
+      expect(cancellations).toBe(1);
 
       expect(result).toMatchObject({ spec_version: null, status: "asking" });
       expect(await messagesOf(buildId)).toEqual([
@@ -500,6 +541,7 @@ describe("one connection per turn", () => {
       expect(await callsOf(buildId)).toEqual([]);
       expect(await statusOf(buildId)).toBe("asking");
     } finally {
+      vi.useRealTimers();
       await blocker.query("ROLLBACK").catch(() => {});
       blocker.release();
       await short.pool.end();

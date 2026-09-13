@@ -71,3 +71,15 @@ variable "rate_limit_interval_sec" {
   type    = number
   default = 60
 }
+
+variable "backend_security_policies" {
+  description = "Optional per-backend policy overrides; defaults to the shared edge policy."
+  type        = map(string)
+  default     = {}
+}
+
+variable "disable_request_logging" {
+  description = "Backend keys whose request logs must be disabled (e.g. sensitive Armor rate keys)."
+  type        = set(string)
+  default     = []
+}

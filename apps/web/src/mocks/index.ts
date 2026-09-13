@@ -1,4 +1,5 @@
-import { routes, type Method } from "@albusforge/schema";
+import { routes, type Me, type Method } from "@albusforge/schema";
+import { z } from "zod";
 import type { Transport, TransportResponse } from "@/lib/api/core";
 import * as data from "./data";
 
@@ -29,6 +30,22 @@ const MONTH = 30 * 24 * 60 * 60;
 
 const ok = (json: unknown): TransportResponse => jsonResponse(200, json);
 
+const MOCK_SESSION_PREFIX = "mock-session.";
+
+/** The session cookie value mock verify issues: the email, so the header can show it. Not a secret — mock mode only. */
+export function mockSessionCookie(email: string): string {
+  return MOCK_SESSION_PREFIX + Buffer.from(email, "utf8").toString("base64url");
+}
+
+/** Mock mode's GET /v1/me for a session cookie: the session it issued, or null (logged out). */
+export function mockSession(cookieValue: string): Me | null {
+  if (!cookieValue.startsWith(MOCK_SESSION_PREFIX)) return null;
+  const encoded = cookieValue.slice(MOCK_SESSION_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return null;
+  const email = z.email().safeParse(Buffer.from(encoded, "base64url").toString("utf8"));
+  return email.success ? data.verifiedSession(email.data) : null;
+}
+
 /** 202/204: success with an empty body. */
 const empty = (status: number): TransportResponse => ({ status, contentType: null, isJson: true, json: null });
 
@@ -56,10 +73,14 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       // Mock mode: any 6 digits verify.
       if (!email || !code || !/^\d{6}$/.test(code)) return badRequest("email and a 6-digit code are required");
       return jsonResponse(200, data.verifiedSession(email), [
-        `__Host-albus_session=mock-session; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`,
+        `__Host-albus_session=${mockSessionCookie(email)}; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`,
         `__Host-albus_anon=; ${COOKIE_ATTRIBUTES}; Max-Age=0`,
       ]);
     },
+  ],
+  [
+    routes.auth.signOut,
+    () => ({ ...empty(204), setCookies: [`__Host-albus_session=; ${COOKIE_ATTRIBUTES}; Max-Age=0`] }),
   ],
   [routes.me.get, () => ok(data.me())],
   [routes.builds.list, () => ok(data.buildList())],

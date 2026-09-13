@@ -3,12 +3,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ButtonLink, PageContainer, PageTitle, Pill } from "@/components/ui";
 import { apiGet } from "@/lib/api/server";
+import { requireSession } from "@/lib/session";
 import { buildHref, buildStatus } from "@/lib/build-status";
 import { formatAgo, pluralize } from "@/lib/format";
 
 export const metadata: Metadata = { title: "Projects" };
 
 export default async function ProjectsPage() {
+  await requireSession("/projects");
   const { builds } = await apiGet(routes.builds.list.path(), BuildList);
   const now = new Date();
 

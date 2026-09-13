@@ -1,4 +1,4 @@
-import { Fleet, Me, routes } from "@albusforge/schema";
+import { Fleet, routes } from "@albusforge/schema";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { DeviceTileBody } from "@/components/devices/DeviceTileBody";
@@ -7,11 +7,13 @@ import { accentClasses } from "@/lib/accent";
 import { apiGet } from "@/lib/api/server";
 import { cx } from "@/lib/cx";
 import { formatCompact, pluralize } from "@/lib/format";
+import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = { title: "Live systems" };
 
 export default async function LiveSystemsPage() {
-  const me = await apiGet(routes.me.get.path(), Me);
+  // The session is GET /v1/me: its active tenant scopes the fleet.
+  const me = await requireSession("/live");
   const fleet = await apiGet(routes.tenants.devices.path(me.tenant.id), Fleet);
   const now = new Date();
 

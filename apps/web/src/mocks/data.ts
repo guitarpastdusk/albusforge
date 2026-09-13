@@ -48,7 +48,7 @@ export function me(): Me {
 /** POST /v1/auth/verify in mock mode: any 6 digits sign in as the demo user, under the given email. */
 export function verifiedSession(email: string): Me {
   const session = me();
-  return { ...session, user: { ...session.user, email } };
+  return { ...session, user: { ...session.user, email, display_name: null } };
 }
 
 const SUMMARIES: Array<Omit<BuildSummary, "updated_at"> & { updated_ago: number }> = [

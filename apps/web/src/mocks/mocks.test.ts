@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ApiRequestError, request } from "@/lib/api/core";
 import * as data from "./data";
-import { mockTransport } from "./index";
+import { mockSession, mockSessionCookie, mockTransport } from "./index";
 
 const get = <S extends Parameters<typeof request>[3]>(path: string, schema: S) =>
   request(mockTransport, "GET", path, schema);
@@ -202,8 +202,30 @@ describe("mock pagination and cookies", () => {
 
     const verified = await mockTransport("POST", routes.auth.verify.path(), { email: "you@example.com", code: "123456" });
     expect(verified.setCookies).toEqual([
-      expect.stringMatching(/^__Host-albus_session=mock-session;.*Max-Age=\d+$/),
+      expect.stringMatching(/^__Host-albus_session=mock-session\.[A-Za-z0-9_-]+;.*Max-Age=\d+$/),
       expect.stringMatching(/^__Host-albus_anon=;.*Max-Age=0$/),
     ]);
+  });
+});
+
+describe("mock sessions", () => {
+  it("verify issues a cookie that mockSession reads back as that email's session", async () => {
+    const verified = await mockTransport("POST", routes.auth.verify.path(), { email: "sam@example.org", code: "123456" });
+    const value = verified.setCookies!.find((line) => line.startsWith("__Host-albus_session="))!.split(";")[0]!.split("=")[1]!;
+    expect(value).toBe(mockSessionCookie("sam@example.org"));
+    expect(mockSession(value)?.user).toMatchObject({ email: "sam@example.org", display_name: null });
+  });
+
+  it.each(["", "mock-session", "mock-session.", "mock-session.!!", "other.c2FtQGV4YW1wbGUub3Jn", mockSessionCookie("not an email")])(
+    "rejects %j",
+    (value) => {
+      expect(mockSession(value)).toBeNull();
+    },
+  );
+
+  it("sign out clears the session cookie", async () => {
+    const response = await mockTransport("POST", routes.auth.signOut.path(), undefined);
+    expect(response.status).toBe(204);
+    expect(response.setCookies).toEqual([expect.stringMatching(/^__Host-albus_session=;.*Max-Age=0$/)]);
   });
 });

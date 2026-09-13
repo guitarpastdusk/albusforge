@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/actions/auth", () => ({ requestSignInCode: vi.fn(), verifySignInCode: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }) }));
 
 const { CodeBoxes, EmailCodeCard } = await import("./EmailCodeCard");
 
@@ -31,5 +32,13 @@ describe("EmailCodeCard", () => {
     const html = renderToStaticMarkup(<EmailCodeCard intent="signup" />);
     expect(html).toContain("Save your build. Own your data.");
     expect(html).toContain("Email me a code");
+  });
+});
+
+describe("EmailCodeCard links keep next", () => {
+  it("carries a guarded path between sign-in and sign-up", () => {
+    expect(renderToStaticMarkup(<EmailCodeCard intent="signin" next="/live/bed-a" />)).toContain('href="/signup?next=%2Flive%2Fbed-a"');
+    expect(renderToStaticMarkup(<EmailCodeCard intent="signup" next="/projects" />)).toContain('href="/signin?next=%2Fprojects"');
+    expect(renderToStaticMarkup(<EmailCodeCard intent="signin" />)).toContain('href="/signup"');
   });
 });

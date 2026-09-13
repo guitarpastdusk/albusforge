@@ -8,9 +8,11 @@ import { PageContainer, Pill } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { formatWhen } from "@/lib/format";
 import { loadRuntimeConfig } from "@/lib/runtime-config";
+import { requireSession } from "@/lib/session";
 
 export default async function DevicePage({ params }: { params: Promise<{ deviceId: string }> }) {
   const { deviceId } = await params;
+  await requireSession(`/live/${encodeURIComponent(deviceId)}`);
   const dashboard = await orNotFound(apiGet(routes.devices.dashboard.path(deviceId), DeviceDashboard));
   const { device } = dashboard;
   const now = new Date();

@@ -1,10 +1,13 @@
 "use server";
 
 import { routes, SESSION_COOKIE, VerifyCodeResponse } from "@albusforge/schema";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { actionFailure, actionIncomplete } from "@/lib/action-errors";
 import type { ActionResult } from "@/lib/action-result";
 import { ApiRequestError } from "@/lib/api/core";
+import { nextCookieWriter } from "@/lib/api/cookies";
 import { sessionClient } from "@/lib/api/server";
 
 /*
@@ -61,4 +64,21 @@ export async function verifySignInCode(email: unknown, code: unknown): Promise<A
     }
     return actionFailure("verifySignInCode", error);
   }
+}
+
+/**
+ * POST /v1/auth/signout, then delete the session cookie here as well and go
+ * home. The local delete happens even if gateway fails (logged once), so the
+ * browser is signed out either way. `redirect` sits outside `try` (it throws).
+ */
+export async function signOut(): Promise<void> {
+  try {
+    const client = await sessionClient();
+    await client.mutate("POST", routes.auth.signOut.path(), z.unknown());
+  } catch (error) {
+    await actionFailure("signOut", error);
+  }
+  // The relay's delete path: Secure and Path=/, or browsers ignore it for a __Host- cookie.
+  nextCookieWriter(await cookies()).delete(SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "lax" });
+  redirect("/");
 }

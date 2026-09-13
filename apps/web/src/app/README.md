@@ -14,10 +14,11 @@ Routes (Next.js App Router). Route-segment folders don't carry their own README 
 | `(app)/usage` | Usage for the current period (not in the header nav) | session | stub |
 | `/marketplace` | Community builds; `?category=` filters in gateway, `?cursor=` pages | public | built to design |
 | `/marketplace/[listingId]` | A listing (not designed yet) | public | stub |
+| `(static)/about` | About us — what we build, the closed loop, principles, team | public | built |
 | `(static)/docs`, `pricing`, `security` | Footer pages | public | placeholder |
 
 `error.tsx` is the root error boundary: it renders `ServiceUnavailable` inside the root layout (header and footer stay) for any page below it. `global-error.tsx` replaces the layout if the layout itself fails. `fonts.ts` holds the next/font loaders both use.
 
 Interactive writes (chat, device questions, sign-in) go through Server Functions in [`src/actions`](../actions/).
 
-`(app)/layout.tsx` is where the session guard goes. Every page that fetches is rendered per request (the API client calls `connection()`), so no data is baked in at build time.
+The session guard has two halves. `src/proxy.ts` redirects a request with no session cookie on `/projects`, `/live`, `/usage` (and below) to `/signin?next=<path>` before rendering; every `(app)` page then calls `requireSession(path)` (`lib/session.ts`), which checks the session for real with GET /v1/me. Not the `(app)` layout: layouts don't re-render on navigation and don't stop their pages rendering (Next's authentication guide). After verify, sign-in returns to a safe `next` (else `/projects`). Every page that fetches is rendered per request (the API client calls `connection()`), so no data is baked in at build time.

@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { requestSignInCode, verifySignInCode } from "@/actions/auth";
 import { Button, ButtonLink, Kicker } from "@/components/ui";
 import { cx } from "@/lib/cx";
+import { authHref, DEFAULT_AFTER_SIGN_IN } from "@/lib/next-path";
 import { settle } from "@/lib/safe-action";
+import { afterVerify } from "./after-verify";
 
 export type EmailCodeIntent = "signup" | "signin";
 type Step = "email" | "code" | "done";
@@ -33,8 +36,9 @@ const CODE_LENGTH = 6;
  * Email → 6-digit code → done (ADR 0008). Sign-up and sign-in are the same
  * flow with different copy. In mock mode any 6 digits verify.
  */
-export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
+export function EmailCodeCard({ intent, next = null }: { intent: EmailCodeIntent; next?: string | null }) {
   const copy = COPY[intent];
+  const router = useRouter();
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -57,7 +61,10 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
       const result = await settle(() => verifySignInCode(email, code));
       if (!result.ok) return setError(result.message);
       setError(null);
-      setStep("done");
+      // The session cookie is set by now (verify reports success only then).
+      const outcome = afterVerify(intent, next);
+      if (outcome.kind === "navigate") router.push(outcome.to);
+      else setStep("done");
     });
 
   return (
@@ -100,11 +107,11 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
             {intent === "signup" ? (
               <>
                 By continuing you agree to the <Link href="/security">terms</Link>. Already verified?{" "}
-                <Link href="/signin">Sign in</Link>
+                <Link href={authHref("/signin", next)}>Sign in</Link>
               </>
             ) : (
               <>
-                New here? <Link href="/signup">Create an account</Link>
+                New here? <Link href={authHref("/signup", next)}>Create an account</Link>
               </>
             )}
           </p>
@@ -152,7 +159,7 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
           <h1 className="mt-[22px] text-center font-display text-[34px] font-medium leading-[1.15]">{copy.doneTitle}</h1>
           <p className="mt-3 text-center text-[16px] font-light leading-[1.5] text-muted">{copy.doneBody}</p>
           <ButtonLink
-            href="/projects"
+            href={DEFAULT_AFTER_SIGN_IN}
             variant="dark"
             className="mt-[26px] w-full rounded-[14px] py-4 text-[17px] font-semibold"
           >

@@ -104,13 +104,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 }
 ```
 
-### 4.2 Gating Script Injection, Host Eligibility, and Synchronous Disablement
+### 4.2 Gating Script Injection, Host Eligibility, and Readiness Lifecycle
 A default GA4 snippet or standard `<GoogleAnalytics>` tag causes immediate data leakage across three vectors:
 1. **Tenant Subdomain Exposure:** ADR 0007 routes both the apex and tenant subdomains (`<tenant>.albusforge.ai`) to `web`. If a visitor hits a public path like `/docs` on `acme.albusforge.ai`, injecting the Google script would leak the tenant name via HTTP `Referer` headers and script request origins.
 2. **Persistent Script Lifecycle in SPAs:** Next.js caches injected `<Script>` tags in the document. Once loaded, unmounting React components does **not** unload `gtag.js` from `window`. GA continues listening to events in memory.
 3. **Enhanced Measurement Automatic Events:** Even with `send_page_view: false`, GA4's default Enhanced Measurement fires on browser History API changes (`replaceState`, `pushState`), scroll events, engagement timing, and form submissions. When `BuildConversation.tsx` calls `history.replaceState` turning `/` into `/build/<UUID>`, or a user interacts on `/live/<device-UUID>`, GA automatically logs private URLs and engagement pings.
 
-To enforce an airtight boundary, **four coordinated controls are required**:
+To enforce an airtight boundary while ensuring reliable delivery of public pageviews:
 
 1. **Administrative Stream Setting:** In the GA4 property settings under *Data Streams > Web Stream > Enhanced Measurement*, toggle **OFF** "Page changes based on browser history events".
 2. **Host & Consent Pre-Gate:** The `<Script>` tag is **never inserted into the DOM** unless:
@@ -120,8 +120,11 @@ To enforce an airtight boundary, **four coordinated controls are required**:
 3. **Synchronous Opt-Out Execution (`window['ga-disable-<ID>']`):** Setting `window['ga-disable-' + measurementId] = true` is Google's documented programmatic opt-out that immediately halts all hits, engagement timers, scrolls, and cookieless pings. Because React `useEffect` runs asynchronously after paint and can be deferred, the opt-out flag must be set **synchronously at the privacy boundary**:
    * **On Consent Revocation:** The consent change subscriber sets `setTrackingDisabled(id, true)` **synchronously** before scheduling React state updates.
    * **On Route Transitions:** Callsites invoking native history mutations (such as `BuildConversation.tsx:84` calling `history.replaceState` to `/build/<id>`) execute `setTrackingDisabled(id, true)` **synchronously before mutating history**.
-   * **During Render/Layout:** If rendering an ineligible target, `setTrackingDisabled(id, true)` runs synchronously in render/layout phase before child effects run. Re-enabling tracking (`setTrackingDisabled(id, false)`) only occurs after eligibility is established and reconciled.
-4. **Consent Mode v2 Defaults:** Default all consent states (`analytics_storage`, `ad_storage`, etc.) to `denied` prior to any library initialization.
+   * **During Render/Layout:** If rendering an ineligible target, `useLayoutEffect` runs `setTrackingDisabled(id, true)` synchronously before paint and child effects execute.
+4. **Readiness-Gated Pageview Delivery:**
+   * Because `afterInteractive` scripts install asynchronously during React's passive effect phase, dispatching `trackSanitizedPageView` from `useLayoutEffect` would execute before `window.gtag` is defined and drop the initial pageview.
+   * Instead, the inline script uses `onReady={() => setIsReady(true)}` to signal initialization readiness.
+   * Pageview dispatch runs in a dedicated `useEffect` that triggers when `isReady && isEligible`, and re-verifies `isEligibleTrackingTarget` at call time to guarantee that a user who quickly navigates to a private route before initialization finishes emits zero hits.
 
 ```tsx
 // apps/web/src/components/analytics/AnalyticsProvider.tsx (Client Component)
@@ -148,6 +151,7 @@ export function AnalyticsProvider({
   const pathname = usePathname();
   const [hasConsent, setHasConsent] = useState(false);
   const [hostname, setHostname] = useState<string>("");
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     setHostname(window.location.hostname);
@@ -168,19 +172,33 @@ export function AnalyticsProvider({
     measurementId && isEligibleTrackingTarget(hostname, pathname, hasConsent)
   );
 
-  // Synchronous boundary enforcement: if ineligible, disable immediately before DOM paint
+  // 1. Synchronous boundary enforcement: if ineligible, disable immediately before DOM paint
   useLayoutEffect(() => {
     if (!measurementId) return;
 
     if (!isEligible) {
       // Synchronously halt GA before child effects or interactions execute
       setTrackingDisabled(measurementId, true);
-    } else {
-      // Re-enable tracking and record sanitized virtual pageview
+    }
+  }, [isEligible, measurementId]);
+
+  // 2. Pageview delivery: dispatches once GA is ready AND verified still eligible
+  useEffect(() => {
+    if (!measurementId || !isReady || !isEligible) return;
+
+    // Re-verify current host, path, and consent at dispatch time so delayed initialization
+    // does not fire if the user already navigated to a private surface or revoked consent.
+    const eligibleNow = isEligibleTrackingTarget(
+      window.location.hostname,
+      pathname,
+      hasAnalyticsConsent()
+    );
+
+    if (eligibleNow) {
       setTrackingDisabled(measurementId, false);
       trackSanitizedPageView(measurementId, pathname);
     }
-  }, [isEligible, measurementId, pathname]);
+  }, [isEligible, isReady, measurementId, pathname]);
 
   return (
     <>
@@ -190,7 +208,11 @@ export function AnalyticsProvider({
             src={`https://www.googletagmanager.com/gtag/js?id=${measurementId}`}
             strategy="afterInteractive"
           />
-          <Script id="ga-init" strategy="afterInteractive">
+          <Script
+            id="ga-init"
+            strategy="afterInteractive"
+            onReady={() => setIsReady(true)}
+          >
             {`
               window.dataLayer = window.dataLayer || [];
               function gtag(){dataLayer.push(arguments);}
@@ -311,6 +333,9 @@ Before any analytics code reaches staging, the automated end-to-end test suite m
 
 | Scenario | Trigger / Route | Expected Verification |
 |---|---|---|
+| **Cold Consented Initial Load** | Cold load on `https://albusforge.ai/` with consent active | `<Script>` mounts; `onReady` signals readiness; dispatches **exactly one** initial pageview for `/` without requiring another navigation. |
+| **First Consent Grant (In-Session)** | User clicks "Accept" on `/` | `isEligible` becomes true; scripts mount; on initialization readiness, exactly one pageview dispatches for `/` without page reload. |
+| **Eligibility Loss Before Init** | User on `/` consents $\rightarrow$ navigates immediately to `/build/bld_123` before `onReady` | On transition, `isEligible` becomes false, `useLayoutEffect` sets `ga-disable = true`; when `onReady` later fires, `eligibleNow` fails and zero hits are emitted. |
 | **Direct Private Entry** | Cold load on `https://acme.albusforge.ai/live/dev_123` | `<Script>` not rendered; zero network calls to Google; `window.gtag` undefined; tenant slug and device UUID absent from all headers. |
 | **Consented Tenant Public Route** | Cold load on `https://acme.albusforge.ai/docs` with consent active | Host fails `isApprovedPublicHost`; zero scripts mounted; zero network requests to Google (guards against tenant header exposure on shared routing). |
 | **Public-to-Private Transition (Synchronous Boundary)** | User enters prompt on `/` $\rightarrow$ callsite invokes `history.replaceState` to `/build/bld_456` | Callsite sets `ga-disable = true` synchronously before `replaceState`; zero network hits or history events fired across the transition. |
@@ -337,6 +362,7 @@ Before any analytics code reaches staging, the automated end-to-end test suite m
    * Disable GA4 Enhanced Measurement history-change tracking in stream settings.
    * Gate `<Script>` DOM injection behind `isEligibleTrackingTarget(hostname, pathname, hasConsent)`.
    * Enforce synchronous opt-out (`window['ga-disable-<ID>'] = true`) via `useLayoutEffect`, route transition callsite hooks, and synchronous consent revocation callback execution.
+   * Gate pageview delivery behind explicit `isReady` signal while re-verifying current eligibility.
    * Bind `GA_MEASUREMENT_ID` via Terraform in `infra/env/apps.tf` for production only.
 
 2. **Phase 2 — Server-Side & First-Party Analytics (Post-M2):**

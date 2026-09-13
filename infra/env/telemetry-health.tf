@@ -193,18 +193,19 @@ resource "google_logging_metric" "telemetry_maintenance_heartbeat" {
   }
 }
 
-# PromQL supports >25h lookback with a >=5-minute evaluation interval. Native
-# metric-absence's 23.5-hour limit cannot monitor this daily cadence correctly.
+# User-defined log metrics support at most 25h in PromQL alerts; the general
+# extended-history capability excludes them. 25h leaves 1h after the daily cadence.
+# https://docs.cloud.google.com/monitoring/alerts/using-promql
 resource "google_monitoring_alert_policy" "telemetry_maintenance_heartbeat" {
   project               = local.project_id
-  display_name          = "Telemetry maintenance missing for 26 hours (${local.env})"
+  display_name          = "Telemetry maintenance missing for 25 hours (${local.env})"
   enabled               = var.telemetry_schedules_enabled
   combiner              = "OR"
   notification_channels = [google_monitoring_notification_channel.spend.id]
   conditions {
-    display_name = "No successful maintenance health snapshot in 26 hours"
+    display_name = "No successful maintenance health snapshot in 25 hours"
     condition_prometheus_query_language {
-      query                     = "(sum(sum_over_time({\"logging.googleapis.com/user/${google_logging_metric.telemetry_maintenance_heartbeat.name}\",monitored_resource=\"cloud_run_job\",job_name=\"telemetry-maintain\"}[26h])) <= 0) or absent_over_time({\"logging.googleapis.com/user/${google_logging_metric.telemetry_maintenance_heartbeat.name}\",monitored_resource=\"cloud_run_job\",job_name=\"telemetry-maintain\"}[26h])"
+      query                     = "(sum(sum_over_time({\"logging.googleapis.com/user/${google_logging_metric.telemetry_maintenance_heartbeat.name}\",monitored_resource=\"cloud_run_job\",job_name=\"telemetry-maintain\"}[25h])) <= 0) or absent_over_time({\"logging.googleapis.com/user/${google_logging_metric.telemetry_maintenance_heartbeat.name}\",monitored_resource=\"cloud_run_job\",job_name=\"telemetry-maintain\"}[25h])"
       duration                  = "0s"
       evaluation_interval       = "300s"
       disable_metric_validation = true
@@ -212,7 +213,7 @@ resource "google_monitoring_alert_policy" "telemetry_maintenance_heartbeat" {
   }
   documentation {
     mime_type = "text/markdown"
-    content   = "Daily 00:05 UTC maintenance has no successful health event in 26h (2h grace). Logs-based counters can contain zero points, so absence alone is insufficient. Seed a real successful execution and verify metric visibility before enabling schedules/policy; a never-seen stream is unhealthy immediately after enabling. Inspect Scheduler and executions; never bypass dirty-hour retention guards."
+    content   = "Daily 00:05 UTC maintenance has no successful health event in 25h (1h grace). Logs-based counters can contain zero points, so absence alone is insufficient. Seed a real successful execution and verify metric visibility before enabling schedules/policy; a never-seen stream is unhealthy immediately after enabling. Inspect Scheduler and executions; never bypass dirty-hour retention guards."
   }
 }
 

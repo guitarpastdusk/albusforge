@@ -147,3 +147,11 @@ run "all_application_cutoffs_use_exact_counters" {
     error_message = "Pool wait must alert on the exact breach counter, not an estimated percentile."
   }
 }
+
+run "maintenance_log_history_stays_within_provider_limit" {
+  command = plan
+  assert {
+    condition     = length(regexall("\\[25h\\]", google_monitoring_alert_policy.telemetry_maintenance_heartbeat.conditions[0].condition_prometheus_query_language[0].query)) == 2 && !strcontains(google_monitoring_alert_policy.telemetry_maintenance_heartbeat.conditions[0].condition_prometheus_query_language[0].query, "offset") && google_monitoring_alert_policy.telemetry_maintenance_heartbeat.conditions[0].condition_prometheus_query_language[0].duration == "0s"
+    error_message = "User-defined log metrics permit at most 25h of alert history including offset/retest; keep the daily grace at 1h."
+  }
+}

@@ -13,7 +13,7 @@ import { fakeResponse, memoryMeter, replayProvider } from "@albusforge/llm/testi
 import { loadParts } from "@albusforge/registry/load";
 import { describe, expect, it } from "vitest";
 import { createCatalogueCache } from "../src/catalogue";
-import { createLogger } from "../src/log";
+import { createLogger, formatLogLine } from "../src/log";
 import { loadPrompts } from "../src/prompts";
 import { runTurn, type TurnContext, type TurnOutcome } from "../src/turn";
 import { goldenTurn } from "./fixtures";
@@ -117,5 +117,35 @@ describe("private text and log lines", () => {
     expect(entry.error).toMatchObject({ name: "Error", code: "23514", redacted: true });
     expect(entry.error.message).toBeUndefined();
     expect(entry.stack).toBeUndefined();
+  });
+
+  /*
+   * V8 keeps the whole message inside `error.stack`, so a multi-line one puts
+   * its own continuation lines where frames go — and a driver quoting a
+   * statement or a row is exactly how that happens. Matching "starts with at"
+   * can't tell the two apart.
+   */
+  it("does not mistake a multiline database message for stack frames", async () => {
+    const failing: Meter = {
+      record: async () => {
+        throw new Error(`query failed with multiline parameters:\nat ${PRIVATE}`);
+      },
+    };
+    const { outcome, lines } = await run(replayProvider([goldenTurn("fridge-monitor", 1)]), failing);
+
+    expect(outcome.kind).toBe("spec");
+    expect(lines.join("\n")).not.toContain(PRIVATE);
+    const entry = JSON.parse(lines.find((line) => line.includes("llm call not stored"))!);
+    expect(entry.error.redacted).toBe(true);
+    // Real frames survive; the message's fake one doesn't.
+    for (const frame of (entry.error.frames ?? []) as string[]) expect(frame).not.toContain(PRIVATE);
+    expect(entry.error.frames?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it("keeps no frames at all when the stack isn't V8's `name: message` format", () => {
+    const custom = Object.assign(new Error("boom"), { stack: `at ${PRIVATE}\n    at real (file.ts:1:1)` });
+    const entry = JSON.parse(formatLogLine("ERROR", "custom stack", { error: custom }, undefined));
+    expect(JSON.stringify(entry)).not.toContain(PRIVATE);
+    expect(entry.error.frames).toBeUndefined();
   });
 });

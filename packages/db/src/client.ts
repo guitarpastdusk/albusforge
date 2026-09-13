@@ -33,6 +33,35 @@ export interface CreateDbOptions {
   queryTimeoutMs?: number;
 }
 
+export const CLIENT_DB_CLOSED = "this database handle was closed with its connection";
+
+export interface ClientDb {
+  db: Db;
+  /**
+   * Ends the handle and leaves the connection usable again. It fences the
+   * handle (no new queries), waits for the queries already in flight to
+   * settle, and then rolls back, because a query abandoned mid-transaction —
+   * or one that failed and left the transaction aborted — otherwise makes the
+   * next `BEGIN` on this connection fail with 25P02.
+   *
+   * Rejects if the connection could not be brought back to a usable state, or
+   * if the drain outran `drainMs`. Then it is not safe to reuse: hand the
+   * error to `client.release(error)` so the pool destroys it.
+   *
+   * Safe to call more than once; later calls are the same cleanup again.
+   */
+  close(): Promise<void>;
+}
+
+export interface ClientDbOptions {
+  /**
+   * How long to wait for in-flight queries when closing. They are normally
+   * bounded by the pool's `statementTimeoutMs`/`queryTimeoutMs`; this is the
+   * backstop for a pool configured without them.
+   */
+  drainMs?: number;
+}
+
 /**
  * A typed Drizzle instance over one already checked-out connection.
  *
@@ -41,25 +70,69 @@ export interface CreateDbOptions {
  * from the pool to run its queries: with a small pool, holders waiting on
  * queries and queries waiting on holders deadlock.
  *
- * `close()` fences the handle: queries issued after the caller has released
- * the connection reject instead of running on whatever the pool handed the
- * next caller. Call it before `client.release()`, always.
+ * The handle owns the connection's state between `createClientDb` and
+ * `close()`. Call `close()` before `client.release()`, and before any other
+ * handle uses the same connection, always.
  */
-export function createClientDb(client: pg.PoolClient): { db: Db; close: () => void } {
+export function createClientDb(client: pg.PoolClient, { drainMs = 10_000 }: ClientDbOptions = {}): ClientDb {
   let closed = false;
+  let issued = false;
+  const inFlight = new Set<Promise<unknown>>();
+  let cleanup: Promise<void> | undefined;
+
   const fenced = new Proxy(client, {
     get(target, property, receiver) {
       if (property === "query") {
-        return (...args: unknown[]) =>
-          closed
-            ? Promise.reject(new Error("this database handle was closed with its connection"))
-            : (target.query as (...a: unknown[]) => unknown).apply(target, args);
+        return (...args: unknown[]) => {
+          if (closed) return Promise.reject(new Error(CLIENT_DB_CLOSED));
+          issued = true;
+          const result = (target.query as (...a: unknown[]) => unknown).apply(target, args);
+          if (!isPromise(result)) return result;
+          inFlight.add(result);
+          const forget = () => void inFlight.delete(result);
+          result.then(forget, forget);
+          return result;
+        };
       }
       const value = Reflect.get(target, property, receiver) as unknown;
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  return { db: drizzle(fenced, { schema }), close: () => void (closed = true) };
+
+  async function drainAndRollback(): Promise<void> {
+    // Settled, not successful: a query that failed still leaves the
+    // transaction it was in aborted, which is exactly what needs rolling back.
+    await deadline(Promise.allSettled([...inFlight]), drainMs, "the turn's queries did not finish in time");
+    if (!issued) return;
+    try {
+      // Postgres only warns when there is no transaction to roll back, and it
+      // is the one statement an aborted transaction still accepts. Issued on
+      // the raw client: the fence is up, so nothing else can interleave.
+      await client.query("ROLLBACK");
+    } catch (error) {
+      throw new Error("the database connection could not be rolled back", { cause: error });
+    }
+  }
+
+  return {
+    db: drizzle(fenced, { schema }),
+    close() {
+      closed = true;
+      cleanup ??= drainAndRollback();
+      return cleanup;
+    },
+  };
+}
+
+const isPromise = (value: unknown): value is Promise<unknown> => typeof (value as { then?: unknown } | null)?.then === "function";
+
+function deadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }
 
 /** A typed Drizzle instance over its own pool. Call `pool.end()` on shutdown. */

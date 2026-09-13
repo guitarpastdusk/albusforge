@@ -250,10 +250,12 @@ describe("app role memberships", () => {
 
 describe("createClientDb", () => {
   let handle: ReturnType<typeof createDb>;
+  let dbConfig: DbConfig;
 
   beforeAll(async () => {
     const config = await freshDatabase();
     await runMigrations(config);
+    dbConfig = config;
     handle = createDb(config, { max: 1 });
   });
 
@@ -282,7 +284,7 @@ describe("createClientDb", () => {
 
       await client.query("SELECT pg_advisory_unlock(1, 1)");
     } finally {
-      close();
+      await close();
       client.release();
     }
   });
@@ -290,9 +292,50 @@ describe("createClientDb", () => {
   it("close() fences the handle, so late work can't run on someone else's connection", async () => {
     const client = await handle.pool.connect();
     const { db, close } = createClientDb(client);
-    close();
+    await close();
     client.release();
     // Drizzle wraps it, so the reason is in the cause.
     await expect(db.select().from(tenants)).rejects.toMatchObject({ cause: { message: expect.stringContaining("closed with its connection") } });
+  });
+
+  /*
+   * The case that matters for a handle sharing its connection with the work
+   * that comes after it: a statement abandoned inside a transaction. Fencing
+   * alone would leave the transaction open or aborted, and the next BEGIN on
+   * the connection would fail (25P02) or silently join it.
+   */
+  it("close() drains an abandoned statement and rolls its transaction back, leaving the connection usable", async () => {
+    const client = await handle.pool.connect();
+    // Its own connection, not the pool's: the pool holds exactly one.
+    const blocker = new pg.Client({ ...dbConfig, ssl: false });
+    await blocker.connect();
+    const { db, close } = createClientDb(client);
+    const [tenant] = await db.insert(tenants).values({ name: "Abandoned" }).returning({ id: tenants.id });
+    const [build] = await db.insert(builds).values({ askText: "a sensor", tenantId: tenant!.id }).returning({ id: builds.id });
+
+    await blocker.query("BEGIN");
+    await blocker.query("SELECT id FROM builds.builds WHERE id = $1 FOR UPDATE", [build!.id]);
+    await client.query("SET statement_timeout = '300ms'");
+
+    // Nobody waits for this: it is the query the deadline walked away from.
+    const abandoned = db.transaction(async (tx) => {
+      await tx.select().from(builds).where(eq(builds.id, build!.id)).for("update");
+      await tx.insert(buildMessages).values({ buildId: build!.id, role: "user", text: "never committed" });
+    });
+    abandoned.catch(() => {});
+
+    try {
+      await close();
+      await client.query("RESET statement_timeout");
+      // The connection takes a new transaction, and the abandoned one left nothing behind.
+      await client.query("BEGIN");
+      const { rows } = await client.query<{ n: number }>("SELECT count(*)::int AS n FROM builds.build_messages WHERE build_id = $1", [build!.id]);
+      await client.query("COMMIT");
+      expect(rows[0]?.n).toBe(0);
+    } finally {
+      await blocker.query("ROLLBACK");
+      await blocker.end();
+      client.release();
+    }
   });
 });

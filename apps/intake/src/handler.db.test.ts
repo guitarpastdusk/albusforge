@@ -15,7 +15,7 @@ import { asc, eq } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
-import { createCatalogueCache, dbPartsSource } from "./catalogue";
+import { type CatalogueCache, createCatalogueCache, dbPartsSource } from "./catalogue";
 import { emptySpec } from "./decide";
 import { handleTurn, type HandlerDeps } from "./handler";
 import { createLogger } from "./log";
@@ -24,6 +24,8 @@ import { FALLBACK_REPLY, outOfScopeReply, TOKEN_CEILING_REPLY } from "./replies"
 
 let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;
+/** The app role's connection settings, for a test that needs a pool of its own. */
+let appConfig: DbConfig;
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").start();
@@ -43,7 +45,8 @@ beforeAll(async () => {
   };
   await runMigrations(migrate, { appRole: { name: "albus_app", password: "app-secret" } });
   // As the service runs: the app role, a small pool, a statement timeout.
-  handle = createDb({ ...migrate, user: "albus_app", password: "app-secret" }, { max: 5, statementTimeoutMs: 10_000 });
+  appConfig = { ...migrate, user: "albus_app", password: "app-secret" };
+  handle = createDb(appConfig, { max: 5, statementTimeoutMs: 10_000 });
   await loadParts(handle.db, readValidatedParts(REGISTRY_ROOT));
 });
 
@@ -56,6 +59,8 @@ interface Setup {
   deps: HandlerDeps;
   provider: ReplayProvider;
   lines: string[];
+  /** This turn's catalogue cache, so a test can warm it before timing anything. */
+  catalogue: CatalogueCache;
 }
 
 type Response = LlmResponse | ((request: never, signal?: AbortSignal) => Promise<LlmResponse>);
@@ -84,7 +89,7 @@ function setup(responses: Response[], overrides: { deadlineMs?: number; tokenCei
       log,
     },
   };
-  return { deps, provider, lines };
+  return { deps, provider, lines, catalogue };
 }
 
 async function newBuild(ask: string, owner: { tenantId?: string } = {}): Promise<string> {
@@ -322,6 +327,59 @@ describe("one connection per turn", () => {
       // A real answer, not the fallback a failed read would have written.
       expect(assistant[0]!.text).not.toBe(FALLBACK_REPLY);
       expect(await callsOf(id)).toHaveLength(1);
+    }
+  });
+
+  /*
+   * The deadline lands inside metering's transaction, which is waiting on the
+   * build row's lock, and the statement then times out — ordinary contention
+   * crossing a deadline, not an outage. The connection is the one the reply
+   * has to be written on, so unless the turn drains that work and rolls it
+   * back, the write's BEGIN fails with 25P02 (`current transaction is
+   * aborted`) and the user message is left unanswered.
+   *
+   * Its own pool: a 500 ms statement timeout, one connection, ended with the
+   * test, so the session settings can't leak into any other test.
+   */
+  it("a deadline inside metering's transaction still writes the fallback, and the usage row is rolled back", async () => {
+    const buildId = await newBuild("A fridge temperature sensor");
+    const short = createDb(appConfig, { max: 1, statementTimeoutMs: 500 });
+    const blocker = await handle.pool.connect();
+    let unblocked: Promise<void> | undefined;
+
+    const { deps, catalogue } = setup(
+      [
+        async () => {
+          await blocker.query("BEGIN");
+          await blocker.query("SELECT id FROM builds.builds WHERE id = $1 FOR UPDATE", [buildId]);
+          unblocked = new Promise<void>((resolve, reject) => {
+            setTimeout(() => void blocker.query("ROLLBACK").then(() => resolve(), reject), 650);
+          });
+          return goldenTurn("fridge-monitor", 1);
+        },
+      ],
+      { deadlineMs: 250 },
+    );
+    deps.pool = short.pool;
+    // Warm the catalogue first: only the model call and metering should race the deadline.
+    await catalogue.get(handle.db);
+
+    try {
+      const result = await handleTurn(deps, buildId);
+      if (unblocked) await unblocked;
+
+      expect(result).toMatchObject({ spec_version: null, status: "asking" });
+      expect(await messagesOf(buildId)).toEqual([
+        { role: "user", text: "A fridge temperature sensor" },
+        { role: "assistant", text: FALLBACK_REPLY },
+      ]);
+      // The metering transaction was rolled back, not half-applied.
+      expect(await callsOf(buildId)).toEqual([]);
+      expect(await statusOf(buildId)).toBe("asking");
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => {});
+      blocker.release();
+      await short.pool.end();
     }
   });
 });

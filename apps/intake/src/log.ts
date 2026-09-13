@@ -84,15 +84,33 @@ export function safeToLog<E extends Error>(error: E): E {
 
 const isSafeToLog = (error: unknown): boolean => (error as { safeToLog?: unknown } | null)?.safeToLog === true;
 
-/** Stack frames only: file, line and function, never the `Error: message` header. */
 const MAX_FRAMES = 5;
 
+/**
+ * Stack frames only: file, line and function, never any part of the message.
+ *
+ * V8 puts the *whole* message inside `error.stack`, newlines and all, so
+ * "lines that start with `at`" doesn't establish provenance: a driver error
+ * whose message quotes a multi-line statement or row can put `at <private>`
+ * there itself. The only text known not to be the message is what follows the
+ * exact `${name}: ${message}` header V8 writes, so this removes that header
+ * and then requires every remaining line to be a frame. Anything else — a
+ * subclass that rewrites `stack`, a runtime with another format — yields no
+ * frames rather than guessed ones.
+ */
 function frames(error: Error): string[] {
-  return (error.stack ?? "")
+  const stack = error.stack;
+  if (typeof stack !== "string") return [];
+  const header = error.message === "" ? error.name : `${error.name}: ${error.message}`;
+  if (!stack.startsWith(header)) return [];
+
+  const lines = stack
+    .slice(header.length)
     .split("\n")
-    .filter((line) => line.trimStart().startsWith("at "))
-    .slice(0, MAX_FRAMES)
-    .map((line) => line.trim());
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (!lines.every((line) => line.startsWith("at "))) return [];
+  return lines.slice(0, MAX_FRAMES);
 }
 
 /**

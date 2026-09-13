@@ -9,7 +9,7 @@ Services consume it as TypeScript source (`exports` points at `src/index.ts`). O
 | `src/schema/users.ts` | `users` schema: users, tenants, tenant_members, sessions, email_codes ([ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md), [ADR 0009](../../docs/adr/0009-tenant-created-at-sign-up.md)) |
 | `src/schema/registry.ts` | `registry` schema: parts, compat_matrix |
 | `src/schema/builds.ts` | `builds` schema: builds, build_messages, specs, plans, code_bundles, bodies, llm_calls |
-| `src/client.ts` | `createDb(config)` returns `{ db, pool }`, a typed Drizzle instance over a `pg` pool. `createClientDb(client)` returns `{ db, close }` over one checked-out connection, for work holding a session resource (an advisory lock) that must not take a second connection; `close()` fences the handle before the connection is released |
+| `src/client.ts` | `createDb(config)` returns `{ db, pool }`, a typed Drizzle instance over a `pg` pool. `createClientDb(client)` returns `{ db, close }` over one checked-out connection, for work holding a session resource (an advisory lock) that must not take a second connection. `await close()` ends the handle: it stops new queries, waits for the ones in flight, and rolls back, so the connection is clean for whoever uses it next — a statement abandoned mid-transaction would otherwise make the next `BEGIN` fail with 25P02. It rejects if the connection can't be made clean; pass that error to `client.release(error)` so the pool destroys it |
 | `src/config.ts` | `dbConfigFromEnv()` and `appRoleFromEnv()` |
 | `src/migrate.ts` | the migration runner |
 | `migrations/` | generated SQL plus drizzle-kit's snapshots. Commit both, and never edit them by hand |

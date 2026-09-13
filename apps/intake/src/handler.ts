@@ -16,7 +16,10 @@ import { runTurn, type TurnContext, type TurnOutcome } from "./turn";
  * check and a late caller's failed try.
  *
  * Every answered user message gets exactly one assistant message: success,
- * refusal, limit, deadline and failure all end in the same write.
+ * refusal, limit, deadline and failure all end in the same write. The one way
+ * out is that the write itself can't be made — the database is unavailable, or
+ * this turn's connection couldn't be left clean — and then nothing is written
+ * at all and the call is a 503 that gateway retries, which answers it once.
  *
  * One connection per turn, and every query the turn makes — the reads, the
  * token ceiling, metering, the final transaction — runs on the connection
@@ -80,9 +83,11 @@ export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: Tra
     broken ??= error as Error;
     throw error;
   } finally {
-    // Anything still in flight for this turn — a late meter insert after the
-    // deadline — must not run on a connection someone else now owns.
-    close();
+    // Nothing of this turn's may run on a connection someone else now owns.
+    // A connection that can't be left clean is destroyed, not returned.
+    await close().catch((error: Error) => {
+      broken ??= error;
+    });
     client.release(broken);
   }
 }
@@ -132,9 +137,23 @@ async function answerLatest(deps: HandlerDeps, client: pg.PoolClient, db: Db, bu
 
   await db.update(builds).set({ status: "specifying", updatedAt: new Date() }).where(eq(builds.id, buildId));
 
-  // The turn's own handle on this connection. Closing it when the deadline
-  // race ends keeps a metering insert that arrives late out of the write
-  // below, which shares the connection: it fails and is logged instead.
+  /*
+   * The turn's own handle on the connection the lock is on.
+   *
+   * The deadline can land anywhere, including inside metering's transaction —
+   * it takes the build row's lock, so ordinary contention can hold it past the
+   * deadline. Handing the connection to the write below while that is still
+   * outstanding is what makes the promise of exactly one assistant message
+   * false: the abandoned statement hits `statement_timeout`, its transaction
+   * is left aborted, and the write's `BEGIN` fails with 25P02.
+   *
+   * So the handle is closed on a controlled path before the write: it stops
+   * new work, waits for what's outstanding to settle, then rolls back itself,
+   * with Drizzle's own rollback fenced out so it can't race. If that can't be
+   * done the close rejects, the connection is destroyed rather than reused,
+   * and the turn ends as a 503 that gateway retries — no reply is written
+   * here, and no half-written one is left behind.
+   */
   const turnHandle = createClientDb(client);
   let outcome: TurnOutcome;
   try {
@@ -154,7 +173,7 @@ async function answerLatest(deps: HandlerDeps, client: pg.PoolClient, db: Db, bu
       ),
     );
   } finally {
-    turnHandle.close();
+    await turnHandle.close();
   }
 
   const idleStatus = previous?.settled ? "planning" : "asking";

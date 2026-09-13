@@ -125,12 +125,13 @@ Each stage is a separate service, communicates over Redis streams, and emits a p
 ```
 albusforge/
 ├── apps/
-│   ├── gateway/        Fastify BFF: routes, plugins, sse.ts — the only public service
+│   ├── gateway/        Fastify BFF: session-authenticated routes, plugins and SSE
 │   ├── intake/         ask → Spec: extract, clarify, scope-filter, prompts/
 │   ├── matcher/        Spec → BuildPlan: solver, power, rank, explain
 │   ├── codegen/        BuildPlan → firmware: scaffold, applayer, edits, compilegate
 │   ├── fulfillment/    BOM → supplier carts; STL → print partner
-│   ├── cloudlink/      provision, ingest, dashboards, alerts
+│   ├── cloudlink/      standalone device-authenticated ingest (merged); separate edge backend
+│   ├── ask/            bounded single-sensor queries and small-model intent (in progress)
 │   └── marketplace/    listings, snapshots, remix, media, reviews, payouts
 ├── workers/
 │   ├── bodygen/        Python + CadQuery: layout, shell, flags, lint, export, qr
@@ -467,7 +468,7 @@ GET    /v1/builds?status=          tenant's builds + display_status
 GET    /v1/builds/:id/messages     chat transcript
 POST   /v1/builds/:id/messages     { text } → 202, reply over events
 GET    /v1/showcase                curated public live cards
-GET    /v1/usage                   current-period usage for the tenant (M2: model calls; M6: + readings, storage)
+GET    /v1/usage                   current UTC month: recorded model calls/costs and accepted readings/payload bytes; physical storage not measured
 
 GET    /v1/listings?query=&tags=&sort=trending|built
 GET    /v1/listings/:id            listing + snapshot summary + remix tree
@@ -486,6 +487,10 @@ The web portal is a client of this contract and adds no API of its own. Its rout
 
 **Public guides implemented:** `/docs` is a server-rendered guide with accessible in-page navigation for the build conversation, preparation for flashing, telemetry semantics and troubleshooting. `/security` describes code-backed session, tenant-read and ingestion controls, separately from pending production verification and policy commitments. These pages make no API calls; guided flashing, production onboarding, signed OTA and approved legal/pricing copy remain separate work. Scope and evidence are recorded in [`PUBLIC-GUIDES.md`](PUBLIC-GUIDES.md).
 
+**Project workspace UI:** the authenticated projects list opens a build overview backed by `BuildDetail`, with stored spec/version, capability matches, server display state and a link to the existing transcript/reply flow. `SpecPanel` derives its defensive draft display from shared `Spec` fields, including capabilities, assumptions and open questions. Candidate matches remain distinct from supplied ready summaries. Ready-card actions use a memoized server session outcome: open the current project when signed in, otherwise preserve its encoded destination through signup and anonymous-build claim. Session resolution streams behind the ready card’s own Suspense boundary; the public hero and chat do not wait for authentication, and failed session lookups log once per request. Generated artifacts and order tracking remain explicit unavailable states until their APIs land; fixture enclosure assets are not shown as project outputs. See [`PROJECT-WORKSPACE.md`](PROJECT-WORKSPACE.md) for delivered behavior, validation and remaining B3–B8 work.
+
+**Build-event authorization snapshots:** each gateway SSE poll resolves the session and tenant membership, checks build ownership, and reads state/messages inside one short PostgreSQL `REPEATABLE READ READ ONLY` transaction. It commits before writing events or waiting for socket backpressure. An admitted batch may finish after access is revoked; messages committed after that snapshot cannot enter it, and the next poll closes after revocation, expiry, membership removal or ownership loss. The poll owns its lease explicitly from BEGIN through bounded cleanup, handles checked-out socket errors, and discards uncertain connections; no stream-lifetime transaction or extra pool is introduced. See [`BUILD-EVENT-SECURITY.md`](BUILD-EVENT-SECURITY.md).
+
 ### 6.1 Edge and service-to-service auth
 
 - Global External HTTPS LB → serverless NEG → gateway, with Cloud Armor rate-limit rules. The in-app rate-limit plugin stays as defense in depth.
@@ -494,7 +499,7 @@ The web portal is a client of this contract and adds no API of its own. Its rout
 
 ### 6.2 Surfaces the deck shows that have no route
 
-Tenant-scoped fleet reads (sensor counts, readings/day, per-device series vs baseline) · a conversational "ask anything about your fleet" endpoint that computes and can trigger a work order · tenant/membership/role/audit-log management · usage and subscription reads · per-tenant app hosting at a subdomain. See §8 and §13.
+Tenant-scoped fleet reads (sensor counts, readings/day, per-device series vs baseline) · a conversational "ask anything about your fleet" endpoint that computes and can trigger a work order · tenant/membership/role/audit-log management · subscription and billing-ledger reads · per-tenant app hosting at a subdomain. See §8 and §13. Recorded workspace consumption is implemented by `GET /v1/usage`; see [`USAGE-UI.md`](USAGE-UI.md).
 
 ---
 
@@ -614,15 +619,20 @@ Rules: SemVer at every boundary · a CI matrix job rebuilds every driver against
 
 ### 7.6 Device ingest — HTTPS first
 
+**Sensor cloud rollout, 2026-09-13:** ingestion/storage/read APIs and the portal live UI are merged; cloudlink/processing jobs and sensor Ask are being delivered in separate infrastructure, service and gateway/portal PRs. [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) tracks ownership, observed deployed resources, dependency order and acceptance evidence. The initial Ask slice is a user-selected sensor/channel/window with a small hosted model interpreting bounded questions and deterministic code supplying the numerical answer. It does not implement the later cross-sensor agent, anomaly detectors or write tools.
+
+
 The wire envelope is the transport contract: devices upload authenticated `POST /ingest/v1` batches, and the server acknowledges only after durable storage. MQTT and its broker/bridge remain deferred to M8; see [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.
 
 **M6a implementation (merged PR #32, 2026-09-13):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
-Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
+Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. The sensor infrastructure workstream now prepares that Terraform in an isolated PR, coordinated with the existing infra owner; see the rollout ledger. No external IoT/telemetry application participates in ingestion.
 
 M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued minute/hour rollups and guarded retention; see [`TELEMETRY-STORAGE.md`](TELEMETRY-STORAGE.md) for the job/rollout contract. Production BuildPlan provisioning, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 
-M6c read API on `m6/telemetry-read-api` adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. The richer provisioned dashboard contract, sign-in issuance and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
+M6c read API (merged PR #44) adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. Sign-in issuance is merged; the richer provisioned dashboard contract and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
+
+The portal now uses those read endpoints for a minimal stored-telemetry monitor at `/live` and `/live/:deviceId`: session-bound fleet pagination, latest provisioned channels/health and selectable bounded UTC history. Timestamp-positioned dots and sample tables preserve gaps, zero values and exact sequence identity; expiry, excessive point counts and pending rollups are explicit. This is refresh-based UI, without fabricated build metadata, Ask/rules or production SSE. See [`TELEMETRY-UI.md`](TELEMETRY-UI.md).
 
 ### 7.7 Marketplace
 
@@ -904,6 +914,8 @@ Unresolved: the business-model slide makes per-sensor subscription primary; the 
 
 ---
 
+**Usage visibility implementation (`web/usage-dashboard`):** gateway `GET /v1/usage` and the portal `/usage` page now expose the current UTC month of tenant-owned recorded model calls, separate cache/token counters, stored model-cost estimates and accepted sensor payload/readings. Shared `UsageSummary` uses exact decimal strings; the account controls link to the page. This does not measure physical storage or implement billing/plan entitlements, and sensor totals exclude deleted devices. See [`USAGE-UI.md`](USAGE-UI.md) for authorization, attribution, validation and remaining rollout work.
+
 ## 14. Guardrails — six deliberate no's
 
 | No | Reason |
@@ -955,7 +967,7 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M4 — Code** | `hsx-rt`, `hsx-sdk`, four drivers, codegen, compile gate, code endpoints | `fwbuild` container; Cloud Run Job + `run.jobs.run()` trigger path; Memorystore and BullMQ; GCS artifact bucket and signed URLs; PlatformIO cache |
 | **M5 — Body** | bodygen for box enclosures, lint, QR, body endpoints, fridge golden build passing e2e | CadQuery image (large — budget a day), bodygen Cloud Run Job, STEP/STL to GCS |
 | **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
-| **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. **The milestone the business model actually rests on, and it has no place in the current plan** |
+| **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. The bounded single-sensor Ask slice is brought forward in the sensor cloud rollout; the broader intelligence layer remains later work. |
 | **M7 — Marketplace** | snapshots, listings, media upload, pin-preserving remix, reviews, trending sort | media bucket + CDN, presigned PUT, sharp variants in a Cloud Run Job, nightly ranking job on Cloud Scheduler |
 
 ```mermaid
@@ -1047,7 +1059,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | **Transport enum** | `wifi\|ble\|lora\|none` has no cellular; three appendix builds use an LTE-M notecard and one uses local mesh |
 | **Price tiers** | `unit_cost_usd` is a scalar; pricing is quoted at three quantity tiers |
 | **Compliance + longevity blocks** | §9 — and a sixth solver constraint to match |
-| **Metering** | per-sensor subscription is ~90% of revenue and nothing counts ingest, storage or compute per device. Billing can wait; metering can't. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9 specifies `usage_records` and the no-cliffs degradation rule |
+| **Metering** | per-sensor subscription is ~90% of revenue. Ingest readings/payload bytes and tenant-attributed model calls/costs are now recorded and exposed through Usage; physical storage, OTA and a durable billing ledger remain outstanding. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9 specifies `usage_records` and the no-cliffs degradation rule |
 | ~~**Retention**~~ | **Reconciled by tiering** — 90 days raw, hourly rollups indefinitely (~0.3% of the volume), 7-year cold archive opt-in, local-first as a tenant flag. All three claims are true about different tiers; stating one in isolation is what made them look contradictory. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §5.1 |
 | **Part availability** | no mechanism for stock-out or discontinuation (§17.3) |
 | **Live device state** | everything in Postgres, vs Firestore for live state with realtime listeners and BigQuery for history. The partitioned-`readings` design assumes the Postgres answer |

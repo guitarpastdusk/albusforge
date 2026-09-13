@@ -13,3 +13,5 @@ export * from "./telemetry.js";
  * added here too; a test fails if the migrated database has one this misses.
  */
 export const APP_SCHEMAS = [usersSchema.schemaName, registrySchema.schemaName, buildsSchema.schemaName, telemetrySchema.schemaName];
+
+export * from "./sensor-ask.js";

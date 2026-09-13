@@ -1,26 +1,18 @@
-import type { BuildStatus } from "@albusforge/schema";
+import { Spec, type BuildStatus } from "@albusforge/schema";
 import { z } from "zod";
 
-/*
- * What intake has written down so far. spec.ts (m2/intake) isn't in the shared
- * schema yet and gateway sends `spec` as an object, so this parses a draft of
- * its shape defensively: a field that doesn't match is left out, never thrown.
- */
-const Strings = z.array(z.string()).catch([]);
-const optionalString = z.string().optional().catch(undefined);
-const optionalPositive = z.number().positive().optional().catch(undefined);
-
+/** Use the shared stored Spec fields, tolerating missing or malformed draft sections. */
 export const DraftSpec = z.object({
-  sense: z.object({ what: Strings, accuracy: optionalString, interval_s: optionalPositive }).optional().catch(undefined),
-  act: z.object({ what: Strings }).optional().catch(undefined),
-  environment: z.object({ location: z.string().catch(""), flags: Strings }).optional().catch(undefined),
-  connect: z.object({ transport: z.string().catch(""), experience: Strings }).optional().catch(undefined),
-  power: z.object({ source: z.string().catch(""), target_life_days: optionalPositive }).optional().catch(undefined),
-  experience: z.object({ alerts: Strings, dashboard: z.boolean().optional().catch(undefined) }).optional().catch(undefined),
-  capabilities: Strings,
-  assumptions: Strings,
-  open_questions: z.array(z.object({ field: z.string(), question: z.string() })).catch([]),
-  settled: z.boolean().catch(false),
+  sense: Spec.shape.sense.optional().catch(undefined),
+  act: Spec.shape.act.catch(undefined),
+  environment: Spec.shape.environment.optional().catch(undefined),
+  connect: Spec.shape.connect.optional().catch(undefined),
+  power: Spec.shape.power.optional().catch(undefined),
+  experience: Spec.shape.experience.optional().catch(undefined),
+  capabilities: Spec.shape.capabilities.catch([]),
+  assumptions: Spec.shape.assumptions.catch([]),
+  open_questions: Spec.shape.open_questions.catch([]),
+  settled: Spec.shape.settled.catch(false),
 });
 export type DraftSpec = z.infer<typeof DraftSpec>;
 
@@ -79,7 +71,7 @@ export function SpecPanel({ spec: raw, status }: { spec: Record<string, unknown>
   if (!parsed.success) return null;
   const spec = parsed.data;
   const facts = rows(spec);
-  if (facts.length === 0 && spec.assumptions.length === 0 && spec.open_questions.length === 0) return null;
+  if (facts.length === 0 && spec.capabilities.length === 0 && spec.assumptions.length === 0 && spec.open_questions.length === 0) return null;
 
   return (
     <section aria-label="Spec so far" className="rounded-[20px] border border-hairline bg-white px-6 py-5">
@@ -96,6 +88,14 @@ export function SpecPanel({ spec: raw, status }: { spec: Record<string, unknown>
             </div>
           ))}
         </dl>
+      ) : null}
+      {spec.capabilities.length > 0 ? (
+        <div className="mt-4">
+          <h3 className="text-[14px] font-semibold text-ink">Capabilities</h3>
+          <ul className="mt-1.5 flex flex-wrap gap-2 text-[13px]">
+            {spec.capabilities.map((capability) => <li key={capability} className="break-all rounded-lg bg-porcelain px-2 py-1 font-mono">{capability}</li>)}
+          </ul>
+        </div>
       ) : null}
       {spec.open_questions.length > 0 ? (
         <div className="mt-4">

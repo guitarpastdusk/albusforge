@@ -176,6 +176,7 @@ jobs:
           check /healthz 200
           check /readyz 503
           check /v1/telemetry/devices 401
+          check /v1/usage 401
           check /v1/builds 401
           check /nope 404
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/ingest/v1)" = 404 ]
@@ -216,6 +217,8 @@ jobs:
           curl -fsS -H 'Cookie: __Host-albus_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
             http://localhost:8080/v1/telemetry/devices | \
             jq -e '.devices | length == 1 and .[0].id == "00000000-0000-4000-8000-000000000003" and .[0].status == "never_seen"'
+          curl -fsS -H 'Cookie: __Host-albus_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+            http://localhost:8080/v1/usage | jq -e '.model.total.calls == "0" and .telemetry.readings_in == "0"'
 
       - name: Container logs
         if: failure()
@@ -366,3 +369,37 @@ jobs:
 
       - name: Test deploy scripts
         run: bash .github/scripts/test/run.sh
+
+  docker-ask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build internal Ask image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/ask/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ask:ci
+          provenance: false
+          sbom: false
+      - name: Verify liveness and fail-closed readiness without database or model
+        run: |
+          docker run -d --name ask -p 8088:8080 -e DB_HOST=127.0.0.1 -e DB_NAME=unused \
+            -e DB_USER=unused -e DB_PASSWORD=unused -e DB_SSL=disable ask:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8088/healthz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8088/healthz
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/readyz)" = 503 ]
+          [ "$(docker exec ask id -u)" != 0 ]
+          docker stop --time 10 ask
+          [ "$(docker inspect --format '{{.State.ExitCode}}' ask)" = 0 ]
+      - name: Container logs
+        if: failure()
+        run: docker logs ask || true

@@ -13,8 +13,10 @@ interface Line {
 }
 
 /** The dark "Chat with this device" panel. Questions go to POST /v1/devices/:id/ask through a Server Function. */
-export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting: string }) {
+export function DeviceChat({ deviceId, greeting, channels }: { deviceId: string; greeting: string; channels?: { key: string; label: string; unit: string }[] }) {
   const [lines, setLines] = useState<Line[]>([{ id: "greeting", from: "device", text: greeting }]);
+  const [channel, setChannel] = useState(channels?.[0]?.key ?? "");
+  const [hours, setHours] = useState(1);
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +30,8 @@ export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting:
     setPending(true);
     setLines((current) => [...current, { id, from: "me", text: question }]);
     try {
-      const outcome = await askOnce(() => askDevice(deviceId, question));
+      const now = Date.now();
+      const outcome = await askOnce(() => askDevice(deviceId, question, channels ? { channel, from: new Date(now - hours * 3600000).toISOString(), to: new Date(now).toISOString() } : undefined));
       if (outcome.ok) {
         setLines((current) => [...current, { id: `device-${id}`, from: "device", text: outcome.reply }]);
       } else {
@@ -45,9 +48,14 @@ export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting:
   return (
     <aside
       aria-label="Chat with this device"
-      className="flex min-h-[566px] flex-col rounded-[24px] bg-ink px-[26px] pt-[26px] pb-5 lg:sticky lg:top-[96px]"
+      className="flex min-w-0 [overflow-wrap:anywhere] min-h-[566px] flex-col rounded-[24px] bg-ink px-[26px] pt-[26px] pb-5 lg:sticky lg:top-[96px]"
     >
       <h2 className="font-mono text-[13px] uppercase tracking-[0.18em] text-coral">Chat with this device</h2>
+      {channels ? <div className="mt-4 flex flex-col gap-2 text-sm text-on-ink">
+        <label>Channel<select aria-label="Sensor channel" className="block w-full min-w-0 bg-ink-2" value={channel} disabled={pending} onChange={(e) => setChannel(e.target.value)}>{channels.map((c) => <option key={c.key} value={c.key}>{c.label} ({c.unit})</option>)}</select></label>
+        <label>Time window<select aria-label="Reading window" className="ml-2 bg-ink-2" value={hours} disabled={pending} onChange={(e) => setHours(Number(e.target.value))}><option value={1}>Last hour</option><option value={24}>Last 24 hours</option></select></label>
+        <p>Each question uses this channel and window. Conversation history stays in this tab and is not sent to the model.</p>
+      </div> : null}
       <div className="mt-[18px] flex flex-1 flex-col gap-3 overflow-auto" aria-live="polite">
         {lines.map((line) => (
           <div key={line.id} className={cx("flex", line.from === "me" ? "justify-end" : "justify-start")}>
@@ -81,6 +89,7 @@ export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting:
           value={text}
           onChange={(event) => setText(event.target.value)}
           name="question"
+          maxLength={channels ? 2000 : 4000}
           aria-label="Ask this device"
           placeholder="Ask about readings, thresholds…"
           className="min-w-0 flex-1 bg-transparent py-2.5 text-[15px] text-white outline-none"

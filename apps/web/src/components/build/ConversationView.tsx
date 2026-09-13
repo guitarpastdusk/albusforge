@@ -4,7 +4,7 @@ import { Button } from "@/components/ui";
 import { useConversation } from "./BuildConversation";
 import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
-import { DesignReadyCard } from "./DesignReadyCard";
+import { SessionReadyCard } from "./SessionReadyCard";
 import { SpecPanel } from "./SpecPanel";
 
 /**
@@ -13,7 +13,7 @@ import { SpecPanel } from "./SpecPanel";
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, typing, send, setDraft, checkAgain, enclosurePreview } = useConversation();
+  const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -46,7 +46,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         ) : null}
         <SpecPanel spec={state.spec} status={state.status} />
         <CandidateParts parts={state.candidateParts} />
-        {state.ready ? <DesignReadyCard card={state.ready} enclosure={enclosurePreview} /> : null}
+        {state.ready && state.buildId ? <SessionReadyCard buildId={state.buildId} signedIn={signedIn} card={state.ready} enclosure={enclosurePreview} /> : null}
       </div>
 
       <form

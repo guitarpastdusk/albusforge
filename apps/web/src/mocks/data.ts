@@ -1,3 +1,4 @@
+import type { UsageSummary } from "@albusforge/schema";
 import { liveReadings } from "./live-state";
 import { readRule } from "./rules";
 import type {
@@ -573,12 +574,18 @@ export function askDevice(deviceId: string): AskResponse | null {
 
 // --- usage --------------------------------------------------------------------
 
-export function usage(): Usage {
+export function usage(): Usage & UsageSummary {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
   return {
     period: { start: start.toISOString(), end: end.toISOString() },
+    as_of: now.toISOString(),
+    model: {
+      total: { calls: "12", input_tokens: "12000", output_tokens: "2400", cache_read_tokens: "3000", cache_creation_tokens: "1000", cost_usd: "0.123456" },
+      stages: [{ stage: "intake", calls: "12", input_tokens: "12000", output_tokens: "2400", cache_read_tokens: "3000", cache_creation_tokens: "1000", cost_usd: "0.123456" }],
+    },
+    telemetry: { readings_in: "31200", payload_bytes: "48300000" },
     tiers: {
       tier2: { model_calls: 1_840, tokens_in: 1_212_000, tokens_out: 96_400 },
       tier3: { model_calls: 37, tokens_in: 412_500, tokens_out: 28_900 },

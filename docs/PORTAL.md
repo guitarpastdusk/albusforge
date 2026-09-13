@@ -188,3 +188,5 @@ The portal is built against mocks from M0 and connected screen by screen as the 
 | --- | --- | --- |
 | Node version | Node 22 LTS; §12.1's Node 20 reached end of life on 2026-04-30 | this document |
 | Showcase at launch | hand-curated static list, no live feed | §3 |
+
+**Usage implementation (`web/usage-dashboard`):** `/usage` is a current-month consumption dashboard backed by `GET /v1/usage` (`UsageSummary`), with account links, actual intake/stage attribution and explicit payload-versus-storage semantics. See [`USAGE-UI.md`](USAGE-UI.md). Billing/plan caps remain separate work.

@@ -1,3 +1,4 @@
+import { getBuildSignedIn } from "@/lib/session";
 import { BuildDetail, MessageList, routes } from "@albusforge/schema";
 import type { Metadata } from "next";
 import { BuildConversation } from "@/components/build/BuildConversation";
@@ -18,7 +19,7 @@ export default async function BuildPage({ params }: { params: Promise<{ buildId:
   ]);
 
   return (
-    <BuildConversation
+    <BuildConversation signedIn={getBuildSignedIn()}
       initial={transcriptFrom(build, messages)}
       enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}
     >

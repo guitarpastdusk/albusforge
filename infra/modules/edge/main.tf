@@ -114,14 +114,14 @@ resource "google_compute_backend_service" "service" {
   name                  = "${var.name}-${each.key}"
   load_balancing_scheme = "EXTERNAL_MANAGED"
   protocol              = "HTTPS"
-  security_policy       = google_compute_security_policy.edge.id
+  security_policy       = lookup(var.backend_security_policies, each.key, google_compute_security_policy.edge.id)
 
   backend {
     group = google_compute_region_network_endpoint_group.service[each.key].id
   }
 
   log_config {
-    enable      = true
+    enable      = !contains(var.disable_request_logging, each.key)
     sample_rate = 1.0
   }
 }

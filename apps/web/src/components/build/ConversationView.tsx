@@ -2,16 +2,18 @@
 
 import { Button } from "@/components/ui";
 import { useConversation } from "./BuildConversation";
+import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
 import { DesignReadyCard } from "./DesignReadyCard";
+import { SpecPanel } from "./SpecPanel";
 
 /**
- * The active chat: bubbles, typing dots, the device-ready card and the sticky
- * reply bar. On the landing page it appears once the first message is sent;
+ * The active chat: bubbles, typing dots, what intake has worked out (spec and
+ * candidate parts), the device-ready card and the sticky reply bar. On the landing page it appears once the first message is sent;
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, send, setDraft, checkAgain, enclosurePreview } = useConversation();
+  const { state, typing, send, setDraft, checkAgain, enclosurePreview } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -21,17 +23,19 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         {state.messages.map((message) => (
           <ChatBubble key={message.id} role={message.role} text={message.text} />
         ))}
-        {state.typing ? <TypingDots /> : null}
+        {typing ? <TypingDots /> : null}
         {state.error ? (
           <div role="alert" className="flex flex-wrap items-center gap-3 text-[15px] text-coral-deep">
             <span>{state.error}</span>
-            {state.awaitingReply ? (
+            {state.overdue ? (
               <button type="button" onClick={checkAgain} className="font-semibold hover:text-coral">
                 Check for a reply
               </button>
             ) : null}
           </div>
         ) : null}
+        <SpecPanel spec={state.spec} status={state.status} />
+        <CandidateParts parts={state.candidateParts} />
         {state.ready ? <DesignReadyCard card={state.ready} enclosure={enclosurePreview} /> : null}
       </div>
 

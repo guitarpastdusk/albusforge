@@ -6,7 +6,9 @@ import type {
   BuildList,
   BuildSummary,
   ChatMessage,
-  CreateBuildResponse,
+  CreatedBuild,
+  CandidatePart,
+  BuildStatus,
   DeviceAction,
   DeviceDashboard,
   DeviceReadyCard,
@@ -15,6 +17,8 @@ import type {
   MessageList,
   Usage,
 } from "@albusforge/schema";
+import { summarizePart } from "@albusforge/schema";
+import { EXAMPLE_PARTS } from "@/lib/example-builds";
 
 /*
  * The design prototype's data, shaped to the contract. Timestamps are relative
@@ -176,18 +180,24 @@ const conversations = new Map<string, Conversation>();
 const MAX_CONVERSATIONS = 500;
 let conversationSeq = 0;
 
+/** How long the scripted reply takes, so typing dots and the event stream show. Immediate under vitest. */
+const REPLY_DELAY_MS = process.env.NODE_ENV === "test" ? 0 : 1_500;
+
 /** The prototype's three scripted replies, in order; the last repeats. */
 const scriptedReplies = () =>
   GREENHOUSE_CONVERSATION.filter(([role]) => role === "assistant").map(([, text]) => text);
 
-function appendMessage(conversation: Conversation, role: ChatMessage["role"], text: string): void {
-  conversation.messages.push({
+function appendMessage(conversation: Conversation, role: ChatMessage["role"], text: string, clientMessageId: string | null = null): ChatMessage {
+  const message: ChatMessage = {
     id: `msg_${conversation.messages.length + 1}`,
     role,
     text,
     created_at: new Date().toISOString(),
-  });
+    client_message_id: role === "user" ? clientMessageId : null,
+  };
+  conversation.messages.push(message);
   conversation.updatedAt = Date.now();
+  return message;
 }
 
 function appendReply(conversation: Conversation): void {
@@ -196,8 +206,23 @@ function appendReply(conversation: Conversation): void {
   conversation.replies += 1;
 }
 
-/** POST /v1/builds: the ask becomes the first message, and the first scripted reply follows. */
-export function createBuild(askText: string): CreateBuildResponse {
+function scheduleReply(conversation: Conversation): void {
+  if (REPLY_DELAY_MS === 0) appendReply(conversation);
+  else setTimeout(() => appendReply(conversation), REPLY_DELAY_MS);
+}
+
+/**
+ * POST /v1/builds: the ask becomes the first message, and the first scripted
+ * reply follows. The same client_message_id again returns that build (replayed).
+ */
+export function createBuild(askText: string, clientMessageId: string | null = null): { build: CreatedBuild; replayed: boolean } {
+  if (clientMessageId) {
+    for (const [id, conversation] of conversations) {
+      if (conversation.messages[0]?.client_message_id === clientMessageId) {
+        return { build: { ...conversationDetail(id, conversation), build_id: id, status: statusOf(conversation) }, replayed: true };
+      }
+    }
+  }
   if (conversations.size >= MAX_CONVERSATIONS) {
     const [oldest] = [...conversations.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
     if (oldest) conversations.delete(oldest[0]);
@@ -205,24 +230,69 @@ export function createBuild(askText: string): CreateBuildResponse {
   conversationSeq += 1;
   const id = `bld_${Date.now().toString(36)}${conversationSeq}`;
   const conversation: Conversation = { messages: [], replies: 0, updatedAt: Date.now() };
-  appendMessage(conversation, "user", askText);
-  appendReply(conversation);
+  appendMessage(conversation, "user", askText, clientMessageId);
   conversations.set(id, conversation);
-  return { build_id: id, status: "designing" };
+  const build = { ...conversationDetail(id, conversation), build_id: id, status: statusOf(conversation) };
+  scheduleReply(conversation);
+  return { build, replayed: false };
 }
 
-/** POST /v1/builds/:id/messages. False for an unknown build. */
-export function postBuildMessage(buildId: string, text: string): boolean {
+/** POST /v1/builds/:id/messages. Null for an unknown build; the same client_message_id again returns the stored message. */
+export function postBuildMessage(buildId: string, text: string, clientMessageId: string): { message: ChatMessage; replayed: boolean } | null {
   const conversation = conversations.get(buildId);
-  if (!conversation) return false;
-  appendMessage(conversation, "user", text);
-  appendReply(conversation);
-  return true;
+  if (!conversation) return null;
+  const existing = conversation.messages.find((message) => message.role === "user" && message.client_message_id === clientMessageId);
+  if (existing) return { message: existing, replayed: true };
+  const message = appendMessage(conversation, "user", text, clientMessageId);
+  scheduleReply(conversation);
+  return { message, replayed: false };
+}
+
+/** Gateway's status machine, as the prototype script walks it: specifying while a reply is due, asking, then planning. */
+function statusOf(conversation: Conversation): BuildStatus {
+  if (conversation.messages.at(-1)?.role === "user") return "specifying";
+  return conversation.replies >= 3 ? "planning" : "asking";
+}
+
+/** Registry parts (the example builds' bundle) providing any of the capabilities, like gateway's capability match. */
+function candidatesFor(capabilities: readonly string[]): CandidatePart[] {
+  return [...EXAMPLE_PARTS.values()]
+    .flatMap((part) => {
+      const matched = part.software.capabilities.filter((capability) => capabilities.includes(capability)).sort();
+      return matched.length ? [{ ...summarizePart(part), matched_capabilities: matched }] : [];
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+/** The spec intake would have written after each scripted reply (mock only; shape as spec.ts drafts it). */
+function specAfter(replies: number): Record<string, unknown> | null {
+  if (replies === 0) return null;
+  const capabilities = replies === 1 ? ["read.soil_moisture_pct"] : ["read.soil_moisture_pct", "net.wifi", "power.battery"];
+  return {
+    sense: { what: ["soil moisture"], interval_s: 600 },
+    environment: { location: "greenhouse", flags: ["humid"] },
+    connect: { transport: replies === 1 ? "none" : "wifi", experience: ["phone alerts"] },
+    power: { source: replies === 1 ? "unknown" : "battery" },
+    experience: { alerts: ["soil too dry"], dashboard: true },
+    capabilities,
+    assumptions: replies === 1 ? [] : ["Wi-Fi reaches the north wall", "One probe per bed"],
+    open_questions:
+      replies === 1
+        ? [
+            { field: "sense.what", question: "How large is the area: one bed or the whole greenhouse?" },
+            { field: "connect.transport", question: "Do you have Wi-Fi coverage out there?" },
+          ]
+        : replies === 2
+          ? [{ field: "settled", question: "Does the plan sound right?" }]
+          : [],
+    settled: replies >= 3,
+  };
 }
 
 /** Ready after the third exchange, as in the prototype. */
 function conversationDetail(id: string, conversation: Conversation): BuildDetail {
   const ready = conversation.replies >= 3;
+  const spec = specAfter(conversation.replies);
   return {
     id,
     name: ready ? DESIGN_READY.name : "New build",
@@ -231,6 +301,10 @@ function conversationDetail(id: string, conversation: Conversation): BuildDetail
     device_count: 0,
     updated_at: new Date(conversation.updatedAt).toISOString(),
     ready: ready ? DESIGN_READY : null,
+    status: statusOf(conversation),
+    spec_version: conversation.replies > 0 ? conversation.replies : null,
+    spec,
+    candidate_parts: spec ? candidatesFor(spec.capabilities as string[]) : [],
   };
 }
 

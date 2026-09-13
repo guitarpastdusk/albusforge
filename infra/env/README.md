@@ -44,6 +44,6 @@ Use a separate key for staging and prod, with a spend limit set in the provider'
 - **intake**: internal-only Cloud Run service (ask → spec). Gateway holds `run.invoker` on it and calls it with an ID token. It mounts `anthropic-api-key` and the app DB password, and uses `LLM_MODEL=claude-opus-5`.
 - **gateway**: CPU always allocated, because it calls intake after replying to the client. It gets `INTAKE_URL` and mounts `resend-api-key`.
 - **Drafts on staging:** `REGISTRY_INCLUDE_DRAFTS` is `true` in staging, so chat can use the draft parts, and `false` in prod.
-- **LLM spend guardrail:** the log-based distribution metric `llm_cost`, built from intake's `event="llm_call"` log lines, with an alert policy (hourly and 24-hour budgets in `locals.tf`) emailing `var.alert_email`.
+- **LLM spend guardrail:** the log-based distribution metric `llm_cost`, built from intake's `event="llm_call"` log lines, with two alert policies (hourly and 24-hour budgets in `locals.tf`, one PromQL condition each) emailing `var.alert_email`. After apply, emit a test `llm_call` line to check the query and email delivery.
 
 Mounting an API key requires a secret version to exist; both keys have one. ADR 0005 applies to intake too once its deploy workflow exists.

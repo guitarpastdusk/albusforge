@@ -45,26 +45,41 @@ resource "google_monitoring_notification_channel" "spend" {
   }
 }
 
+# Cloud Monitoring allows one PromQL condition per policy, so the hourly and
+# 24-hour budgets are separate policies. The selector is explicit because a user
+# log metric can be associated with several monitored resource types.
+locals {
+  llm_cost_sum = "logging_googleapis_com:user_llm_cost_sum{monitored_resource=\"cloud_run_revision\"}"
+
+  llm_spend_windows = {
+    hourly = {
+      window     = "1h"
+      budget     = local.settings.llm_hourly_budget_usd
+      evaluation = "60s"
+      label      = "the last hour"
+    }
+    daily = {
+      window     = "24h"
+      budget     = local.settings.llm_daily_budget_usd
+      evaluation = "300s"
+      label      = "the last 24 hours"
+    }
+  }
+}
+
 resource "google_monitoring_alert_policy" "llm_spend" {
+  for_each = local.llm_spend_windows
+
   project      = local.project_id
-  display_name = "LLM spend over budget (${local.env})"
+  display_name = "LLM spend over ${each.key} budget (${local.env})"
   combiner     = "OR"
 
   conditions {
-    display_name = "LLM cost in the last hour > $${local.settings.llm_hourly_budget_usd}"
+    display_name = "LLM cost in ${each.value.label} > $${each.value.budget}"
     condition_prometheus_query_language {
-      query               = "sum(increase(logging_googleapis_com:user_llm_cost_sum[1h])) > ${local.settings.llm_hourly_budget_usd}"
+      query               = "sum(increase(${local.llm_cost_sum}[${each.value.window}])) > ${each.value.budget}"
       duration            = "0s"
-      evaluation_interval = "60s"
-    }
-  }
-
-  conditions {
-    display_name = "LLM cost in the last 24 hours > $${local.settings.llm_daily_budget_usd}"
-    condition_prometheus_query_language {
-      query               = "sum(increase(logging_googleapis_com:user_llm_cost_sum[24h])) > ${local.settings.llm_daily_budget_usd}"
-      duration            = "0s"
-      evaluation_interval = "300s"
+      evaluation_interval = each.value.evaluation
     }
   }
 
@@ -72,7 +87,7 @@ resource "google_monitoring_alert_policy" "llm_spend" {
 
   documentation {
     mime_type = "text/markdown"
-    content   = "LLM spend crossed its budget. Check `llm_calls` and intake logs; the per-build token ceiling is `LLM_BUILD_TOKEN_CEILING`. Set a hard spend limit on the API key in the Anthropic console."
+    content   = "LLM spend crossed its ${each.key} budget. Check `llm_calls` and intake logs; the per-build token ceiling is `LLM_BUILD_TOKEN_CEILING`. Alerts notify but don't stop calls: set a hard spend limit on the API key in the Anthropic console."
   }
 
   depends_on = [google_logging_metric.llm_cost]

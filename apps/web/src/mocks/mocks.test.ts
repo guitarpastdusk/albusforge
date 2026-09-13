@@ -2,6 +2,7 @@ import {
   BuildDetail,
   BuildList,
   DeviceDashboard,
+  DeviceTile,
   Fleet,
   Listing,
   ListingList,
@@ -54,15 +55,23 @@ describe("every mock parses against the schema", () => {
     }
   });
 
-  it("a provisioned device that has never reported", async () => {
+  it("a provisioned device that has never reported: tile and dashboard both parse", async () => {
     const fleet = await get(routes.tenants.devices.path(data.me().tenant.id), Fleet);
     const tile = fleet.systems.flatMap((s) => s.devices).find((d) => d.id === "bed-c");
-    expect(tile).toMatchObject({ value: null, last_reading_at: null });
+    expect(tile).toMatchObject({ status: "never_seen", value: null, unit: null, last_reading_at: null });
 
     const dashboard = await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard);
-    expect(dashboard.device.last_reading_at).toBeNull();
-    expect(Object.values(dashboard.latest).every((reading) => reading === null)).toBe(true);
-    expect(dashboard.series.every((series) => series.points.length === 0)).toBe(true);
+    expect(dashboard.device).toMatchObject({ status: "never_seen", last_reading_at: null });
+    expect(dashboard.latest).toEqual({});
+    expect(dashboard.series).toEqual([]);
+    expect(dashboard.widgets.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a tile that still carries the old boolean online flag instead of status", () => {
+    const withoutStatus = Object.fromEntries(
+      Object.entries(data.fleet().systems[0]!.devices[0]!).filter(([key]) => key !== "status"),
+    );
+    expect(DeviceTile.safeParse({ ...withoutStatus, online: true }).success).toBe(false);
   });
 
   it("listings, filtered and single", async () => {

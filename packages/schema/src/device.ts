@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Accent, Id, Timestamp } from "./common";
 import { ChatMessage } from "./builds";
+import { DeviceStatus } from "./fleet";
 
 /** From part.cloud.telemetry_schema (CLOUD-PLATFORM.md §6.1). */
 export const Channel = z.object({
@@ -58,7 +59,7 @@ export const DeviceDashboard = z.object({
     id: Id,
     build_id: Id,
     name: z.string(),
-    online: z.boolean(),
+    status: DeviceStatus,
     /**
      * Null until the first reading: the dashboard is derived and provisioned
      * before the device is powered on (CLOUD-PLATFORM.md §6.1).
@@ -68,9 +69,9 @@ export const DeviceDashboard = z.object({
   }),
   channels: z.array(Channel),
   widgets: z.array(Widget),
-  /** Per channel key; null (or absent) for a channel with no reading yet. */
-  latest: z.record(z.string(), LatestReading.nullable()),
-  /** A series with no points is a channel that hasn't reported in the window. */
+  /** Per channel key. A channel with no reading yet has no key; a never-seen device has `{}`. */
+  latest: z.record(z.string(), LatestReading),
+  /** Empty for a never-seen device; a series with no points hasn't reported in the window. */
   series: z.array(Series),
 });
 export type DeviceDashboard = z.infer<typeof DeviceDashboard>;

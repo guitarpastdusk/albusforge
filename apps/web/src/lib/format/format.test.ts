@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   AWAITING_FIRST_READING,
-  deviceState,
   formatAgo,
   formatBytes,
   formatCompact,
   formatDeviceStatus,
-  formatReadingAge,
+  isAwaitingFirstReading,
   pluralize,
 } from "./index";
 
@@ -92,28 +91,28 @@ describe("formatBytes", () => {
   });
 });
 
-describe("readings for a device that may never have reported", () => {
+describe("device status for a device that may never have reported", () => {
   const at = new Date(NOW.getTime() - 40 * S).toISOString();
 
-  it("formats a null timestamp as awaiting, not as an age", () => {
-    expect(formatReadingAge(null, NOW)).toBe(AWAITING_FIRST_READING);
+  it("formats never_seen with a null timestamp as awaiting, with no age", () => {
+    const device = { status: "never_seen", last_reading_at: null } as const;
+    expect(isAwaitingFirstReading(device)).toBe(true);
+    expect(formatDeviceStatus(device, NOW)).toBe(AWAITING_FIRST_READING);
     expect(AWAITING_FIRST_READING).toBe("Awaiting first reading");
   });
 
-  it("formats a real timestamp as a short age", () => {
-    expect(formatReadingAge(at, NOW)).toBe("40s ago");
+  it("treats a null timestamp as awaiting even if status disagrees", () => {
+    expect(isAwaitingFirstReading({ status: "online", last_reading_at: null })).toBe(true);
+    expect(formatDeviceStatus({ status: "online", last_reading_at: null }, NOW)).toBe("Awaiting first reading");
   });
 
-  it("is awaiting — not online — when there is no reading, whatever the online flag says", () => {
-    expect(deviceState({ online: true, last_reading_at: null })).toBe("awaiting");
-    expect(deviceState({ online: false, last_reading_at: null })).toBe("awaiting");
-    expect(formatDeviceStatus({ online: true, last_reading_at: null }, NOW)).toBe("Awaiting first reading");
+  it("treats never_seen as awaiting even with a stray timestamp", () => {
+    expect(formatDeviceStatus({ status: "never_seen", last_reading_at: at }, NOW)).toBe("Awaiting first reading");
   });
 
   it("reports online and offline with the age of the last reading", () => {
-    expect(deviceState({ online: true, last_reading_at: at })).toBe("online");
-    expect(formatDeviceStatus({ online: true, last_reading_at: at }, NOW)).toBe("Online · last reading 40s ago");
-    expect(deviceState({ online: false, last_reading_at: at })).toBe("offline");
-    expect(formatDeviceStatus({ online: false, last_reading_at: at }, NOW)).toBe("Offline · last reading 40s ago");
+    expect(formatDeviceStatus({ status: "online", last_reading_at: at }, NOW)).toBe("Online · last reading 40s ago");
+    expect(formatDeviceStatus({ status: "offline", last_reading_at: at }, NOW)).toBe("Offline · last reading 40s ago");
+    expect(isAwaitingFirstReading({ status: "offline", last_reading_at: at })).toBe(false);
   });
 });

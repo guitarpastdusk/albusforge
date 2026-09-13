@@ -222,12 +222,12 @@ export function fleet(): Fleet {
         name: "Greenhouse soil monitor",
         location: "Home · 44.05°N 123.09°W",
         devices: [
-          { id: "bed-a", name: "Bed A — soil probe", accent: "green", online: true, value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40) },
-          { id: "bed-b", name: "Bed B — soil probe", accent: "green", online: true, value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE) },
-          { id: "canopy", name: "Canopy — air sensor", accent: "blue", online: true, value: "24.1", unit: "°C · 61% RH", metric: "Air temp + humidity", last_reading_at: ago(35) },
-          { id: "north-gateway", name: "North wall — gateway", accent: "peach", online: true, value: "2.4k", unit: "msgs/day", metric: "LoRa gateway", last_reading_at: ago(0) },
+          { id: "bed-a", name: "Bed A — soil probe", accent: "green", status: "online", value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40) },
+          { id: "bed-b", name: "Bed B — soil probe", accent: "green", status: "online", value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE) },
+          { id: "canopy", name: "Canopy — air sensor", accent: "blue", status: "online", value: "24.1", unit: "°C · 61% RH", metric: "Air temp + humidity", last_reading_at: ago(35) },
+          { id: "north-gateway", name: "North wall — gateway", accent: "peach", status: "online", value: "2.4k", unit: "msgs/day", metric: "LoRa gateway", last_reading_at: ago(0) },
           // Provisioned, never powered on: the dashboard exists before the first reading.
-          { id: "bed-c", name: "Bed C — soil probe", accent: "green", online: false, value: null, unit: "% VWC", metric: "Soil moisture", last_reading_at: null },
+          { id: "bed-c", name: "Bed C — soil probe", accent: "green", status: "never_seen", value: null, unit: null, metric: "Soil moisture", last_reading_at: null },
         ],
       },
       {
@@ -235,9 +235,9 @@ export function fleet(): Fleet {
         name: "Fridge door sentinel",
         location: "Home · kitchen",
         devices: [
-          { id: "fridge", name: "Fridge — door + temp", accent: "blue", online: true, value: "3.8", unit: "°C", metric: "Door closed · temp", last_reading_at: ago(12) },
-          { id: "freezer", name: "Freezer — temp probe", accent: "violet", online: true, value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30) },
-          { id: "pantry-leak", name: "Pantry — leak sensor", accent: "green", online: true, value: "DRY", unit: "", metric: "Water presence", last_reading_at: ago(2 * MINUTE) },
+          { id: "fridge", name: "Fridge — door + temp", accent: "blue", status: "online", value: "3.8", unit: "°C", metric: "Door closed · temp", last_reading_at: ago(12) },
+          { id: "freezer", name: "Freezer — temp probe", accent: "violet", status: "online", value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30) },
+          { id: "pantry-leak", name: "Pantry — leak sensor", accent: "green", status: "online", value: "DRY", unit: null, metric: "Water presence", last_reading_at: ago(2 * MINUTE) },
         ],
       },
     ],
@@ -252,8 +252,8 @@ const SOIL_24H = [
 
 /**
  * Every device gets Bed A's dashboard under its own name until per-part mocks
- * exist. A device that has never reported gets the same widgets with no
- * latest values and empty series.
+ * exist. A never-seen device gets the same derived widgets with `latest: {}`
+ * and `series: []`.
  */
 export function dashboard(deviceId: string): DeviceDashboard | null {
   const found = fleet()
@@ -263,14 +263,14 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
 
   const { device, buildId } = found;
   const last = SOIL_24H.length - 1;
-  const reported = device.last_reading_at !== null;
+  const reported = device.status !== "never_seen" && device.last_reading_at !== null;
 
   return {
     device: {
       id: device.id,
       build_id: buildId,
       name: device.name,
-      online: device.online,
+      status: device.status,
       last_reading_at: device.last_reading_at,
       chips: [
         { label: "Greenhouse — north wall", accent: "peach" },
@@ -300,14 +300,16 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
           uptime: { v: 34 * DAY, t: ago(40) },
           selftest: { v: "PASS", t: ago(6 * HOUR) },
         }
-      : { soil_vwc: null, battery: null, rssi: null, uptime: null, selftest: null },
-    series: [
-      {
-        channel: "soil_vwc",
-        bucket: "1h",
-        points: reported ? SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })) : [],
-      },
-    ],
+      : {},
+    series: reported
+      ? [
+          {
+            channel: "soil_vwc",
+            bucket: "1h",
+            points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })),
+          },
+        ]
+      : [],
   };
 }
 

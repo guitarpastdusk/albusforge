@@ -1,22 +1,28 @@
 import { z } from "zod";
 import { Accent, Id, Timestamp } from "./common";
 
+/**
+ * `device_state.status` (CLOUD-PLATFORM.md §5.2). `never_seen` is a device
+ * that is provisioned — its dashboard already exists (§6.1) — but has not
+ * sent a first reading.
+ */
+export const DeviceStatus = z.enum(["online", "offline", "never_seen"]);
+export type DeviceStatus = z.infer<typeof DeviceStatus>;
+
 export const DeviceTile = z.object({
   id: Id,
   name: z.string(),
   accent: Accent,
-  online: z.boolean(),
+  status: DeviceStatus,
   /**
    * Formatted with the channel's display precision (CLOUD-PLATFORM.md §6.1).
    * Null until the device's first reading.
    */
   value: z.string().nullable(),
-  unit: z.string(),
+  /** Null when there is no value to label, or the channel has no unit. */
+  unit: z.string().nullable(),
   metric: z.string(),
-  /**
-   * Null for a device that is provisioned but has never reported — the
-   * dashboard exists before the device is powered on (CLOUD-PLATFORM.md §6.1).
-   */
+  /** Null for a `never_seen` device. */
   last_reading_at: Timestamp.nullable(),
 });
 export type DeviceTile = z.infer<typeof DeviceTile>;

@@ -467,7 +467,7 @@ GET    /v1/builds?status=          tenant's builds + display_status
 GET    /v1/builds/:id/messages     chat transcript
 POST   /v1/builds/:id/messages     { text } → 202, reply over events
 GET    /v1/showcase                curated public live cards
-GET    /v1/usage                   current-period usage for the tenant (M2: model calls; M6: + readings, storage)
+GET    /v1/usage                   current UTC month: recorded model calls/costs and accepted readings/payload bytes; physical storage not measured
 
 GET    /v1/listings?query=&tags=&sort=trending|built
 GET    /v1/listings/:id            listing + snapshot summary + remix tree
@@ -492,7 +492,7 @@ The web portal is a client of this contract and adds no API of its own. Its rout
 
 ### 6.2 Surfaces the deck shows that have no route
 
-Tenant-scoped fleet reads (sensor counts, readings/day, per-device series vs baseline) · a conversational "ask anything about your fleet" endpoint that computes and can trigger a work order · tenant/membership/role/audit-log management · usage and subscription reads · per-tenant app hosting at a subdomain. See §8 and §13.
+Tenant-scoped fleet reads (sensor counts, readings/day, per-device series vs baseline) · a conversational "ask anything about your fleet" endpoint that computes and can trigger a work order · tenant/membership/role/audit-log management · subscription and billing-ledger reads · per-tenant app hosting at a subdomain. See §8 and §13. Recorded workspace consumption is implemented by `GET /v1/usage`; see [`USAGE-UI.md`](USAGE-UI.md).
 
 ---
 
@@ -1047,7 +1047,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | **Transport enum** | `wifi\|ble\|lora\|none` has no cellular; three appendix builds use an LTE-M notecard and one uses local mesh |
 | **Price tiers** | `unit_cost_usd` is a scalar; pricing is quoted at three quantity tiers |
 | **Compliance + longevity blocks** | §9 — and a sixth solver constraint to match |
-| **Metering** | per-sensor subscription is ~90% of revenue and nothing counts ingest, storage or compute per device. Billing can wait; metering can't. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9 specifies `usage_records` and the no-cliffs degradation rule |
+| **Metering** | per-sensor subscription is ~90% of revenue. Ingest readings/payload bytes and tenant-attributed model calls/costs are now recorded and exposed through Usage; physical storage, OTA and a durable billing ledger remain outstanding. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §9 specifies `usage_records` and the no-cliffs degradation rule |
 | ~~**Retention**~~ | **Reconciled by tiering** — 90 days raw, hourly rollups indefinitely (~0.3% of the volume), 7-year cold archive opt-in, local-first as a tenant flag. All three claims are true about different tiers; stating one in isolation is what made them look contradictory. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §5.1 |
 | **Part availability** | no mechanism for stock-out or discontinuation (§17.3) |
 | **Live device state** | everything in Postgres, vs Firestore for live state with realtime listeners and BigQuery for history. The partitioned-`readings` design assumes the Postgres answer |

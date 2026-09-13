@@ -49,7 +49,9 @@ describe("public guides", () => {
     const text = render(<DocsPage />).textContent;
     expect(text).toContain("Guided flashing is not available yet");
     expect(text).toContain("fixtures, not measurements");
-    expect(text).toContain("production device provisioning are still in progress");
+    expect(text).toContain("stored fleet status, latest readings, and history");
+    expect(text).toContain("depend on the deployed portal version");
+    expect(text).toContain("Production event streaming, provisioning-derived widgets, and device onboarding still require integration");
     expect(text).toContain("gap, not a zero");
     expect(text).toContain("approximately 90 days");
     const security = render(<SecurityPage />).textContent;

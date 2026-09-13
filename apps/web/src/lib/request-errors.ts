@@ -41,6 +41,9 @@ export interface RequestErrorLoggerOptions {
 
 type Timer = ReturnType<typeof setTimeout>;
 
+/** Request identities remembered per thrown object; see `reported`. */
+const MAX_REQUESTS_PER_ERROR = 1_000;
+
 interface DigestState {
   /** Console copies waiting for an onRequestError. */
   held: Timer[];
@@ -70,9 +73,14 @@ export function createRequestErrorLogger({ holdMs = 2_000, maxPerDigest = 50, ma
   const states = new Map<string, DigestState>();
   let total = 0;
   // Next may report one thrown error more than once for the same request (the
-  // RSC and HTML passes). Same object, same request, so log it once. Objects
-  // from different requests are distinct, so this never crosses requests.
-  const reported = new WeakSet<object>();
+  // RSC and HTML passes). Log it once per request: the object is keyed with the
+  // request's trace ID *and* span ID, so an object shared across requests (a
+  // memoised fetch, a cached rejected promise) still gives every request its
+  // own entry. A trace ID alone is not a request: many calls and retries share
+  // one trace (W3C trace-context), each with its own span. Without a span ID
+  // the request can't be identified, so a repeat is logged again: a duplicate,
+  // never a loss.
+  const reported = new WeakMap<object, Set<string>>();
 
   const stateFor = (digest: string): DigestState => {
     let state = states.get(digest);
@@ -96,9 +104,18 @@ export function createRequestErrorLogger({ holdMs = 2_000, maxPerDigest = 50, ma
   const hasRoom = (state: DigestState) => total < maxTotal && state.held.length + state.credits.length < maxPerDigest;
 
   const reportRequestError: Instrumentation.onRequestError = (error, request, context) => {
-    if (typeof error === "object" && error !== null) {
-      if (reported.has(error)) return;
-      reported.add(error);
+    const trace = traceFromHeaders(request.headers);
+    const requestKey = trace?.spanId ? `${trace.traceId}/${trace.spanId}` : undefined;
+    if (typeof error === "object" && error !== null && requestKey) {
+      let seen = reported.get(error);
+      if (!seen) {
+        seen = new Set();
+        reported.set(error, seen);
+      }
+      if (seen.has(requestKey)) return;
+      // Bounded for an object shared by many requests: forgetting risks a duplicate, not a loss.
+      if (seen.size >= MAX_REQUESTS_PER_ERROR) seen.clear();
+      seen.add(requestKey);
     }
 
     const digest = digestOf(error);
@@ -106,7 +123,7 @@ export function createRequestErrorLogger({ holdMs = 2_000, maxPerDigest = 50, ma
     const reason = error instanceof Error ? error.message : String(error);
     log("ERROR", `${request.method} ${pathname} failed: ${reason}`, {
       error,
-      trace: traceFromHeaders(request.headers),
+      trace,
       fields: {
         ...(digest ? { digest } : {}),
         // Never the headers: they carry the session cookie.

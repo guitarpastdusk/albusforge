@@ -29,6 +29,13 @@
       "when": 1789316448639,
       "tag": "0003_telemetry_partitions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789333389023,
+      "tag": "0004_sensor_ask",
+      "breakpoints": true
     }
   ]
 }

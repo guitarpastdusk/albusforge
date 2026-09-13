@@ -4,6 +4,7 @@ import { useState } from "react";
 import { askDevice } from "@/actions/devices";
 import { Button } from "@/components/ui";
 import { cx } from "@/lib/cx";
+import { askOnce } from "./device-chat-flow";
 
 interface Line {
   id: string;
@@ -16,19 +17,29 @@ export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting:
   const [lines, setLines] = useState<Line[]>([{ id: "greeting", from: "device", text: greeting }]);
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const ask = async (value: string) => {
     const question = value.trim();
     if (!question || pending) return;
+    const id = `me-${Date.now()}`;
     setText("");
+    setError(null);
     setPending(true);
-    setLines((current) => [...current, { id: `me-${current.length}`, from: "me", text: question }]);
-    const result = await askDevice(deviceId, question);
-    setPending(false);
-    setLines((current) => [
-      ...current,
-      { id: `device-${current.length}`, from: "device", text: result.ok ? result.data.text : result.message },
-    ]);
+    setLines((current) => [...current, { id, from: "me", text: question }]);
+    try {
+      const outcome = await askOnce(() => askDevice(deviceId, question));
+      if (outcome.ok) {
+        setLines((current) => [...current, { id: `device-${id}`, from: "device", text: outcome.reply }]);
+      } else {
+        // Not answered: take the question back out and return it to the input to retry.
+        setLines((current) => current.filter((line) => line.id !== id));
+        setText((draft) => draft || question);
+        setError(outcome.message);
+      }
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -53,6 +64,11 @@ export function DeviceChat({ deviceId, greeting }: { deviceId: string; greeting:
           </div>
         ))}
       </div>
+      {error ? (
+        <p role="alert" className="mt-3 text-[14px] text-coral">
+          {error}
+        </p>
+      ) : null}
       <form
         onSubmit={(event) => {
           event.preventDefault();

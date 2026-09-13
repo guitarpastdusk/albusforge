@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { Button } from "@/components/ui";
 import { useConversation } from "./BuildConversation";
 import { ChatBubble, TypingDots } from "./ChatBubble";
@@ -12,8 +11,7 @@ import { DesignReadyCard } from "./DesignReadyCard";
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, send } = useConversation();
-  const [text, setText] = useState("");
+  const { state, send, setDraft, checkAgain } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -25,9 +23,14 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         ))}
         {state.typing ? <TypingDots /> : null}
         {state.error ? (
-          <p role="alert" className="text-[15px] text-coral-deep">
-            {state.error}
-          </p>
+          <div role="alert" className="flex flex-wrap items-center gap-3 text-[15px] text-coral-deep">
+            <span>{state.error}</span>
+            {state.awaitingReply ? (
+              <button type="button" onClick={checkAgain} className="font-semibold hover:text-coral">
+                Check for a reply
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {state.ready ? <DesignReadyCard card={state.ready} /> : null}
       </div>
@@ -35,15 +38,14 @@ export function ConversationView({ active = false }: { active?: boolean }) {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          // Read the field, not `text`: an Enter right after typing can fire before React re-renders.
-          const value = String(new FormData(event.currentTarget).get("reply") ?? "");
-          if (send(value)) setText("");
+          // Read the field, not state: an Enter right after typing can fire before React re-renders.
+          send(String(new FormData(event.currentTarget).get("reply") ?? ""));
         }}
         className="sticky bottom-5 mt-[26px] flex items-center gap-3.5 rounded-[20px] border border-hairline bg-white py-2 pr-2 pl-[22px] shadow-card"
       >
         <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
+          value={state.draft}
+          onChange={(event) => setDraft(event.target.value)}
           name="reply"
           aria-label="Reply"
           placeholder="Reply…"

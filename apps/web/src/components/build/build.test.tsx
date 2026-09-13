@@ -1,8 +1,17 @@
 import type { ChatMessage, DeviceReadyCard } from "@albusforge/schema";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { CONNECTION_MESSAGE } from "@/lib/safe-action";
 import { ChatBubble, TypingDots } from "./ChatBubble";
-import { conversationReducer, initConversation } from "./conversation";
+import {
+  conversationReducer,
+  initConversation,
+  runCheck,
+  runSend,
+  type ConversationActions,
+  type ConversationEvent,
+  type ConversationState,
+} from "./conversation";
 import { DesignReadyCard } from "./DesignReadyCard";
 
 const AT = "2026-09-13T12:00:00Z";
@@ -20,9 +29,10 @@ const READY: DeviceReadyCard = {
 };
 
 describe("conversationReducer", () => {
-  it("adds the sent message optimistically and starts typing", () => {
-    const state = conversationReducer(initConversation(), { type: "sent", text: "A soil sensor", at: AT });
-    expect(state.typing).toBe(true);
+  it("adds the sent message optimistically, clears the draft and starts typing", () => {
+    const drafted = conversationReducer(initConversation(), { type: "draft", text: "A soil sensor" });
+    const state = conversationReducer(drafted, { type: "sent", text: "A soil sensor", at: AT });
+    expect(state).toMatchObject({ typing: true, draft: "" });
     expect(state.messages).toEqual([{ id: "local-1", role: "user", text: "A soil sensor", created_at: AT }]);
   });
 
@@ -33,15 +43,94 @@ describe("conversationReducer", () => {
       type: "replied",
       transcript: { buildId: "bld_1", messages: transcript, ready: READY },
     });
-    expect(state).toMatchObject({ buildId: "bld_1", typing: false, ready: READY, error: null });
+    expect(state).toMatchObject({ buildId: "bld_1", typing: false, ready: READY, error: null, awaitingReply: false });
     expect(state.messages).toEqual(transcript);
   });
+});
 
-  it("keeps the user's message and shows the error when sending fails", () => {
-    const sent = conversationReducer(initConversation({ buildId: "bld_1" }), { type: "sent", text: "hi", at: AT });
-    const state = conversationReducer(sent, { type: "failed", message: "We can’t reach the service right now." });
-    expect(state).toMatchObject({ typing: false, error: "We can’t reach the service right now.", buildId: "bld_1" });
-    expect(state.messages).toHaveLength(1);
+/** Drive the reducer the way the provider does. */
+function harness(initial?: Parameters<typeof initConversation>[0]) {
+  let state: ConversationState = initConversation(initial);
+  const dispatch = (event: ConversationEvent) => {
+    state = conversationReducer(state, event);
+  };
+  return { dispatch, get state() { return state; } };
+}
+
+const actions = (overrides: Partial<ConversationActions>): ConversationActions => ({
+  startBuild: vi.fn(),
+  sendBuildMessage: vi.fn(),
+  checkForReply: vi.fn(),
+  ...overrides,
+});
+
+describe("runSend", () => {
+  it("a rejected call (network failure, aborted dispatch) clears typing, restores the draft and shows a retryable message", async () => {
+    const h = harness();
+    h.dispatch({ type: "sent", text: "A soil sensor", at: AT });
+
+    const result = await runSend(null, "A soil sensor", actions({ startBuild: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch);
+
+    expect(result).toBeNull();
+    expect(h.state).toMatchObject({ typing: false, error: CONNECTION_MESSAGE, draft: "A soil sensor", messages: [] });
+  });
+
+  it("an { ok: false } result shows the server's message and also restores the draft", async () => {
+    const h = harness({ buildId: "bld_1", messages: [reply("m1", "user", "hi"), reply("m2", "assistant", "hello")] });
+    h.dispatch({ type: "sent", text: "one bed", at: AT });
+
+    await runSend("bld_1", "one bed", actions({ sendBuildMessage: vi.fn().mockResolvedValue({ ok: false, message: "We can’t reach the service right now." }) }), h.dispatch);
+
+    expect(h.state).toMatchObject({ typing: false, error: "We can’t reach the service right now.", draft: "one bed", awaitingReply: false });
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("keeps a newer draft typed while the send was pending", async () => {
+    const h = harness();
+    h.dispatch({ type: "sent", text: "first", at: AT });
+    h.dispatch({ type: "draft", text: "second thought" });
+    await runSend(null, "first", actions({ startBuild: vi.fn().mockRejectedValue(new Error("x")) }), h.dispatch);
+    expect(h.state.draft).toBe("second thought");
+  });
+
+  it("a reply that hasn't arrived keeps the sent message and offers to check again, not to resend", async () => {
+    const pending = { buildId: "bld_1", messages: [reply("m1", "user", "hi")], ready: null };
+    const h = harness();
+    h.dispatch({ type: "sent", text: "hi", at: AT });
+
+    const result = await runSend(null, "hi", actions({ startBuild: vi.fn().mockResolvedValue({ ok: false, message: "Taking longer than usual.", awaitingReply: pending }) }), h.dispatch);
+
+    expect(result).toEqual(pending);
+    expect(h.state).toMatchObject({ typing: false, awaitingReply: true, draft: "", buildId: "bld_1", error: "Taking longer than usual." });
+    expect(h.state.messages).toEqual(pending.messages);
+  });
+
+  it("passes the reply through on success", async () => {
+    const transcript = { buildId: "bld_1", messages: [reply("m1", "user", "hi"), reply("m2", "assistant", "hello")], ready: null };
+    const h = harness();
+    h.dispatch({ type: "sent", text: "hi", at: AT });
+    await expect(runSend(null, "hi", actions({ startBuild: vi.fn().mockResolvedValue({ ok: true, data: transcript }) }), h.dispatch)).resolves.toEqual(transcript);
+    expect(h.state).toMatchObject({ typing: false, error: null, messages: transcript.messages });
+  });
+});
+
+describe("runCheck", () => {
+  const pending = { buildId: "bld_1", messages: [reply("m1", "user", "hi")], ready: null };
+
+  it("a rejected check keeps the check-again state and shows the connection message", async () => {
+    const h = harness();
+    h.dispatch({ type: "stalled", message: "Taking longer than usual.", transcript: pending });
+    await runCheck("bld_1", 0, actions({ checkForReply: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch);
+    expect(h.state).toMatchObject({ typing: false, awaitingReply: true, error: CONNECTION_MESSAGE });
+    expect(h.state.messages).toEqual(pending.messages);
+  });
+
+  it("a successful check shows the reply", async () => {
+    const h = harness();
+    h.dispatch({ type: "stalled", message: "Taking longer than usual.", transcript: pending });
+    const replied = { ...pending, messages: [...pending.messages, reply("m2", "assistant", "hello")] };
+    await runCheck("bld_1", 0, actions({ checkForReply: vi.fn().mockResolvedValue({ ok: true, data: replied }) }), h.dispatch);
+    expect(h.state).toMatchObject({ awaitingReply: false, error: null, messages: replied.messages });
   });
 });
 

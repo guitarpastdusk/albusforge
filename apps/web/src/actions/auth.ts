@@ -1,41 +1,59 @@
 "use server";
 
-import { RequestCodeRequest, routes, VerifyCodeRequest, VerifyCodeResponse } from "@albusforge/schema";
+import { routes, SESSION_COOKIE, VerifyCodeResponse } from "@albusforge/schema";
 import { z } from "zod";
-import { actionFailure } from "@/lib/action-errors";
+import { actionFailure, actionIncomplete } from "@/lib/action-errors";
 import type { ActionResult } from "@/lib/action-result";
 import { ApiRequestError } from "@/lib/api/core";
-import { apiPost } from "@/lib/api/server";
+import { sessionClient } from "@/lib/api/server";
 
 /*
- * Email-code sign-in (ADR 0008).
+ * Email-code sign-in (ADR 0008). Arguments are untrusted: validated at
+ * runtime (trimming inside the string schema), inside `try`.
  *
- * TODO(auth): in live mode gateway answers verify with Set-Cookie for
- * __Host-albus_session (and clears __Host-albus_anon). A Server Function's
- * fetch to gateway doesn't pass that through to the browser: relay those two
- * cookies with cookies().set once gateway exists. Mock mode sets no session.
+ * Verify's response sets __Host-albus_session and clears __Host-albus_anon;
+ * `sessionClient()` relays both to the browser. Success is reported only once
+ * the session cookie has actually been set. No credential ever appears in a
+ * return value or a log line.
  */
 
-/** POST /v1/auth/code → 204. */
-export async function requestSignInCode(email: string): Promise<ActionResult<{ email: string }>> {
-  const parsed = RequestCodeRequest.safeParse({ email: email.trim() });
-  if (!parsed.success) return { ok: false, message: "Enter a valid email address." };
+const EmailInput = z.string().trim().pipe(z.email());
+const CodeInput = z.string().trim().regex(/^\d{6}$/);
 
+const INVALID_EMAIL = "Enter a valid email address.";
+const INVALID_CODE = "Enter the 6-digit code from your email.";
+const SIGN_IN_INCOMPLETE = "We couldn’t finish signing you in. Try again in a moment.";
+
+/** POST /v1/auth/code → 204. */
+export async function requestSignInCode(email: unknown): Promise<ActionResult<{ email: string }>> {
   try {
-    await apiPost(routes.auth.requestCode.path(), z.unknown(), parsed.data);
-    return { ok: true, data: { email: parsed.data.email } };
+    const parsed = EmailInput.safeParse(email);
+    if (!parsed.success) return { ok: false, message: INVALID_EMAIL };
+
+    const client = await sessionClient();
+    await client.mutate("POST", routes.auth.requestCode.path(), z.unknown(), { email: parsed.data });
+    return { ok: true, data: { email: parsed.data } };
   } catch (error) {
     return actionFailure("requestSignInCode", error);
   }
 }
 
 /** POST /v1/auth/verify → the session; claims anonymous builds (PORTAL.md §5). */
-export async function verifySignInCode(email: string, code: string): Promise<ActionResult<{ email: string }>> {
-  const parsed = VerifyCodeRequest.safeParse({ email: email.trim(), code });
-  if (!parsed.success) return { ok: false, message: "Enter the 6-digit code from your email." };
-
+export async function verifySignInCode(email: unknown, code: unknown): Promise<ActionResult<{ email: string }>> {
   try {
-    const session = await apiPost(routes.auth.verify.path(), VerifyCodeResponse, parsed.data);
+    const parsedEmail = EmailInput.safeParse(email);
+    if (!parsedEmail.success) return { ok: false, message: INVALID_EMAIL };
+    const parsedCode = CodeInput.safeParse(code);
+    if (!parsedCode.success) return { ok: false, message: INVALID_CODE };
+
+    const client = await sessionClient();
+    const session = await client.mutate("POST", routes.auth.verify.path(), VerifyCodeResponse, {
+      email: parsedEmail.data,
+      code: parsedCode.data,
+    });
+    if (client.credentialChange(SESSION_COOKIE) !== "set") {
+      return actionIncomplete("verifySignInCode", "verify succeeded without setting a session cookie", SIGN_IN_INCOMPLETE);
+    }
     return { ok: true, data: { email: session.user.email } };
   } catch (error) {
     if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {

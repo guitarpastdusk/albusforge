@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { requestSignInCode, verifySignInCode } from "@/actions/auth";
 import { Button, ButtonLink, Kicker } from "@/components/ui";
 import { cx } from "@/lib/cx";
+import { settle } from "@/lib/safe-action";
 
 export type EmailCodeIntent = "signup" | "signin";
 type Step = "email" | "code" | "done";
@@ -42,7 +43,8 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
 
   const sendCode = () =>
     startTransition(async () => {
-      const result = await requestSignInCode(email);
+      // settle: a rejected call (lost connection) becomes a retryable error; the email stays as typed.
+      const result = await settle(() => requestSignInCode(email));
       if (!result.ok) return setError(result.message);
       setError(null);
       setEmail(result.data.email);
@@ -52,7 +54,7 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
 
   const verify = () =>
     startTransition(async () => {
-      const result = await verifySignInCode(email, code);
+      const result = await settle(() => verifySignInCode(email, code));
       if (!result.ok) return setError(result.message);
       setError(null);
       setStep("done");
@@ -162,10 +164,15 @@ export function EmailCodeCard({ intent }: { intent: EmailCodeIntent }) {
   );
 }
 
-/** Six boxes drawn over one real input, so paste and one-time-code autofill work. */
-function CodeBoxes({ code, onChange }: { code: string; onChange: (code: string) => void }) {
+/**
+ * Six boxes drawn over one real input, so paste and one-time-code autofill
+ * work. The input is transparent, so focus shows on the drawn boxes: the box
+ * the next digit goes into gets a coral ring while the input is focused.
+ */
+export function CodeBoxes({ code, onChange }: { code: string; onChange: (code: string) => void }) {
+  const active = Math.min(code.length, CODE_LENGTH - 1);
   return (
-    <div className="relative mt-7 flex justify-between gap-2.5">
+    <div className="group relative mt-7 flex justify-between gap-2.5">
       {Array.from({ length: CODE_LENGTH }, (_, i) => (
         <span
           key={i}
@@ -173,6 +180,7 @@ function CodeBoxes({ code, onChange }: { code: string; onChange: (code: string) 
           className={cx(
             "flex aspect-[0.85] flex-1 items-center justify-center rounded-xl border bg-porcelain font-mono text-[26px] text-ink",
             i < code.length ? "border-coral" : "border-hairline",
+            i === active && "group-focus-within:border-coral group-focus-within:shadow-[0_0_0_3px_rgb(232_121_74/0.28)]",
           )}
         >
           {code[i] ?? ""}

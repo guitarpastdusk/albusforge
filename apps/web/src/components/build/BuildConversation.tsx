@@ -1,13 +1,27 @@
 "use client";
 
 import { createContext, useContext, useReducer, type ReactNode } from "react";
-import { sendBuildMessage, startBuild } from "@/actions/builds";
-import { conversationReducer, initConversation, type BuildTranscript, type ConversationState } from "./conversation";
+import { checkForReply, sendBuildMessage, startBuild } from "@/actions/builds";
+import { assistantCount } from "@/lib/build-transcript";
+import {
+  conversationReducer,
+  initConversation,
+  runCheck,
+  runSend,
+  type BuildTranscript,
+  type ConversationActions,
+  type ConversationState,
+} from "./conversation";
+
+const ACTIONS: ConversationActions = { startBuild, sendBuildMessage, checkForReply };
 
 interface ConversationApi {
   state: ConversationState;
   /** Send a message; the first one creates the build. False if nothing was sent. */
   send: (text: string) => boolean;
+  setDraft: (text: string) => void;
+  /** After a reply timed out: read the transcript again rather than resending. */
+  checkAgain: () => void;
 }
 
 const ConversationContext = createContext<ConversationApi | null>(null);
@@ -33,16 +47,20 @@ export function BuildConversation({ initial, children }: { initial?: BuildTransc
 
     dispatch({ type: "sent", text: trimmed, at: new Date().toISOString() });
     const { buildId } = state;
-    void (async () => {
-      const result = buildId ? await sendBuildMessage(buildId, trimmed) : await startBuild(trimmed);
-      if (!result.ok) return dispatch({ type: "failed", message: result.message });
-      dispatch({ type: "replied", transcript: result.data });
-      if (!buildId) window.history.replaceState(null, "", `/build/${encodeURIComponent(result.data.buildId)}`);
-    })();
+    void runSend(buildId, trimmed, ACTIONS, dispatch).then((transcript) => {
+      if (!buildId && transcript) window.history.replaceState(null, "", `/build/${encodeURIComponent(transcript.buildId)}`);
+    });
     return true;
   };
 
-  return <ConversationContext value={{ state, send }}>{children}</ConversationContext>;
+  const checkAgain = () => {
+    if (!state.buildId || state.typing) return;
+    void runCheck(state.buildId, assistantCount(state.messages), ACTIONS, dispatch);
+  };
+
+  const setDraft = (text: string) => dispatch({ type: "draft", text });
+
+  return <ConversationContext value={{ state, send, setDraft, checkAgain }}>{children}</ConversationContext>;
 }
 
 /** Renders its children only while the conversation hasn't started — the landing hero. */

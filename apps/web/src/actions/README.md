@@ -9,7 +9,7 @@ Server Functions (`"use server"`) that Client Components call for interactive AP
 | File | Routes |
 | --- | --- |
 | `auth.ts` sign out | `signOut()` — POST /v1/auth/signout, deletes the session cookie (Secure, Path=/) even if gateway fails, redirects to `/` |
-| `builds.ts` | `POST /v1/builds`, `POST /v1/builds/:id/messages`, then polling `GET` the build and its messages until the assistant replies (`waitForReply`, a total 20 s deadline with backoff that aborts a hung read); after acceptance, a timeout or failed read returns the check-again state, never a failed send; `checkForReply` reads again |
+| `builds.ts` | `startBuild` (`POST /v1/builds`) and `sendBuildMessage` (`POST /v1/builds/:id/messages`), each with a client-generated `client_message_id` so a retried send is idempotent; they return once gateway accepts, and replies arrive on the event stream. `refreshBuild` reads the build and its messages again (never resends). 409 `TURN_IN_PROGRESS` and 429 `RATE_LIMITED` are "not sent" results, not logged |
 | `devices.ts` | `POST /v1/devices/:id/ask` |
 | `auth.ts` | `POST /v1/auth/code`, `POST /v1/auth/verify` — success only once the session cookie is set |
 

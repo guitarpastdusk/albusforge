@@ -90,8 +90,8 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       const ask = field(body, "ask_text")?.trim();
       if (!ask) return badRequest("ask_text is required");
       await latency(TYPING_MS);
-      const created = data.createBuild(ask);
-      return jsonResponse(201, created, [`__Host-albus_anon=mock-anon-${created.build_id}; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`]);
+      const { build, replayed } = data.createBuild(ask, field(body, "client_message_id") ?? null);
+      return jsonResponse(replayed ? 200 : 201, build, [`__Host-albus_anon=mock-anon-${build.build_id}; ${COOKIE_ATTRIBUTES}; Max-Age=${MONTH}`]);
     },
   ],
   [routes.builds.get, ([id = ""]) => orNotFound(`build ${id}`, data.buildDetail(id))],
@@ -100,9 +100,13 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
     routes.builds.postMessage,
     async ([id = ""], _query, body) => {
       const text = field(body, "text")?.trim();
+      const clientMessageId = field(body, "client_message_id");
       if (!text) return badRequest("text is required");
+      // Gateway requires it (400 without), even though the shared schema marks it optional.
+      if (!clientMessageId) return badRequest("client_message_id is required");
       await latency(TYPING_MS);
-      return data.postBuildMessage(id, text) ? empty(202) : notFound(`build ${id}`);
+      const posted = data.postBuildMessage(id, text, clientMessageId);
+      return posted ? jsonResponse(posted.replayed ? 200 : 202, { message: posted.message }) : notFound(`build ${id}`);
     },
   ],
   [routes.tenants.devices, () => ok(data.fleet())],

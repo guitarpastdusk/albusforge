@@ -4,12 +4,13 @@ import {
   DeviceAction,
   BuildDetail,
   BuildList,
-  CreateBuildResponse,
+  CreatedBuild,
   DeviceDashboard,
   DeviceTile,
   Fleet,
   Me,
   MessageList,
+  PostMessageResponse,
   routes,
   Usage,
   VerifyCodeResponse,
@@ -102,36 +103,68 @@ describe("mock transport errors", () => {
 });
 
 describe("mock conversation, device chat and sign-in", () => {
-  it("a new build follows the prototype's script and is ready after the third exchange", async () => {
-    const { build_id } = await post(routes.builds.create.path(), CreateBuildResponse, {
+  it("a new build follows the prototype's script: asking with a spec and candidate parts, then planning and ready after the third exchange", async () => {
+    const created = await post(routes.builds.create.path(), CreatedBuild, {
       ask_text: "A soil moisture sensor for my greenhouse",
+      client_message_id: "11111111-1111-4111-8111-111111111111",
     });
+    expect(created).toMatchObject({ id: created.build_id, ready: null });
+    const { build_id } = created;
 
+    // Replies are immediate under vitest.
     let transcript = await get(routes.builds.messages.path(build_id), MessageList);
-    expect(transcript.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
-    expect(transcript.messages[0]!.text).toBe("A soil moisture sensor for my greenhouse");
+    expect(transcript.messages.map((m) => [m.role, m.client_message_id])).toEqual([
+      ["user", "11111111-1111-4111-8111-111111111111"],
+      ["assistant", null],
+    ]);
     expect(transcript.messages[1]!.text).toMatch(/^Good brief\. Two quick questions:/);
-    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toBeNull();
+    let detail = await get(routes.builds.get.path(build_id), BuildDetail);
+    expect(detail).toMatchObject({ status: "asking", spec_version: 1, ready: null });
+    expect(detail.candidate_parts?.map((p) => [p.id, p.matched_capabilities])).toEqual([["P-005", ["read.soil_moisture_pct"]]]);
 
-    await post(routes.builds.postMessage.path(build_id), z.unknown(), { text: "One bed, and we have Wi-Fi" });
+    const first = await post(routes.builds.postMessage.path(build_id), PostMessageResponse, {
+      text: "One bed, and we have Wi-Fi",
+      client_message_id: "22222222-2222-4222-8222-222222222222",
+    });
+    expect(first.message).toMatchObject({ role: "user", text: "One bed, and we have Wi-Fi", client_message_id: "22222222-2222-4222-8222-222222222222" });
     transcript = await get(routes.builds.messages.path(build_id), MessageList);
     expect(transcript.messages[3]!.text).toMatch(/^Got it\. Here's my plan:/);
-    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toBeNull();
+    detail = await get(routes.builds.get.path(build_id), BuildDetail);
+    expect(detail.candidate_parts?.map((p) => p.id)).toEqual(["C-001", "E-001", "P-005"]);
 
-    await post(routes.builds.postMessage.path(build_id), z.unknown(), { text: "go" });
+    await post(routes.builds.postMessage.path(build_id), PostMessageResponse, { text: "go", client_message_id: "33333333-3333-4333-8333-333333333333" });
     transcript = await get(routes.builds.messages.path(build_id), MessageList);
     expect(transcript.messages).toHaveLength(6);
     expect(transcript.messages[5]!.text).toMatch(/^Done — design finalized below\./);
-    expect((await get(routes.builds.get.path(build_id), BuildDetail)).ready).toMatchObject({
-      name: "Greenhouse soil monitor",
-      est_price_usd: 34,
-      parts: expect.arrayContaining([expect.objectContaining({ label: "ESP32-WROOM" })]),
+    expect(await get(routes.builds.get.path(build_id), BuildDetail)).toMatchObject({
+      status: "planning",
+      spec: { settled: true },
+      ready: { name: "Greenhouse soil monitor", parts: expect.arrayContaining([expect.objectContaining({ label: "ESP32-WROOM" })]) },
     });
   });
 
-  it("posting to an unknown build is a 404; an empty message is a 400", async () => {
-    await expect(post(routes.builds.postMessage.path("nope"), z.unknown(), { text: "hi" })).rejects.toMatchObject({ status: 404 });
-    await expect(post(routes.builds.create.path(), CreateBuildResponse, { ask_text: " " })).rejects.toMatchObject({ status: 400 });
+  it("a replayed client_message_id returns the same build or message (200), with no new turn", async () => {
+    const body = { ask_text: "A fridge monitor", client_message_id: "44444444-4444-4444-8444-444444444444" };
+    const first = await mockTransport("POST", routes.builds.create.path(), body);
+    const again = await mockTransport("POST", routes.builds.create.path(), body);
+    expect([first.status, again.status]).toEqual([201, 200]);
+    const id = CreatedBuild.parse(first.json).build_id;
+    expect(CreatedBuild.parse(again.json).build_id).toBe(id);
+
+    const message = { text: "It's a chest fridge", client_message_id: "55555555-5555-4555-8555-555555555555" };
+    const sent = await mockTransport("POST", routes.builds.postMessage.path(id), message);
+    const resent = await mockTransport("POST", routes.builds.postMessage.path(id), message);
+    expect([sent.status, resent.status]).toEqual([202, 200]);
+    expect(PostMessageResponse.parse(resent.json).message.id).toBe(PostMessageResponse.parse(sent.json).message.id);
+    expect((await get(routes.builds.messages.path(id), MessageList)).messages).toHaveLength(4);
+  });
+
+  it("posting to an unknown build is a 404; an empty message, or one without client_message_id, is a 400", async () => {
+    const clientId = "66666666-6666-4666-8666-666666666666";
+    await expect(post(routes.builds.postMessage.path("nope"), z.unknown(), { text: "hi", client_message_id: clientId })).rejects.toMatchObject({ status: 404 });
+    await expect(post(routes.builds.create.path(), CreatedBuild, { ask_text: " " })).rejects.toMatchObject({ status: 400 });
+    const { build_id } = await post(routes.builds.create.path(), CreatedBuild, { ask_text: "A sensor" });
+    await expect(post(routes.builds.postMessage.path(build_id), z.unknown(), { text: "hi" })).rejects.toMatchObject({ status: 400 });
   });
 
   it("device ask answers with the scripted reply and the query it ran", async () => {

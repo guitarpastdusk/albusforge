@@ -1,22 +1,30 @@
-import type { ChatMessage, DeviceReadyCard } from "@albusforge/schema";
+import type { CandidatePart, ChatMessage, DeviceReadyCard } from "@albusforge/schema";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { mergeMessages, type BuildTranscript } from "@/lib/build-transcript";
 import { CONNECTION_MESSAGE } from "@/lib/safe-action";
+import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
 import {
+  clientMessageIdFor,
   conversationReducer,
   initConversation,
-  runCheck,
+  isTyping,
+  OVERDUE_MESSAGE,
   runSend,
   type ConversationActions,
   type ConversationEvent,
   type ConversationState,
 } from "./conversation";
 import { DesignReadyCard } from "./DesignReadyCard";
+import { SpecPanel } from "./SpecPanel";
 
 const AT = "2026-09-13T12:00:00Z";
+const LATER = "2026-09-13T12:00:30Z";
+const ID_1 = "11111111-1111-4111-8111-111111111111";
+const ID_2 = "22222222-2222-4222-8222-222222222222";
 
-const reply = (id: string, role: ChatMessage["role"], text: string): ChatMessage => ({ id, role, text, created_at: AT });
+const msg = (id: string, role: ChatMessage["role"], text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id, role, text, created_at: AT, ...extra });
 
 const READY: DeviceReadyCard = {
   name: "Greenhouse soil monitor",
@@ -28,36 +36,15 @@ const READY: DeviceReadyCard = {
   ],
 };
 
-describe("conversationReducer", () => {
-  it("a timeout before any transcript read keeps the sent message, ends typing and offers check-again", () => {
-    const sent = conversationReducer(initConversation(), { type: "sent", text: "A soil sensor", at: AT });
-    const pending = { buildId: "bld_1", ready: null, messages: [{ id: "pending-1", role: "user" as const, text: "A soil sensor", created_at: AT }] };
-    const stalled = conversationReducer(sent, { type: "stalled", message: "Taking longer than usual.", transcript: pending });
-    expect(stalled).toMatchObject({ buildId: "bld_1", typing: false, awaitingReply: true, draft: "" });
-    expect(stalled.messages.map((m) => m.text)).toEqual(["A soil sensor"]);
-    // A rejected check afterwards keeps the message and the check-again state.
-    const failedCheck = conversationReducer(stalled, { type: "failed", message: "offline", text: "" });
-    expect(failedCheck).toMatchObject({ awaitingReply: true, typing: false });
-    expect(failedCheck.messages).toHaveLength(1);
-  });
-
-  it("adds the sent message optimistically, clears the draft and starts typing", () => {
-    const drafted = conversationReducer(initConversation(), { type: "draft", text: "A soil sensor" });
-    const state = conversationReducer(drafted, { type: "sent", text: "A soil sensor", at: AT });
-    expect(state).toMatchObject({ typing: true, draft: "" });
-    expect(state.messages).toEqual([{ id: "local-1", role: "user", text: "A soil sensor", created_at: AT }]);
-  });
-
-  it("replaces the optimistic copy with the server transcript, and picks up the build and ready card", () => {
-    const sent = conversationReducer(initConversation(), { type: "sent", text: "go", at: AT });
-    const transcript = [reply("msg_1", "user", "go"), reply("msg_2", "assistant", "Done")];
-    const state = conversationReducer(sent, {
-      type: "replied",
-      transcript: { buildId: "bld_1", messages: transcript, ready: READY },
-    });
-    expect(state).toMatchObject({ buildId: "bld_1", typing: false, ready: READY, error: null, awaitingReply: false });
-    expect(state.messages).toEqual(transcript);
-  });
+const transcript = (messages: ChatMessage[], extra: Partial<BuildTranscript> = {}): BuildTranscript => ({
+  buildId: "bld_1",
+  messages,
+  ready: null,
+  status: "asking",
+  specVersion: null,
+  spec: null,
+  candidateParts: [],
+  ...extra,
 });
 
 /** Drive the reducer the way the provider does. */
@@ -72,77 +59,210 @@ function harness(initial?: Parameters<typeof initConversation>[0]) {
 const actions = (overrides: Partial<ConversationActions>): ConversationActions => ({
   startBuild: vi.fn(),
   sendBuildMessage: vi.fn(),
-  checkForReply: vi.fn(),
+  refreshBuild: vi.fn(),
   ...overrides,
 });
 
-describe("runSend", () => {
-  it("a rejected call (network failure, aborted dispatch) clears typing, restores the draft and shows a retryable message", async () => {
-    const h = harness();
-    h.dispatch({ type: "sent", text: "A soil sensor", at: AT });
-
-    const result = await runSend(null, "A soil sensor", actions({ startBuild: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch);
-
-    expect(result).toBeNull();
-    expect(h.state).toMatchObject({ typing: false, error: CONNECTION_MESSAGE, draft: "A soil sensor", messages: [] });
+describe("mergeMessages", () => {
+  it("is unique by id, so a replayed transcript or event adds nothing", () => {
+    const current = [msg("m1", "user", "hi"), msg("m2", "assistant", "hello", { created_at: LATER })];
+    expect(mergeMessages(current, current)).toEqual(current);
   });
 
-  it("an { ok: false } result shows the server's message and also restores the draft", async () => {
-    const h = harness({ buildId: "bld_1", messages: [reply("m1", "user", "hi"), reply("m2", "assistant", "hello")] });
-    h.dispatch({ type: "sent", text: "one bed", at: AT });
-
-    await runSend("bld_1", "one bed", actions({ sendBuildMessage: vi.fn().mockResolvedValue({ ok: false, message: "We can’t reach the service right now." }) }), h.dispatch);
-
-    expect(h.state).toMatchObject({ typing: false, error: "We can’t reach the service right now.", draft: "one bed", awaitingReply: false });
-    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  it("replaces the optimistic copy with gateway's message carrying the same client_message_id", () => {
+    const local = msg(`local-${ID_1}`, "user", "one bed", { client_message_id: ID_1, created_at: LATER });
+    const merged = mergeMessages([msg("m1", "user", "hi"), local], [msg("m3", "user", "one bed", { client_message_id: ID_1, created_at: LATER })]);
+    expect(merged.map((m) => m.id)).toEqual(["m1", "m3"]);
   });
 
-  it("keeps a newer draft typed while the send was pending", async () => {
-    const h = harness();
-    h.dispatch({ type: "sent", text: "first", at: AT });
-    h.dispatch({ type: "draft", text: "second thought" });
-    await runSend(null, "first", actions({ startBuild: vi.fn().mockRejectedValue(new Error("x")) }), h.dispatch);
-    expect(h.state.draft).toBe("second thought");
-  });
-
-  it("a reply that hasn't arrived keeps the sent message and offers to check again, not to resend", async () => {
-    const pending = { buildId: "bld_1", messages: [reply("m1", "user", "hi")], ready: null };
-    const h = harness();
-    h.dispatch({ type: "sent", text: "hi", at: AT });
-
-    const result = await runSend(null, "hi", actions({ startBuild: vi.fn().mockResolvedValue({ ok: false, message: "Taking longer than usual.", awaitingReply: pending }) }), h.dispatch);
-
-    expect(result).toEqual(pending);
-    expect(h.state).toMatchObject({ typing: false, awaitingReply: true, draft: "", buildId: "bld_1", error: "Taking longer than usual." });
-    expect(h.state.messages).toEqual(pending.messages);
-  });
-
-  it("passes the reply through on success", async () => {
-    const transcript = { buildId: "bld_1", messages: [reply("m1", "user", "hi"), reply("m2", "assistant", "hello")], ready: null };
-    const h = harness();
-    h.dispatch({ type: "sent", text: "hi", at: AT });
-    await expect(runSend(null, "hi", actions({ startBuild: vi.fn().mockResolvedValue({ ok: true, data: transcript }) }), h.dispatch)).resolves.toEqual(transcript);
-    expect(h.state).toMatchObject({ typing: false, error: null, messages: transcript.messages });
+  it("orders confirmed messages by time and keeps unconfirmed ones last", () => {
+    const local = msg(`local-${ID_2}`, "user", "pending", { client_message_id: ID_2 });
+    const merged = mergeMessages([local], [msg("m2", "assistant", "later", { created_at: LATER }), msg("m1", "user", "first")]);
+    expect(merged.map((m) => m.id)).toEqual(["m1", "m2", `local-${ID_2}`]);
   });
 });
 
-describe("runCheck", () => {
-  const pending = { buildId: "bld_1", messages: [reply("m1", "user", "hi")], ready: null };
-
-  it("a rejected check keeps the check-again state and shows the connection message", async () => {
+describe("conversationReducer", () => {
+  it("a send shows the message at once, clears the draft and starts typing", () => {
     const h = harness();
-    h.dispatch({ type: "stalled", message: "Taking longer than usual.", transcript: pending });
-    await runCheck("bld_1", 0, actions({ checkForReply: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch);
-    expect(h.state).toMatchObject({ typing: false, awaitingReply: true, error: CONNECTION_MESSAGE });
-    expect(h.state.messages).toEqual(pending.messages);
+    h.dispatch({ type: "draft", text: "A soil sensor" });
+    h.dispatch({ type: "sent", text: "A soil sensor", at: AT, clientMessageId: ID_1 });
+    expect(h.state).toMatchObject({ draft: "", sending: true, error: null });
+    expect(h.state.messages).toEqual([{ id: `local-${ID_1}`, role: "user", text: "A soil sensor", created_at: AT, client_message_id: ID_1 }]);
+    expect(isTyping(h.state)).toBe(true);
   });
 
-  it("a successful check shows the reply", async () => {
+  it("the created build replaces the optimistic ask and brings its status, spec and candidates", () => {
     const h = harness();
-    h.dispatch({ type: "stalled", message: "Taking longer than usual.", transcript: pending });
-    const replied = { ...pending, messages: [...pending.messages, reply("m2", "assistant", "hello")] };
-    await runCheck("bld_1", 0, actions({ checkForReply: vi.fn().mockResolvedValue({ ok: true, data: replied }) }), h.dispatch);
-    expect(h.state).toMatchObject({ awaitingReply: false, error: null, messages: replied.messages });
+    h.dispatch({ type: "sent", text: "A soil sensor", at: AT, clientMessageId: ID_1 });
+    const spec = { settled: false };
+    h.dispatch({ type: "created", transcript: transcript([msg("m1", "user", "A soil sensor", { client_message_id: ID_1 })], { spec, specVersion: 1 }) });
+    expect(h.state).toMatchObject({ buildId: "bld_1", sending: false, status: "asking", spec, specVersion: 1 });
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1"]);
+    expect(isTyping(h.state)).toBe(true);
+  });
+
+  it("the reply arrives on the stream: typing ends; replaying it changes nothing", () => {
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi")] });
+    const reply = msg("m2", "assistant", "Good brief.", { created_at: LATER });
+    h.dispatch({ type: "messageCreated", message: reply });
+    h.dispatch({ type: "messageCreated", message: reply });
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(isTyping(h.state)).toBe(false);
+  });
+
+  it("an accepted send replaces its bubble even if the stream delivered it first", () => {
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi"), msg("m2", "assistant", "hello")] });
+    h.dispatch({ type: "sent", text: "one bed", at: LATER, clientMessageId: ID_2 });
+    const confirmed = msg("m3", "user", "one bed", { client_message_id: ID_2, created_at: LATER });
+    h.dispatch({ type: "messageCreated", message: confirmed });
+    h.dispatch({ type: "accepted", message: confirmed });
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(h.state.sending).toBe(false);
+  });
+
+  it("a failed send drops the bubble, gives the text back, and remembers its id for a retry of the same text", () => {
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi"), msg("m2", "assistant", "hello")] });
+    h.dispatch({ type: "sent", text: "one bed", at: LATER, clientMessageId: ID_2 });
+    h.dispatch({ type: "failed", message: "offline", text: "one bed", clientMessageId: ID_2 });
+    expect(h.state).toMatchObject({ sending: false, error: "offline", draft: "one bed", unsent: { text: "one bed", clientMessageId: ID_2 } });
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(clientMessageIdFor(h.state.unsent, "one bed", () => ID_1)).toBe(ID_2);
+    expect(clientMessageIdFor(h.state.unsent, "two beds", () => ID_1)).toBe(ID_1);
+  });
+
+  it("keeps a newer draft typed while the send was pending", () => {
+    const h = harness();
+    h.dispatch({ type: "sent", text: "first", at: AT, clientMessageId: ID_1 });
+    h.dispatch({ type: "draft", text: "second thought" });
+    h.dispatch({ type: "failed", message: "x", text: "first", clientMessageId: ID_1 });
+    expect(h.state.draft).toBe("second thought");
+  });
+
+  it("overdue stops the dots and offers to check; a reply clears it; checking starts waiting again", () => {
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi")] });
+    h.dispatch({ type: "overdue", message: OVERDUE_MESSAGE });
+    expect(h.state).toMatchObject({ overdue: true, error: OVERDUE_MESSAGE });
+    expect(isTyping(h.state)).toBe(false);
+
+    h.dispatch({ type: "checking" });
+    expect(h.state).toMatchObject({ overdue: false, error: null });
+    expect(isTyping(h.state)).toBe(true);
+
+    h.dispatch({ type: "overdue", message: OVERDUE_MESSAGE });
+    h.dispatch({ type: "refreshed", transcript: transcript([msg("m1", "user", "hi"), msg("m2", "assistant", "hello", { created_at: LATER })]) });
+    expect(h.state).toMatchObject({ overdue: false, error: null });
+  });
+
+  it("overdue is ignored when nothing is awaiting a reply; a failed check keeps the offer", () => {
+    const answered = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi"), msg("m2", "assistant", "hello")] });
+    answered.dispatch({ type: "overdue", message: OVERDUE_MESSAGE });
+    expect(answered.state.overdue).toBe(false);
+
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi")] });
+    h.dispatch({ type: "checking" });
+    h.dispatch({ type: "refreshFailed", message: "We couldn’t load the latest reply." });
+    expect(h.state).toMatchObject({ overdue: true, refreshError: "We couldn’t load the latest reply." });
+  });
+
+  it("build.updated records the observed version without claiming the details were hydrated", () => {
+    const h = harness({ buildId: "bld_1" });
+    h.dispatch({ type: "buildUpdated", status: "specifying", specVersion: 3 });
+    expect(h.state).toMatchObject({ status: "specifying", observedSpecVersion: 3, specVersion: null, detailsStale: true });
+  });
+});
+
+describe("runSend", () => {
+  it("the first message creates the build and returns its transcript", async () => {
+    const created = transcript([msg("m1", "user", "hi", { client_message_id: ID_1 })]);
+    const h = harness();
+    h.dispatch({ type: "sent", text: "hi", at: AT, clientMessageId: ID_1 });
+    const start = vi.fn().mockResolvedValue({ ok: true, data: created });
+    await expect(runSend(null, "hi", ID_1, actions({ startBuild: start }), h.dispatch)).resolves.toEqual(created);
+    expect(start).toHaveBeenCalledWith("hi", ID_1);
+    expect(h.state).toMatchObject({ buildId: "bld_1", sending: false });
+  });
+
+  it("a rejected call (network failure, aborted dispatch) restores the draft and shows a retryable message", async () => {
+    const h = harness();
+    h.dispatch({ type: "sent", text: "A soil sensor", at: AT, clientMessageId: ID_1 });
+    await expect(runSend(null, "A soil sensor", ID_1, actions({ startBuild: vi.fn().mockRejectedValue(new TypeError("Failed to fetch")) }), h.dispatch)).resolves.toBeNull();
+    expect(h.state).toMatchObject({ sending: false, error: CONNECTION_MESSAGE, draft: "A soil sensor", messages: [] });
+  });
+
+  it("a later message is accepted with gateway's copy; an { ok: false } result restores the draft", async () => {
+    const h = harness({ buildId: "bld_1", messages: [msg("m1", "user", "hi"), msg("m2", "assistant", "hello")] });
+    h.dispatch({ type: "sent", text: "one bed", at: LATER, clientMessageId: ID_2 });
+    const confirmed = msg("m3", "user", "one bed", { client_message_id: ID_2, created_at: LATER });
+    const send = vi.fn().mockResolvedValue({ ok: true, data: { message: confirmed } });
+    await runSend("bld_1", "one bed", ID_2, actions({ sendBuildMessage: send }), h.dispatch);
+    expect(send).toHaveBeenCalledWith("bld_1", "one bed", ID_2);
+    expect(h.state.messages.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+
+    h.dispatch({ type: "messageCreated", message: msg("m4", "assistant", "ok", { created_at: LATER }) });
+    h.dispatch({ type: "sent", text: "two", at: LATER, clientMessageId: ID_1 });
+    await runSend("bld_1", "two", ID_1, actions({ sendBuildMessage: vi.fn().mockResolvedValue({ ok: false, message: "Still working on the last reply." }) }), h.dispatch);
+    expect(h.state).toMatchObject({ error: "Still working on the last reply.", draft: "two" });
+  });
+});
+
+describe("SpecPanel", () => {
+  const SPEC = {
+    sense: { what: ["soil moisture"], interval_s: 600 },
+    act: { what: ["water pump"] },
+    environment: { location: "indoor greenhouse", flags: ["humid"] },
+    connect: { transport: "wifi", experience: ["phone alerts"] },
+    power: { source: "unknown" },
+    experience: { alerts: ["soil too dry"], dashboard: true },
+    capabilities: ["read.soil_moisture_pct"],
+    assumptions: ["Wi-Fi reaches the greenhouse"],
+    open_questions: [{ field: "power.source", question: "Is there a USB power outlet near the plants, or should it run on battery?" }],
+    settled: false,
+  };
+  const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
+  it("shows what intake has understood, what's still open, and the assumptions", () => {
+    const html = text(renderToStaticMarkup(<SpecPanel spec={SPEC} status="asking" />));
+    expect(html).toContain("Spec so far");
+    expect(html).toContain("Asking a few questions");
+    expect(html).toContain("Senses soil moisture (every 10 min)");
+    expect(html).toContain("Where indoor greenhouse (humid)");
+    expect(html).toContain("Connects Wi-Fi, phone alerts");
+    expect(html).toContain("Power Not decided yet");
+    expect(html).toContain("Still to decide Is there a USB power outlet near the plants, or should it run on battery?");
+    expect(html).toContain("Assuming Wi-Fi reaches the greenhouse");
+  });
+
+  it("leaves out fields that don't match the draft shape, and renders nothing for no spec or an empty one", () => {
+    const html = text(renderToStaticMarkup(<SpecPanel spec={{ ...SPEC, sense: "soil", connect: { transport: 7 }, settled: true }} status={null} />));
+    expect(html).toContain("✓ Spec settled");
+    expect(html).not.toContain("Senses");
+    expect(html).toContain("Where indoor greenhouse");
+    expect(renderToStaticMarkup(<SpecPanel spec={null} status="asking" />)).toBe("");
+    expect(renderToStaticMarkup(<SpecPanel spec={{ settled: false }} status="asking" />)).toBe("");
+  });
+});
+
+describe("CandidateParts", () => {
+  it("says it's a capability match, not a plan, and lists each part with what it matched", () => {
+    const part = {
+      id: "P-005",
+      version: "1.0.0",
+      name: "Capacitive Soil Moisture Probe (DFRobot SEN0193)",
+      category: "physical",
+      status: "draft",
+      successor: null,
+      interface: "adc",
+      capabilities: ["read.soil_moisture_pct"],
+      unit_cost_usd: 5.9,
+      matched_capabilities: ["read.soil_moisture_pct"],
+    } as unknown as CandidatePart;
+    const html = renderToStaticMarkup(<CandidateParts parts={[part]} />);
+    expect(html).toContain("Not a final plan yet");
+    expect(html).toContain("Capacitive Soil Moisture Probe (DFRobot SEN0193)");
+    expect(html).toContain("read.soil_moisture_pct");
+    expect(html).toContain("$5.90");
+    expect(renderToStaticMarkup(<CandidateParts parts={[]} />)).toBe("");
   });
 });
 

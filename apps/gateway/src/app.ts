@@ -10,6 +10,7 @@ import {
   summarizePart,
 } from "@albusforge/schema";
 import Fastify, { type FastifyInstance } from "fastify";
+import { type AuthOptions, registerAuthRoutes } from "./auth-routes";
 import { type ChatOptions, registerBuildRoutes } from "./build-routes";
 import { isDatabaseUnavailable } from "./db-errors";
 import { describeError } from "./db-log";
@@ -37,6 +38,8 @@ export interface AppOptions {
    * exercise health and parts leave it out, and the build routes stay 501.
    */
   chat?: ChatOptions;
+  /** The sign-in routes (ADR 0008). Left out, they stay 501 like the build routes. */
+  auth?: AuthOptions;
 }
 
 const HEALTH_PATHS = new Set(["/healthz", "/readyz"]);
@@ -56,7 +59,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -172,6 +175,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   });
 
   if (chat) registerBuildRoutes(app, { parts, log, chat });
+  if (auth) registerAuthRoutes(app, { log, auth });
 
   return app;
 }

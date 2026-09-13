@@ -11,6 +11,14 @@ import { createSessionClient } from "@/lib/api/session-client";
  */
 
 const BUDGET_MS = 300;
+/**
+ * Wall-clock slack past the deadline for a whole action: the POST, the held
+ * read, the abort and the check-again read, all over real sockets. CI runs
+ * this alongside typecheck, lint and build, and one run took 829 ms. Without
+ * the deadline a held read would hang until the test timeout (5 s), so an
+ * upper bound this wide still proves the deadline fired.
+ */
+const RUNNER_SLACK_MS = 1_200;
 
 vi.mock("@/lib/api/server", () => ({ sessionClient: vi.fn() }));
 vi.mock("@/lib/action-errors", () => ({
@@ -132,7 +140,7 @@ describe("build actions when gateway holds the transcript read open", () => {
     const { result, ms } = await timed(() => startBuild("A soil sensor"));
 
     expect(ms).toBeGreaterThanOrEqual(BUDGET_MS - 20);
-    expect(ms).toBeLessThan(BUDGET_MS + 400);
+    expect(ms).toBeLessThan(BUDGET_MS + RUNNER_SLACK_MS);
     expect(result).toMatchObject({
       ok: false,
       message: "Your message was sent, but the reply is taking longer than usual.",
@@ -149,7 +157,7 @@ describe("build actions when gateway holds the transcript read open", () => {
     freeReads = 1;
     const { result, ms } = await timed(() => sendBuildMessage("b1", "One bed"));
 
-    expect(ms).toBeLessThan(BUDGET_MS + 400);
+    expect(ms).toBeLessThan(BUDGET_MS + RUNNER_SLACK_MS);
     expect(result).toMatchObject({ ok: false, awaitingReply: { buildId: "b1" } });
     const shown = (result as { awaitingReply: { messages: Array<{ role: string; text: string }> } }).awaitingReply.messages;
     expect(shown.map((m) => [m.role, m.text])).toEqual([
@@ -177,7 +185,7 @@ describe("build actions when gateway holds the transcript read open", () => {
   it("checkForReply that hangs again stays in check-again without resending", async () => {
     hold = "body";
     const { result, ms } = await timed(() => checkForReply("b1", 1));
-    expect(ms).toBeLessThan(BUDGET_MS + 400);
+    expect(ms).toBeLessThan(BUDGET_MS + RUNNER_SLACK_MS);
     expect(result).toEqual({ ok: false, message: "Your message was sent, but the reply is taking longer than usual." });
     expect(actionFailure).not.toHaveBeenCalled();
     expect(posts()).toBe(0);

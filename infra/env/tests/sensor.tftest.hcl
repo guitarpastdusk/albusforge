@@ -41,6 +41,22 @@ run "safe_initial_rollout" {
   }
 }
 
+run "bounded_database_reservation" {
+  command = plan
+  assert {
+    condition     = local.settings.api_max_instances * 5 * 4 + local.settings.sensor_max_instances * (local.settings.cloudlink_pool_max + local.settings.ask_pool_max) * 2 <= (terraform.workspace == "staging" ? 28 : 236)
+    error_message = "Two-revision service pool reservation exceeds the reviewed environment budget."
+  }
+  assert {
+    condition     = tonumber(local.ask_env.ASK_MAX_CONCURRENCY) <= tonumber(local.ask_env.DB_POOL_MAX)
+    error_message = "Ask admission must fit its configured pool."
+  }
+  assert {
+    condition     = terraform.workspace != "staging" || (local.settings.rollup_timeout == "120s" && local.settings.telemetry_max_retries == 0)
+    error_message = "Small staging SQL requires bounded rollup duration and no automatic task retries."
+  }
+}
+
 run "narration_requires_model" {
   command = plan
   variables { ask_model_enabled = true }

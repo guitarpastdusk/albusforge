@@ -94,3 +94,7 @@ After that combined run, infrastructure `bcc0222` tightened only the release gua
 ## Remaining independent work
 
 Durable event delivery and tenant-scoped SSE are not supplied by the scheduled SQL jobs. The merged live UI's reconnect behavior does not prove a backend telemetry stream. Baselines, anomaly detectors, model-written anomaly narratives, Signals/Inbox, persistent conversations, automated production provisioning/token rotation, and firmware/hardware acceptance remain separate items. The first stored-data chatbot does not require completing those items.
+
+## Authorized deployment preparation, 2026-09-13
+
+The user subsequently authorized staged deployment and production promotion after acceptance. SQL probes through existing VPC-attached registry-load executions confirmed connection limits of 50 (staging) and 400 (prod), including three superuser-reserved slots each. Staging service/pool caps are reduced before provisioning; planned combined reservations are 40/50 and 266/400 respectively, including overlapping revisions/jobs and observer/reserved slots. Current low utilization is an idle baseline, not load evidence. See SENSOR-INFRA for limits and rollout controls. Fresh plans, actual migrations/images, schedules and acceptance evidence must be recorded as execution proceeds; this preparation does not claim deployment.

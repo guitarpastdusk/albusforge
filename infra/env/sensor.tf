@@ -9,14 +9,14 @@ module "cloudlink" {
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
   public_invoker      = true
   min_instances       = local.env == "prod" ? 1 : 0
-  max_instances       = 2
-  request_concurrency = 8
+  max_instances       = local.settings.sensor_max_instances
+  request_concurrency = local.settings.cloudlink_concurrency
   request_timeout     = "60s"
   deletion_protection = local.settings.deletion_protection
   env = merge(local.db_env, {
     DB_USER               = local.db_app_role
-    DB_POOL_MAX           = "5"
-    INGEST_MAX_INFLIGHT   = "8"
+    DB_POOL_MAX           = tostring(local.settings.cloudlink_pool_max)
+    INGEST_MAX_INFLIGHT   = tostring(local.settings.cloudlink_concurrency)
     DB_CONNECT_TIMEOUT_MS = "5000"
     DB_QUERY_TIMEOUT_MS   = "10000"
     DB_IDLE_TIMEOUT_MS    = "30000"
@@ -28,8 +28,8 @@ module "cloudlink" {
 locals {
   ask_env = merge(local.db_env, {
     DB_USER                   = local.db_app_role
-    DB_POOL_MAX               = "4"
-    ASK_MAX_CONCURRENCY       = "4"
+    DB_POOL_MAX               = tostring(local.settings.ask_pool_max)
+    ASK_MAX_CONCURRENCY       = tostring(local.settings.ask_pool_max)
     ASK_DEADLINE_MS           = "20000"
     ASK_MAX_OUTPUT_TOKENS     = "512"
     ASK_USER_DAILY_REQUESTS   = "20"
@@ -51,8 +51,8 @@ module "ask" {
   ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
   public_invoker      = false
   min_instances       = 0
-  max_instances       = 2
-  request_concurrency = 4
+  max_instances       = local.settings.sensor_max_instances
+  request_concurrency = local.settings.ask_pool_max
   request_timeout     = "30s"
   deletion_protection = local.settings.deletion_protection
   env                 = local.ask_env
@@ -84,8 +84,8 @@ module "telemetry_jobs" {
   name                = each.key
   network             = module.network.network_id
   subnetwork          = module.network.subnet_id
-  timeout             = "600s"
-  max_retries         = 1
+  timeout             = each.value.owner ? "600s" : local.settings.rollup_timeout
+  max_retries         = local.settings.telemetry_max_retries
   deletion_protection = local.settings.deletion_protection
   env = merge(local.db_env, {
     DB_USER                = each.value.owner ? module.sql.migrate_user : local.db_app_role

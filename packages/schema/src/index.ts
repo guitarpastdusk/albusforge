@@ -9,4 +9,5 @@ export * from "./listings";
 export * from "./usage";
 export * from "./routes";
 export * from "./part";
+export * from "./parts";
 export * from "./connector";

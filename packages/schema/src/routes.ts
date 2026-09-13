@@ -65,6 +65,13 @@ export const routes = {
     remix: byId("POST", "/v1/listings/:id/remix"),
   },
 
+  parts: {
+    /** Query PartsQuery → PartList. */
+    list: fixed("GET", "/v1/parts"),
+    /** Query PartQuery → PartDetail | 404. */
+    get: byId("GET", "/v1/parts/:id"),
+  },
+
   /** The active tenant's current period. */
   usage: fixed("GET", "/v1/usage"),
 } as const;

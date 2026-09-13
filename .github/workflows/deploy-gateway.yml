@@ -1,0 +1,301 @@
+# Build gateway and the db-jobs image once, run the database jobs with that
+# image, then deploy gateway, all in staging. Prod is never deployed from here:
+# promote the same digests with promote-gateway.yml, dispatched by hand.
+# ARCHITECTURE.md §12.3 "never build twice", §16 (M1); docs/adr/0001, 0005.
+#
+# Order, and why:
+#   1. db-migrate     packages/db migrations and the app role, as albus_migrate
+#   2. registry-load  registry/ into registry.parts, as albus_app
+#   3. gateway        only once the schema and the parts it reads exist
+# Each job is updated by digest and executed with --wait, so a failed migration
+# stops the run before gateway changes.
+name: deploy-gateway
+
+on:
+  push:
+    branches: [main]
+    # Everything that changes either image or how they deploy, plus this file.
+    paths:
+      - apps/gateway/**
+      - packages/**
+      - registry/**
+      - docker/db-jobs.Dockerfile
+      - docker/db-jobs-entrypoint.sh
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+      - tsconfig*.json
+      - .dockerignore
+      - .github/scripts/**
+      - .github/workflows/deploy-gateway.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: gateway
+  # The image both jobs run, and the jobs, in the order they execute. Not named
+  # JOBS or IMAGE: the scripts read those, and the service steps must not see them.
+  JOBS_IMAGE: db-jobs
+  JOB_NAMES: db-migrate registry-load
+  PROJECT: albusforge-staging
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+  # The service account this workflow deploys as (ADR 0001).
+  DEPLOYER: deploy-staging@albusforge-ci.iam.gserviceaccount.com
+
+jobs:
+  staging:
+    # workflow_dispatch can target any branch; only main deploys.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # WIF trust is bound to the GitHub environment, not the branch (ADR 0001).
+    environment: staging
+    # Gateway deploys never overlap. The group is not deploy-web's: GitHub keeps
+    # one pending run per group across workflows, so sharing it would let a
+    # queued gateway run silently replace a queued web run, or the reverse. The
+    # freshness check below keeps runs in commit order.
+    concurrency:
+      group: deploy-staging-gateway
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Full history for the freshness check's ancestry test.
+          fetch-depth: 0
+          # Nothing after checkout needs git credentials.
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # google-github-actions/auth only writes a credentials file; the token
+      # exchange and impersonation happen on the first gcloud call. Fail here,
+      # clearly, if this job can't act as the deployer.
+      - name: Verify GCP credentials
+        run: |
+          gcloud auth print-access-token >/dev/null \
+            || { echo "::error::Could not get credentials for ${DEPLOYER} through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
+
+      # gcloud run deploy creates a missing service, and deploy-staging is
+      # allowed to. Services and jobs come only from Terraform (ADR 0005): fail
+      # before building if infra/env hasn't created them. The jobs are updated
+      # with `gcloud run jobs update`, which can't create one, but the check
+      # still runs first so nothing is built for a half-provisioned environment.
+      - name: Require the Terraform-managed service and jobs
+        run: |
+          if ! gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
+              --format='value(metadata.name)' >/dev/null; then
+            echo "::error::Could not confirm Cloud Run service ${SERVICE} exists in ${PROJECT}; see the gcloud error above. If it's missing, apply infra/env first. CI never creates services (ADR 0005)."
+            exit 1
+          fi
+          for job in ${JOB_NAMES}; do
+            if ! gcloud run jobs describe "${job}" --project "${PROJECT}" --region "${REGION}" \
+                --format='value(metadata.name)' >/dev/null; then
+              echo "::error::Could not confirm Cloud Run job ${job} exists in ${PROJECT}; see the gcloud error above. If it's missing, apply infra/env first. CI never creates jobs (ADR 0005)."
+              exit 1
+            fi
+          done
+
+      # Inside the concurrency lock, compare with what staging actually runs: the
+      # revision serving gateway's traffic, and each job's latest successful
+      # execution. An older or diverged commit anywhere is refused before
+      # anything is built. Skip only if all three already run this commit.
+      - name: Check staging freshness
+        id: fresh
+        run: |
+          service="$(bash .github/scripts/staging-freshness.sh)"
+          jobs="$(JOBS="${JOB_NAMES}" IMAGE="${JOBS_IMAGE}" bash .github/scripts/staging-freshness.sh)"
+          echo "service: ${service}, jobs: ${jobs}"
+          if [ "${service}" = action=skip ] && [ "${jobs}" = action=skip ]; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=deploy" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      # Tags are immutable, so a re-run for the same commit can't push again.
+      # Reuse whatever an earlier attempt pushed. A failed lookup means "not
+      # pushed yet" only if the repository itself is reachable; any other
+      # failure stops the job instead of building into an immutable-tag error.
+      - name: Look for existing images for this commit
+        id: existing
+        run: |
+          lookup() { # lookup IMAGE OUTPUT
+            local digest
+            if digest="$(gcloud artifacts docker images describe "${REPO}/$1:${GITHUB_SHA}" \
+                --format='value(image_summary.digest)' 2>"${RUNNER_TEMP}/describe.err")"; then
+              echo "$2=${digest}" >> "$GITHUB_OUTPUT"
+              echo "Reusing ${REPO}/$1:${GITHUB_SHA} (${digest})"
+            elif gcloud artifacts repositories describe albusforge \
+                --project albusforge-ci --location "${REGION}" --format='value(name)' >/dev/null; then
+              echo "$2=" >> "$GITHUB_OUTPUT"
+              echo "No $1 image for ${GITHUB_SHA} yet; building."
+            else
+              cat "${RUNNER_TEMP}/describe.err" >&2
+              echo "::error::Could not reach Artifact Registry to check for an existing image; not building."
+              exit 1
+            fi
+          }
+          lookup "${SERVICE}" gateway
+          lookup "${JOBS_IMAGE}" jobs
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: steps.existing.outputs.gateway == '' || steps.existing.outputs.jobs == ''
+
+      - name: Build and push gateway
+        id: build-gateway
+        if: steps.existing.outputs.gateway == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REPO }}/${{ env.SERVICE }}:${{ github.sha }}
+          # No attestation manifests: the digest must be the single-platform
+          # image manifest that Cloud Run deploys.
+          provenance: false
+          sbom: false
+
+      - name: Build and push db-jobs
+        id: build-jobs
+        if: steps.existing.outputs.jobs == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/db-jobs.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REPO }}/${{ env.JOBS_IMAGE }}:${{ github.sha }}
+          provenance: false
+          sbom: false
+
+      - name: Resolve digests
+        id: digest
+        env:
+          GATEWAY_EXISTING: ${{ steps.existing.outputs.gateway }}
+          GATEWAY_BUILT: ${{ steps.build-gateway.outputs.digest }}
+          JOBS_EXISTING: ${{ steps.existing.outputs.jobs }}
+          JOBS_BUILT: ${{ steps.build-jobs.outputs.digest }}
+        run: |
+          gateway="${GATEWAY_EXISTING:-$GATEWAY_BUILT}"
+          jobs="${JOBS_EXISTING:-$JOBS_BUILT}"
+          for pair in "gateway=${gateway}" "jobs=${jobs}"; do
+            if ! [[ "${pair#*=}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::No valid ${pair%%=*} image digest (gateway existing='${GATEWAY_EXISTING}' built='${GATEWAY_BUILT}', jobs existing='${JOBS_EXISTING}' built='${JOBS_BUILT}')"
+              exit 1
+            fi
+          done
+          echo "gateway=${gateway}" >> "$GITHUB_OUTPUT"
+          echo "jobs=${jobs}" >> "$GITHUB_OUTPUT"
+
+      # Image only: Terraform owns env vars, secrets, command and everything
+      # else (ADR 0005). `jobs update` never creates a job. The entrypoint picks
+      # the task from the job's name (docker/db-jobs-entrypoint.sh).
+      - name: Run db-migrate
+        if: steps.fresh.outputs.action == 'deploy'
+        env:
+          DIGEST: ${{ steps.digest.outputs.jobs }}
+        run: |
+          gcloud run jobs update db-migrate \
+            --image "${REPO}/${JOBS_IMAGE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          gcloud run jobs execute db-migrate \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --wait
+
+      - name: Run registry-load
+        if: steps.fresh.outputs.action == 'deploy'
+        env:
+          DIGEST: ${{ steps.digest.outputs.jobs }}
+        run: |
+          gcloud run jobs update registry-load \
+            --image "${REPO}/${JOBS_IMAGE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          gcloud run jobs execute registry-load \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --wait
+
+      # Image only: Terraform owns env vars and everything else (ADR 0005).
+      - name: Deploy gateway to staging
+        if: steps.fresh.outputs.action == 'deploy'
+        env:
+          DIGEST: ${{ steps.digest.outputs.gateway }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+
+      # Runs only if everything above succeeded, or staging already runs this
+      # commit, and each script re-checks for itself: the jobs' latest
+      # successful executions ran exactly the jobs digest, and the revision
+      # serving all of gateway's traffic runs exactly the gateway digest.
+      # promote-gateway refuses any digest without these tags.
+      - name: Mark the db-jobs digest as deployed to staging
+        env:
+          DIGEST: ${{ steps.digest.outputs.jobs }}
+        run: JOBS="${JOB_NAMES}" IMAGE="${JOBS_IMAGE}" bash .github/scripts/mark-staging-deployed.sh "$DIGEST"
+
+      - name: Mark the gateway digest as deployed to staging
+        env:
+          DIGEST: ${{ steps.digest.outputs.gateway }}
+        run: bash .github/scripts/mark-staging-deployed.sh "$DIGEST"
+
+      - name: Summary
+        env:
+          GATEWAY_DIGEST: ${{ steps.digest.outputs.gateway }}
+          JOBS_DIGEST: ${{ steps.digest.outputs.jobs }}
+          ACTION: ${{ steps.fresh.outputs.action }}
+        run: |
+          {
+            if [ "$ACTION" = skip ]; then
+              echo "### Staging already runs this commit"
+            else
+              echo "### Ran db-migrate and registry-load, and deployed gateway to staging"
+            fi
+            echo
+            echo "Commit \`${GITHUB_SHA}\`, both images tagged \`staging-deployed-${GITHUB_SHA}\`"
+            echo
+            echo "- gateway \`${REPO}/${SERVICE}@${GATEWAY_DIGEST}\`"
+            echo "- db-jobs \`${REPO}/${JOBS_IMAGE}@${JOBS_DIGEST}\`"
+            echo
+            echo "To promote, run **promote-gateway** with \`digest\`:"
+            echo
+            echo '```'
+            echo "${GATEWAY_DIGEST}"
+            echo '```'
+            echo
+            echo "and \`jobs_digest\`:"
+            echo
+            echo '```'
+            echo "${JOBS_DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

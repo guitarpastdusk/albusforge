@@ -104,6 +104,118 @@ jobs:
         if: failure()
         run: docker logs web || true
 
+  docker-gateway:
+    # The two images deploy-gateway.yml ships, built on every PR and run the way
+    # the deploy runs them: db-migrate, registry-load (twice, the second a
+    # no-op), then gateway against the loaded database. Nothing is pushed.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # The superuser stands in for albus_migrate, as in docker-compose.yml.
+          POSTGRES_USER: albus_migrate
+          POSTGRES_PASSWORD: migrate-secret
+          POSTGRES_DB: albus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U albus_migrate -d albus"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      DB: -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build gateway image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/gateway/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: gateway:ci
+          provenance: false
+          sbom: false
+
+      - name: Build db-jobs image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/db-jobs.Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: db-jobs:ci
+          provenance: false
+          sbom: false
+
+      # With no database at all: liveness is 200, readiness 503, and the
+      # fallbacks answer JSON.
+      - name: Smoke-test gateway without a database
+        run: |
+          docker run -d --name gateway-nodb -p 8081:8080 \
+            -e DB_HOST=127.0.0.1 -e DB_PORT=1 -e DB_NAME=none -e DB_USER=none -e DB_PASSWORD=none -e DB_SSL=disable \
+            gateway:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8081/healthz; then break; fi
+            sleep 1
+          done
+          check() { # check PATH STATUS
+            code=$(curl -s -o /tmp/body -w '%{http_code}' "http://localhost:8081$1")
+            type=$(curl -s -o /dev/null -w '%{content_type}' "http://localhost:8081$1")
+            echo "$1 $code $type $(head -c 200 /tmp/body)"
+            [ "$code" = "$2" ] && [[ "$type" == application/json* ]] || { docker logs gateway-nodb; exit 1; }
+          }
+          check /healthz 200
+          check /readyz 503
+          check /v1/builds 501
+          check /nope 404
+
+      # CLOUD_RUN_JOB selects the task, as on Cloud Run, where the jobs set no
+      # command or args. --network host reaches the service container.
+      - name: Run db-migrate, then registry-load twice
+        run: |
+          set -o pipefail
+          docker run --rm --network host ${DB} -e CLOUD_RUN_JOB=db-migrate \
+            -e DB_USER=albus_migrate -e DB_PASSWORD=migrate-secret \
+            -e DB_APP_ROLE=albus_app -e DB_APP_PASSWORD=app-secret \
+            db-jobs:ci
+          for run in 1 2; do
+            docker run --rm --network host ${DB} -e CLOUD_RUN_JOB=registry-load \
+              -e DB_USER=albus_app -e DB_PASSWORD=app-secret \
+              db-jobs:ci | tee "/tmp/load-${run}.log"
+          done
+          grep -q '"inserted":\["C-001@' /tmp/load-1.log
+          grep -q '"inserted":\[\],"unchanged":\["C-001@' /tmp/load-2.log
+
+      - name: Smoke-test gateway against the loaded database
+        run: |
+          docker run -d --name gateway --network host ${DB} -e PORT=8080 \
+            -e DB_USER=albus_app -e DB_PASSWORD=app-secret \
+            gateway:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://localhost:8080/healthz; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/readyz
+          count=$(curl -fsS http://localhost:8080/v1/parts | jq '.parts | length')
+          echo "parts: ${count}"
+          [ "$count" = 12 ] || { docker logs gateway; exit 1; }
+          curl -fsS http://localhost:8080/v1/parts/C-001 | jq -e '.part.id == "C-001"'
+
+      - name: Container logs
+        if: failure()
+        run: |
+          docker logs gateway-nodb || true
+          docker logs gateway || true
+
   deploy-scripts:
     # The deploy workflows' freshness and promotion checks, against a stub
     # gcloud and a throwaway git history. No cloud access.

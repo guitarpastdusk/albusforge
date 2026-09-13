@@ -1,0 +1,176 @@
+# Promote gateway and its db-jobs image, both as deploy-gateway.yml successfully
+# ran them in staging. Dispatched by hand with the two digests from that run's
+# job summary; this is the manual promotion step (ARCHITECTURE.md §12.3,
+# docs/adr/0001). It never builds.
+#
+# In prod, in the same order as staging: db-migrate, registry-load, gateway.
+#
+# The plan doesn't allow required reviewers on the prod environment, so the
+# protection is: only a person can dispatch this, and the environment accepts
+# dispatches from main only.
+name: promote-gateway
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "gateway image digest from a successful deploy-gateway staging run's summary (sha256:…)"
+        required: true
+        type: string
+      jobs_digest:
+        description: "db-jobs image digest from the same run's summary (sha256:…)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  SERVICE: gateway
+  JOBS_IMAGE: db-jobs
+  JOB_NAMES: db-migrate registry-load
+  PROJECT: albusforge-prod
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+  # The service account this workflow deploys as (ADR 0001).
+  DEPLOYER: deploy-prod@albusforge-ci.iam.gserviceaccount.com
+
+jobs:
+  prod:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # WIF trust is bound to the GitHub environment (ADR 0001); its branch
+    # policy refuses dispatches from anything but main.
+    environment: prod
+    # One gateway promotion at a time; a running one is never interrupted. Not
+    # promote-web's group, for the reason in deploy-gateway.yml.
+    concurrency:
+      group: deploy-prod-gateway
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Validate before the inputs touch anything else.
+      - name: Validate digests
+        env:
+          DIGEST: ${{ inputs.digest }}
+          JOBS_DIGEST: ${{ inputs.jobs_digest }}
+        run: |
+          for value in "$DIGEST" "$JOBS_DIGEST"; do
+            if ! [[ "$value" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::digest and jobs_digest must match ^sha256:[0-9a-f]{64}\$"
+              exit 1
+            fi
+          done
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Only the scripts are needed; nothing uses git credentials.
+          persist-credentials: false
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # google-github-actions/auth only writes a credentials file; the token
+      # exchange and impersonation happen on the first gcloud call. Fail here,
+      # clearly, if this job can't act as the deployer.
+      - name: Verify GCP credentials
+        run: |
+          gcloud auth print-access-token >/dev/null \
+            || { echo "::error::Could not get credentials for ${DEPLOYER} through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
+
+      # Being in the registry isn't enough: deploy-gateway pushes before it
+      # deploys, so a failed staging run leaves images behind. Require the
+      # staging-deployed-<commit> tag it adds only after success, on both images,
+      # and require that one staging commit deployed them together: a gateway
+      # with another commit's migrations is a pairing staging never ran.
+      - name: Require a successful staging deploy of both images
+        env:
+          DIGEST: ${{ inputs.digest }}
+          JOBS_DIGEST: ${{ inputs.jobs_digest }}
+        run: |
+          bash .github/scripts/require-staging-deployed.sh "$DIGEST"
+          IMAGE="${JOBS_IMAGE}" bash .github/scripts/require-staging-deployed.sh "$JOBS_DIGEST"
+          # A plain assignment, never a pipeline: `x="$(check)"` fails the step
+          # under `bash -e` when the check fails, while `x="$(check | head)"`
+          # takes head's status and carries on. .github/scripts/test/run.sh runs
+          # this step under bash -e to keep it that way.
+          commits="$(bash .github/scripts/require-same-commit.sh "${SERVICE}@${DIGEST}" "${JOBS_IMAGE}@${JOBS_DIGEST}")"
+          echo "Both images were deployed to staging by ${commits%%$'\n'*}."
+
+      # gcloud run deploy creates a missing service, and deploy-prod is allowed
+      # to. Services and jobs come only from Terraform (ADR 0005).
+      - name: Require the Terraform-managed service and jobs
+        run: |
+          if ! gcloud run services describe "${SERVICE}" --project "${PROJECT}" --region "${REGION}" \
+              --format='value(metadata.name)' >/dev/null; then
+            echo "::error::Could not confirm Cloud Run service ${SERVICE} exists in ${PROJECT}; see the gcloud error above. If it's missing, apply infra/env first. CI never creates services (ADR 0005)."
+            exit 1
+          fi
+          for job in ${JOB_NAMES}; do
+            if ! gcloud run jobs describe "${job}" --project "${PROJECT}" --region "${REGION}" \
+                --format='value(metadata.name)' >/dev/null; then
+              echo "::error::Could not confirm Cloud Run job ${job} exists in ${PROJECT}; see the gcloud error above. If it's missing, apply infra/env first. CI never creates jobs (ADR 0005)."
+              exit 1
+            fi
+          done
+
+      # Image only: Terraform owns env vars, secrets, command and everything
+      # else (ADR 0005). `jobs update` never creates a job.
+      - name: Run db-migrate
+        env:
+          DIGEST: ${{ inputs.jobs_digest }}
+        run: |
+          gcloud run jobs update db-migrate \
+            --image "${REPO}/${JOBS_IMAGE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          gcloud run jobs execute db-migrate \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --wait
+
+      - name: Run registry-load
+        env:
+          DIGEST: ${{ inputs.jobs_digest }}
+        run: |
+          gcloud run jobs update registry-load \
+            --image "${REPO}/${JOBS_IMAGE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          gcloud run jobs execute registry-load \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --wait
+
+      # Image only: Terraform owns env vars and everything else (ADR 0005).
+      - name: Deploy gateway to prod
+        env:
+          DIGEST: ${{ inputs.digest }}
+          JOBS_DIGEST: ${{ inputs.jobs_digest }}
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --image "${REPO}/${SERVICE}@${DIGEST}" \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --quiet
+          {
+            echo "Promoted to prod (dispatched by ${GITHUB_ACTOR}):"
+            echo
+            echo "- gateway \`${REPO}/${SERVICE}@${DIGEST}\`"
+            echo "- db-jobs \`${REPO}/${JOBS_IMAGE}@${JOBS_DIGEST}\`, run as db-migrate then registry-load"
+          } >> "$GITHUB_STEP_SUMMARY"

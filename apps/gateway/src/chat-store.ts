@@ -259,7 +259,13 @@ export function createChatStore(db: Db): ChatStore {
         if (last && last.role === "user" && last.recent) return { kind: "pending", pendingMessageId: last.id };
 
         admit();
-        const [message] = await tx.insert(buildMessages).values({ buildId, role: "user", text, clientMessageId }).returning(messageColumns);
+        // Clock corrections and transactions begun before waiting for the lock
+        // must not put a new question behind an old answer. Leave one microsecond
+        // after the prior user message for intake's reply if it is still running.
+        const [message] = await tx.insert(buildMessages).values({
+          buildId, role: "user", text, clientMessageId,
+          createdAt: sql`greatest(clock_timestamp(), (SELECT max(${buildMessages.createdAt}) + interval '2 microseconds' FROM ${buildMessages} WHERE ${buildMessages.buildId} = ${buildId}))`,
+        }).returning(messageColumns);
         return { kind: "created", message: message! };
       });
     },

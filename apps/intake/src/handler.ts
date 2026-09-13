@@ -102,7 +102,16 @@ const outOfBudget = (cause?: unknown) =>
 
 export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<IntakeTurnResponse | null> {
   const budget = startBudget(deps);
-  const client = await deps.pool.connect();
+  const connecting = deps.pool.connect();
+  let client: pg.PoolClient;
+  try {
+    client = await withinBudget(connecting, budget);
+  } catch (error) {
+    // A pool wait cannot be cancelled. Discard a client that arrives after
+    // this request has stopped waiting rather than leaking the checkout.
+    void connecting.then((lateClient) => lateClient.release(true), () => {});
+    throw error;
+  }
   // Every handle this turn opens on the connection, so the end of the call can
   // fence all of them: work left over from one must never reach the next
   // caller's connection.
@@ -132,10 +141,9 @@ export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: Tra
     // destroying it is also what releases the advisory lock, so a retry finds
     // the build free instead of a noop from a lock nobody is using.
     const cleanups = handles.map((handle) => handle.close({ withinMs: budget.cleanupMs() }));
-    for (const cleanup of cleanups) {
-      await cleanup.catch((error: Error) => {
-        broken ??= error;
-      });
+    // Observe every rejection immediately, even when an earlier cleanup is slow.
+    for (const result of await Promise.allSettled(cleanups)) {
+      if (result.status === "rejected") broken ??= result.reason as Error;
     }
     client.release(broken);
   }
@@ -158,7 +166,7 @@ async function answerWhileUnanswered(
   let passes = 0;
   while (passes < MAX_PASSES) {
     // Another pass means another model call: only with a turn's worth of budget for it.
-    if (budget.remainingMs() <= budget.reserveMs) break;
+    if (budget.remainingMs() <= budget.reserveMs) throw outOfBudget();
     const { rows } = await client.query<{ locked: boolean }>("SELECT pg_try_advisory_lock($1, hashtext($2)) AS locked", [TURN_LOCK_CLASS, buildId]);
     if (!rows[0]?.locked) break;
     let usable = true;

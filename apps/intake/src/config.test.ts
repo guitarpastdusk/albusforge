@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { configFromEnv } from "./config";
+import { INTAKE_TIMEOUT_MS } from "../../gateway/src/intake";
+import { CALLER_ATTEMPT_BUDGET_MS, configFromEnv } from "./config";
 
 const base = {
   DB_HOST: "localhost",
@@ -11,6 +12,13 @@ const base = {
 };
 
 describe("configFromEnv", () => {
+  it("keeps the total budget inside the gateway deadline", () => {
+    expect(CALLER_ATTEMPT_BUDGET_MS).toBe(INTAKE_TIMEOUT_MS);
+    expect(configFromEnv(base).turnBudgetMs).toBe(48_000);
+    expect(configFromEnv({ ...base, TURN_DEADLINE_MS: "46000" }).turnBudgetMs).toBe(49_000);
+    expect(() => configFromEnv({ ...base, TURN_DEADLINE_MS: "46001" })).toThrow(/TURN_DEADLINE_MS/);
+  });
+
   it("applies defaults", () => {
     const config = configFromEnv(base);
     expect(config).toMatchObject({

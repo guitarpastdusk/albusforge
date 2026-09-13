@@ -35,7 +35,7 @@ Request and response schemas are `IntakeTurnRequest` and `IntakeTurnResponse` in
    - after two asking rounds, or once settled, keep none and add an assumption for each question dropped
    - **settled** = at least one capability and no questions kept
    - use the model's reply only if every question it asked survived; otherwise code writes the reply
-6. **Write**, in one transaction: exactly one assistant message, a new `specs` version when the spec changed or questions were asked, and `builds.status`: `asking` with questions, `planning` when settled. The reply's `created_at` is the answered message's plus 1 µs, so each reply sits directly after the message it answers.
+6. **Write**, in one transaction: exactly one assistant message, a new `specs` version when the spec changed or questions were asked, and `builds.status`: `asking` with questions, `planning` when settled. The reply's `created_at` is the answered message's plus 1 µs, so each reply sits directly after the message it answers. Gateway appends each subsequent user message at least 2 µs beyond the prior maximum, even if the database clock moves backward, preserving that reply slot and keeping a new question answerable.
 
 Every failure still writes one assistant message:
 

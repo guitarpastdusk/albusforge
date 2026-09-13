@@ -11,7 +11,7 @@ import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { Spec } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTurnScheduler, IntakeError, type TurnResult } from "../../gateway/src/intake";
@@ -108,7 +108,14 @@ async function newBuild(ask: string, owner: { tenantId?: string } = {}): Promise
 }
 
 async function addUserMessage(buildId: string, text: string): Promise<void> {
-  await handle.db.insert(buildMessages).values({ buildId, role: "user", text });
+  // Match gateway's serialized append, including the slot for intake's reply.
+  await handle.db.transaction(async (tx) => {
+    await tx.select({ id: builds.id }).from(builds).where(eq(builds.id, buildId)).for("update");
+    await tx.insert(buildMessages).values({
+      buildId, role: "user", text,
+      createdAt: sql`greatest(clock_timestamp(), (SELECT max(${buildMessages.createdAt}) + interval '2 microseconds' FROM ${buildMessages} WHERE ${buildMessages.buildId} = ${buildId}))`,
+    });
+  });
 }
 
 const messagesOf = (buildId: string) =>
@@ -121,7 +128,115 @@ const specsOf = (buildId: string) => handle.db.select().from(specs).where(eq(spe
 const callsOf = (buildId: string) => handle.db.select().from(llmCalls).where(eq(llmCalls.buildId, buildId));
 const statusOf = async (buildId: string) => (await handle.db.select({ status: builds.status }).from(builds).where(eq(builds.id, buildId)))[0]?.status;
 
+describe("cleanup rejection handling", () => {
+  it("observes every cleanup failure while another cleanup is still pending", async () => {
+    const buildId = await newBuild("A fridge temperature sensor");
+    let blackhole = false;
+    const lateQueries: string[] = [];
+    const { deps, catalogue } = setup([async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      blackhole = true;
+      return goldenTurn("fridge-monitor", 1);
+    }], { deadlineMs: 300, budgetMs: 380 });
+    await catalogue.get(handle.db);
+    const realClient = await handle.pool.connect();
+    const proxied = new Proxy(realClient, {
+      get(target, property) {
+        if (property === "query") return (...args: unknown[]) => {
+          if (!blackhole) return (target.query as (...args: unknown[]) => unknown).apply(target, args);
+          lateQueries.push(typeof args[0] === "string" ? args[0] : (args[0] as {text: string}).text);
+          // Cleanup promises settle at different times, as independent query timeouts do.
+          return new Promise((_resolve, reject) => setTimeout(() => reject(new Error("Query read timeout")), 110));
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    deps.pool = { connect: async () => proxied } as unknown as pg.Pool;
+    const entries: unknown[] = [];
+    let attempts = 0;
+    let serverDone: Promise<unknown> | undefined;
+    const started = Date.now();
+    const scheduler = createTurnScheduler({
+      timeoutMs: 1500,
+      retryDelayMs: 5,
+      log: (_severity, message, data) => entries.push({ message, ...data }),
+      intake: { turn: async () => {
+        attempts++;
+        if (attempts > 1) return { noop: true };
+        serverDone = handleTurn(deps, buildId);
+        try { return (await serverDone) as TurnResult; }
+        catch { throw new IntakeError("intake answered 503", 503); }
+      } },
+    });
+    scheduler.trigger(buildId);
+    await scheduler.idle();
+    await serverDone?.catch(() => undefined);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(lateQueries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(attempts).toBe(2);
+  });
+
+});
+
+describe("shared response budget", () => {
+  it("bounds pool acquisition and releases a checkout arriving after the response", async () => {
+    const { deps } = setup([], { deadlineMs: 100, budgetMs: 200 });
+    let deliver!: (client: pg.PoolClient) => void;
+    const connecting = new Promise<pg.PoolClient>(resolve => { deliver = resolve; });
+    deps.pool = { connect: () => connecting } as unknown as pg.Pool;
+    const release = vi.fn();
+    const query = vi.fn();
+    let failure: unknown;
+    try { await handleTurn(deps, "00000000-0000-4000-8000-000000000001"); } catch (error) { failure = error; }
+    expect(isDatabaseUnavailable(failure)).toBe(true);
+    deliver({ release, query } as unknown as pg.PoolClient);
+    await connecting;
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledWith(true);
+    expect(query).not.toHaveBeenCalled();
+  });
+  it("does not acknowledge an unanswered second turn as noop when setup consumes its model budget", async () => {
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+    const { deps } = setup([goldenTurn("fridge-monitor", 1), goldenTurn("fridge-monitor", 2)]);
+    expect(await handleTurn(deps, buildId)).toMatchObject({ spec_version: 1 });
+    await addUserMessage(buildId, GOLDEN_ASKS["fridge-monitor"].answer);
+    deps.deadlineMs = 200;
+    deps.budgetMs = 500;
+    const realConnect = deps.pool.connect.bind(deps.pool);
+    deps.pool = { connect: async () => {
+      const client = await realConnect();
+      let first = true;
+      return new Proxy(client, { get(target, property) {
+        if (property === "query") return async (...args: unknown[]) => {
+          if (first) { first = false; await new Promise(resolve => setTimeout(resolve, 250)); }
+          return (target.query as (...args: unknown[]) => unknown).apply(target, args);
+        };
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      } });
+    } } as unknown as pg.Pool;
+    let result: unknown, failure: unknown;
+    try { result = await handleTurn(deps, buildId); } catch (error) { failure = error; }
+    expect(result).toBeUndefined();
+    expect((await messagesOf(buildId)).at(-1)?.role).toBe("user");
+    expect(isDatabaseUnavailable(failure)).toBe(true);
+  });
+
+});
 describe("handleTurn against Postgres", () => {
+  it("answers a second user turn when the database clock trails recorded history", async () => {
+    const { deps } = setup([goldenTurn("fridge-monitor", 1), goldenTurn("fridge-monitor", 2)]);
+    const { ask, answer } = GOLDEN_ASKS["fridge-monitor"];
+    const buildId = await newBuild(ask);
+    await handle.db.update(buildMessages).set({ createdAt: sql`clock_timestamp() + interval '1 minute'` }).where(eq(buildMessages.buildId, buildId));
+    expect(await handleTurn(deps, buildId)).toMatchObject({ spec_version: 1 });
+    await addUserMessage(buildId, answer);
+    expect(await handleTurn(deps, buildId)).toMatchObject({ spec_version: 2, status: "planning" });
+    expect((await messagesOf(buildId)).map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+  });
+
   it("golden fridge monitor: asks, then settles; writes messages, spec versions, status and metered calls", async () => {
     const { deps, provider, lines } = setup([goldenTurn("fridge-monitor", 1), goldenTurn("fridge-monitor", 2)]);
     const { ask, answer } = GOLDEN_ASKS["fridge-monitor"];

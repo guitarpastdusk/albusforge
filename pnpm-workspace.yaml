@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Install scripts are denied unless listed. unrs-resolver's only fetches a
+# fallback binary; the prebuilt optional dependency already covers our platforms.
+allowBuilds:
+  unrs-resolver: false

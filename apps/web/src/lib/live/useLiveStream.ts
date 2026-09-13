@@ -2,8 +2,8 @@
 
 import { DeviceStatusEvent, ReadingEvent, routes, STREAM_EVENTS } from "@albusforge/schema";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
-import { useEventStream } from "@/lib/sse/useEventStream";
+import { useState } from "react";
+import { useEventStream, type StreamState } from "@/lib/sse/useEventStream";
 
 export interface LiveStreamHandlers {
   onReading: (event: ReadingEvent) => void;
@@ -15,32 +15,28 @@ const parse = {
   [STREAM_EVENTS.status]: (data: unknown) => DeviceStatusEvent.safeParse(data).data,
 };
 
-/**
- * The tenant's live stream for a screen: validated `reading` and `status`
- * events to the handlers, and a page refresh on every re-open after the first
- * (a browser reconnect, or the tab coming back), since events sent while no
- * stream was open aren't replayed. Returns whether the stream has opened, for
- * a "live" indicator.
- */
-export function useLiveStream(tenantId: string | null, devices: readonly string[], { onReading, onStatus }: LiveStreamHandlers): boolean {
+/** Validated live events; refresh on every open to close the snapshot/subscription gap. */
+export function useLiveStream(tenantId: string | null, devices: readonly string[], { onReading, onStatus }: LiveStreamHandlers) {
   const router = useRouter();
-  const [live, setLive] = useState(false);
-  const opens = useRef(0);
-  const path = tenantId ? `${routes.tenants.stream.path(tenantId)}?devices=${devices.map(encodeURIComponent).join(",")}` : null;
+  const [connection, setConnection] = useState<{ path: string | null; state: StreamState }>({ path: null, state: "connecting" });
+  const [reconnectKey, setReconnectKey] = useState(0);
+  const path = tenantId && devices.length ? `${routes.tenants.stream.path(tenantId)}?devices=${[...new Set(devices)].sort().map(encodeURIComponent).join(",")}` : null;
 
   useEventStream(path, {
     events: [STREAM_EVENTS.reading, STREAM_EVENTS.status],
     parse,
-    onOpen: () => {
-      setLive(true);
-      if (opens.current > 0) router.refresh();
-      opens.current += 1;
-    },
+    reconnectKey,
+    onState: (state) => setConnection({ path, state }),
+    onOpen: () => router.refresh(),
     onEvent: (type, data) => {
       if (type === STREAM_EVENTS.reading) onReading(data as ReadingEvent);
       else if (type === STREAM_EVENTS.status) onStatus(data as DeviceStatusEvent);
     },
   });
 
-  return live;
+  return {
+    state: connection.path === path ? connection.state : "connecting" as const,
+    retry: () => setReconnectKey((key) => key + 1),
+    refresh: () => router.refresh(),
+  };
 }

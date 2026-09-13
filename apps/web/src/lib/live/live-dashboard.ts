@@ -1,34 +1,34 @@
 import type { DeviceDashboard, DeviceStatusEvent, ReadingEvent, Series } from "@albusforge/schema";
 
-/*
- * Applying stream events to one device's dashboard (CLOUD-PLATFORM.md §6.2).
- * Pure. A reading updates `latest` for its channel and the chart's series:
- * the series is bucketed (1m/1h rollups), so a reading inside the last
- * bucket replaces that point and a later one appends, keeping the window's
- * point count bounded. Events for other devices are ignored.
- */
+import { acceptsValue, laterTime } from "./live-fleet";
 
-const BUCKET_SECONDS: Record<Series["bucket"], number> = { raw: 0, "1m": 60, "1h": 3600 };
-
-/** Points a window holds at the series' bucket; raw series keep what they had plus new points, capped. */
+// Stream samples update latest values and raw series only. Server rollups remain
+// authoritative: one raw sample cannot replace an aggregate. An explicit refresh or reconnect
+// supplies fresh rollups without discarding newer latest values.
+/** Raw series are bounded by their widget window and a hard point cap. */
 const WINDOW_SECONDS = { "1h": 3600, "24h": 86_400, "7d": 7 * 86_400, "30d": 30 * 86_400 } as const;
 const RAW_CAP = 600;
 
 export function applyReadingToDashboard(dashboard: DeviceDashboard, event: ReadingEvent): DeviceDashboard {
   if (event.device_id !== dashboard.device.id) return dashboard;
+  const channel = dashboard.channels.find((c) => c.key === event.channel);
+  if (!channel || !acceptsValue(channel, event.v)) return dashboard;
   const current = dashboard.latest[event.channel];
-  if (current && Date.parse(event.t) < Date.parse(current.t)) return dashboard;
+  if (current && Date.parse(event.t) <= Date.parse(current.t)) return dashboard;
 
   const latest = { ...dashboard.latest, [event.channel]: { v: event.v, t: event.t } };
   const v = event.v;
   const series =
     typeof v === "number"
-      ? dashboard.series.map((s) => (s.channel === event.channel ? appendPoint(s, event.t, v, windowFor(dashboard, event.channel)) : s))
+      ? dashboard.series.map((s) => (s.channel === event.channel && s.bucket === "raw" ? appendPoint(s, event.t, v, windowFor(dashboard, event.channel)) : s))
       : dashboard.series;
   const lastAt = dashboard.device.last_reading_at;
+  const observed = dashboard.device.status_at ?? lastAt;
+  const advancesPresence = !observed || Date.parse(event.t) > Date.parse(observed);
   const device = {
     ...dashboard.device,
-    status: "online" as const,
+    status: advancesPresence ? "online" as const : dashboard.device.status,
+    status_at: advancesPresence ? event.t : dashboard.device.status_at,
     last_reading_at: lastAt && Date.parse(lastAt) > Date.parse(event.t) ? lastAt : event.t,
   };
   return { ...dashboard, device, latest, series };
@@ -36,9 +36,11 @@ export function applyReadingToDashboard(dashboard: DeviceDashboard, event: Readi
 
 export function applyStatusToDashboard(dashboard: DeviceDashboard, event: DeviceStatusEvent): DeviceDashboard {
   if (event.device_id !== dashboard.device.id) return dashboard;
+  const observed = dashboard.device.status_at ?? dashboard.device.last_reading_at;
+  if (observed && Date.parse(event.at) <= Date.parse(observed)) return dashboard;
   return {
     ...dashboard,
-    device: { ...dashboard.device, status: event.status, last_reading_at: event.last_reading_at ?? dashboard.device.last_reading_at },
+    device: { ...dashboard.device, status: event.status, status_at: event.at, last_reading_at: laterTime(dashboard.device.last_reading_at, event.last_reading_at) },
   };
 }
 
@@ -49,17 +51,38 @@ function windowFor(dashboard: DeviceDashboard, channel: string): number {
 
 function appendPoint(series: Series, t: string, v: number, windowSeconds: number): Series {
   const at = Date.parse(t);
-  const bucket = BUCKET_SECONDS[series.bucket];
-  const last = series.points.at(-1);
-  let points: Series["points"];
-  if (last && bucket > 0 && Math.floor(at / 1000 / bucket) === Math.floor(Date.parse(last.t) / 1000 / bucket)) {
-    points = [...series.points.slice(0, -1), { t, v }];
-  } else {
-    points = [...series.points, { t, v }];
-  }
+  let points = [...series.points.filter((point) => Date.parse(point.t) !== at), { t, v }]
+    .sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
   // Drop what fell out of the window; cap raw series so a long-lived tab stays bounded.
-  const from = at - windowSeconds * 1000;
+  const from = Date.parse(points.at(-1)!.t) - windowSeconds * 1000;
   points = points.filter((p) => Date.parse(p.t) >= from);
-  if (bucket === 0 && points.length > RAW_CAP) points = points.slice(points.length - RAW_CAP);
+  if (points.length > RAW_CAP) points = points.slice(points.length - RAW_CAP);
   return { ...series, points };
+}
+
+export function mergeDashboardSnapshot(snapshot: DeviceDashboard, current: DeviceDashboard): DeviceDashboard {
+  if (snapshot.device.id !== current.device.id) return snapshot;
+  let result = snapshot;
+  for (const [channel, reading] of Object.entries(current.latest)) {
+    const incoming = snapshot.latest[channel];
+    if (!incoming || Date.parse(reading.t) > Date.parse(incoming.t)) {
+      result = applyReadingToDashboard(result, { device_id: snapshot.device.id, channel, ...reading });
+    }
+  }
+  result = { ...result, series: result.series.map((series) => {
+    if (series.bucket !== "raw") return series;
+    const old = current.series.find((candidate) => candidate.channel === series.channel && candidate.bucket === "raw");
+    const end = snapshot.series.find((candidate) => candidate.channel === series.channel && candidate.bucket === "raw")?.points.at(-1)?.t;
+    let merged = series;
+    for (const point of old?.points ?? []) {
+      if (!end || Date.parse(point.t) > Date.parse(end)) merged = appendPoint(merged, point.t, point.v, windowFor(result, series.channel));
+    }
+    return merged;
+  }) };
+  const oldAt = current.device.status_at ?? current.device.last_reading_at;
+  const newAt = result.device.status_at ?? result.device.last_reading_at;
+  if (oldAt && (!newAt || Date.parse(oldAt) > Date.parse(newAt))) {
+    result = { ...result, device: { ...result.device, status: current.device.status, status_at: oldAt } };
+  }
+  return { ...result, device: { ...result.device, last_reading_at: laterTime(result.device.last_reading_at, current.device.last_reading_at) } };
 }

@@ -3,7 +3,8 @@
 The Live systems tiles and the device dashboard.
 
 - `LiveFleet` — the Live systems screen (client): the server-rendered `Fleet` plus `reading`/`status` events from the tenant stream (`lib/live`), ages ticking, "· live" in the kicker once the stream is open. Keyed by tenant on the page.
-- `LiveDashboard` — the dashboard's status line, chips and widgets with live values for one device; the rules card and chat are passed through as `below` and `aside`. Keyed by device on the page.
+- `LiveDashboard` — the dashboard's status line, chips and widgets with live values for one device; the rules card and chat are passed through as `below` and `aside`. Keyed by tenant and device on the page.
+- `LiveConnection` — accessible connection status, retry on stream errors and manual refresh. Rapid reading updates are not announced as a whole-page live region.
 - `DeviceTileBody` — the inside of a Live systems tile: name, value with unit, metric and age. A `never_seen` device (or one with no `last_reading_at`) shows "Awaiting first reading" instead of a value and age, and no online pulse.
 - `DeviceStatusHeader` — the dashboard's status line and name: "Online · last reading 40s ago", "Offline · …", or "Awaiting first reading" in muted grey.
 - `DeviceWidgets` — renders the dashboard's widget config in order (PORTAL.md §6): `LineChartCard` for `line_chart` (SVG polyline, dashed threshold on the true scale, current value) and a grid of `StatTile`s for consecutive `stat` widgets. Nothing about which widgets a device has is hard-coded; a widget without a reading says "Awaiting first reading".

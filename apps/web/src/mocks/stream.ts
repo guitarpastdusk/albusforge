@@ -1,4 +1,5 @@
 import { STREAM_EVENTS, type DeviceStatusEvent, type ReadingEvent } from "@albusforge/schema";
+import { liveReadings } from "./live-state";
 import * as data from "./data";
 
 /*
@@ -54,33 +55,46 @@ export function mockTenantStream(tenantId: string, devices: readonly string[], s
   let id = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
 
+  let cleanup = () => {};
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      // Replay: current state on connect, as gateway will from Redis (CLOUD-PLATFORM.md §6.2).
+      let closed = false;
+      const stop = () => {
+        if (closed) return;
+        closed = true;
+        cleanup();
+        controller.close();
+      };
+      cleanup = () => {
+        if (timer) clearInterval(timer);
+        signal.removeEventListener("abort", stop);
+      };
+      if (signal.aborted) { stop(); return; }
+      signal.addEventListener("abort", stop, { once: true });
       const now = new Date().toISOString();
+      const tiles = data.fleet().systems.flatMap((system) => system.devices);
       for (const w of state) {
-        const status: DeviceStatusEvent = { device_id: w.deviceId, status: "online", last_reading_at: now };
+        const status: DeviceStatusEvent = { device_id: w.deviceId, status: "online", at: now, last_reading_at: tiles.find((tile) => tile.id === w.deviceId)!.last_reading_at };
         controller.enqueue(sse(STREAM_EVENTS.status, status, ++id));
       }
       timer = setInterval(() => {
-        state = state.map((w) => step(w));
+        // Slow readers must not build an unbounded queue of synthetic frames.
+        if (closed || (controller.desiredSize ?? 0) <= 0) return;
+        state = state.map((w) => {
+          const current = liveReadings.get(w.deviceId);
+          return step(current && typeof current.v === "number" ? { ...w, value: current.v } : w);
+        });
         const t = new Date().toISOString();
         for (const w of state) {
           const reading: ReadingEvent = { device_id: w.deviceId, channel: w.channel, v: w.value, t };
+          liveReadings.set(w.deviceId, reading);
           controller.enqueue(sse(STREAM_EVENTS.reading, reading, ++id));
         }
+        if (state.length === 0) controller.enqueue(encoder.encode(": heartbeat\n\n"));
       }, intervalMs);
-      signal.addEventListener("abort", () => {
-        if (timer) clearInterval(timer);
-        try {
-          controller.close();
-        } catch {
-          // Already closed.
-        }
-      });
     },
     cancel() {
-      if (timer) clearInterval(timer);
+      cleanup();
     },
   });
 

@@ -25,13 +25,13 @@ export default async function DevicePage({ params }: { params: Promise<{ deviceI
       </Link>
 
       <LiveDashboard
-        key={device.id}
+        key={`${me.tenant.id}:${device.id}`}
         tenantId={me.tenant.id}
         dashboard={dashboard}
         initialNow={now.toISOString()}
         below={
           dashboard.actions || canEdit ? (
-            <ClosedLoopActions key={device.id} deviceId={device.id} actions={dashboard.actions ?? []} lastAction={lastAction} canEdit={canEdit} />
+            <ClosedLoopActions key={`${me.tenant.id}:${device.id}`} deviceId={device.id} actions={dashboard.actions ?? []} lastAction={lastAction} canEdit={canEdit} />
           ) : null
         }
         aside={<DeviceChat deviceId={device.id} greeting={dashboard.greeting ?? `Hi — I’m ${device.name}. Ask me anything about my readings.`} />}

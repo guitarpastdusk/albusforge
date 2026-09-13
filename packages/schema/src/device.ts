@@ -3,7 +3,6 @@ import { Accent, Id, Timestamp } from "./common";
 import { ChatMessage } from "./builds";
 import { Channel, DeviceStatus } from "./fleet";
 
-
 const WidgetBase = z.object({
   id: Id,
   channel: z.string(),
@@ -127,6 +126,7 @@ export const DeviceDashboard = z.object({
     build_id: Id,
     name: z.string(),
     status: DeviceStatus,
+    status_at: Timestamp.optional(),
     /**
      * Null until the first reading: the dashboard is derived and provisioned
      * before the device is powered on (CLOUD-PLATFORM.md §6.1).
@@ -174,13 +174,13 @@ export type AskResponse = z.infer<typeof AskResponse>;
 
 /**
  * SSE events on GET /v1/tenants/:id/stream (CLOUD-PLATFORM.md §6.2). One
- * connection per tab, scoped to the devices the session may see; gateway
- * replays current state on connect. Payloads are JSON; unknown event names
+ * connection per tab, scoped to the devices the session may see; the gateway implementation must
+ * replay current state on connect. Payloads are JSON; unknown event names
  * are ignored by the portal.
  */
 export const STREAM_EVENTS = { reading: "reading", status: "status" } as const;
 
-/** `reading`: one accepted reading. Implies the device is online as of `t`. */
+/** `reading`: one accepted reading. May advance presence only when newer than its last observation. */
 export const ReadingEvent = z.object({
   device_id: Id,
   channel: z.string(),
@@ -193,6 +193,8 @@ export type ReadingEvent = z.infer<typeof ReadingEvent>;
 export const DeviceStatusEvent = z.object({
   device_id: Id,
   status: DeviceStatus,
+  /** When presence was observed, independent of the last measurement time. */
+  at: Timestamp,
   last_reading_at: Timestamp.nullable(),
 });
 export type DeviceStatusEvent = z.infer<typeof DeviceStatusEvent>;

@@ -1,5 +1,5 @@
 import type { DeviceDashboard, Fleet } from "@albusforge/schema";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as data from "@/mocks/data";
 import { mockTenantStream, step, walkers } from "@/mocks/stream";
 import { applyReadingToDashboard, applyStatusToDashboard } from "./live-dashboard";
@@ -9,7 +9,13 @@ const T0 = "2026-09-13T12:00:00Z";
 const T1 = "2026-09-13T12:00:30Z";
 
 describe("live fleet", () => {
-  const fleet: Fleet = data.fleet();
+  let fleet: Fleet;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(T0));
+    fleet = data.fleet();
+  });
+  afterEach(() => vi.useRealTimers());
   const tile = (f: Fleet, id: string) => f.systems.flatMap((s) => s.devices).find((d) => d.id === id)!;
 
   it("a reading on the tile's channel reformats the value and refreshes the age; other channels only the age", () => {
@@ -30,8 +36,8 @@ describe("live fleet", () => {
   });
 
   it("a status event marks a device offline and the online ratio follows the tiles", () => {
-    const next = applyStatusToFleet(fleet, { device_id: "fridge", status: "offline", last_reading_at: T0 });
-    expect(tile(next, "fridge")).toMatchObject({ status: "offline", last_reading_at: T0 });
+    const next = applyStatusToFleet(fleet, { device_id: "fridge", status: "offline", at: new Date(Date.now() + 60_000).toISOString(), last_reading_at: T0 });
+    expect(tile(next, "fridge")).toMatchObject({ status: "offline", status_at: new Date(Date.now() + 60_000).toISOString(), last_reading_at: T0 });
     // 7 reporting devices (bed-c never seen), 6 online.
     expect(onlineRatio(next)).toBeCloseTo(6 / 7);
     expect(next.stats.online_ratio).toBeCloseTo(6 / 7);
@@ -41,22 +47,20 @@ describe("live fleet", () => {
 describe("live dashboard", () => {
   const dashboard: DeviceDashboard = data.dashboard("bed-a")!;
 
-  it("a reading updates latest, the device's status and age, and replaces the last point inside the same hourly bucket", () => {
-    const lastPoint = dashboard.series[0]!.points.at(-1)!;
-    const sameBucket = new Date(Math.floor(Date.parse(lastPoint.t) / 3_600_000) * 3_600_000 + 60_000).toISOString();
-    const t = Date.parse(sameBucket) > Date.parse(lastPoint.t) ? sameBucket : lastPoint.t;
+  it("updates latest without substituting a raw sample for a server rollup", () => {
+    const t = new Date(Date.now() + 60_000).toISOString();
     const next = applyReadingToDashboard(dashboard, { device_id: "bed-a", channel: "soil_vwc", v: 30.1, t });
     expect(next.latest.soil_vwc).toEqual({ v: 30.1, t });
-    expect(next.series[0]!.points).toHaveLength(dashboard.series[0]!.points.length);
-    expect(next.series[0]!.points.at(-1)).toEqual({ t, v: 30.1 });
-    expect(next.device.status).toBe("online");
+    expect(next.series).toEqual(dashboard.series);
   });
 
-  it("a reading in a new bucket appends and trims points that fell out of the widget's window", () => {
+  it("appends raw points, deduplicates timestamps and trims the widget window", () => {
+    const raw = { ...dashboard, series: dashboard.series.map((s) => ({ ...s, bucket: "raw" as const })) };
     const far = new Date(Date.now() + 2 * 86_400_000).toISOString();
-    const next = applyReadingToDashboard(dashboard, { device_id: "bed-a", channel: "soil_vwc", v: 29, t: far });
-    // Everything older than 24h before `far` is gone: only the new point remains.
+    const event = { device_id: "bed-a", channel: "soil_vwc", v: 29, t: far };
+    const next = applyReadingToDashboard(raw, event);
     expect(next.series[0]!.points).toEqual([{ t: far, v: 29 }]);
+    expect(applyReadingToDashboard(next, event)).toBe(next);
   });
 
   it("ignores other devices, stale readings, and keeps series for string values", () => {
@@ -68,7 +72,7 @@ describe("live dashboard", () => {
   });
 
   it("a status event changes presence without touching readings", () => {
-    const next = applyStatusToDashboard(dashboard, { device_id: "bed-a", status: "offline", last_reading_at: null });
+    const next = applyStatusToDashboard(dashboard, { device_id: "bed-a", status: "offline", at: new Date(Date.now() + 60_000).toISOString(), last_reading_at: null });
     expect(next.device.status).toBe("offline");
     expect(next.device.last_reading_at).toBe(dashboard.device.last_reading_at);
     expect(next.latest).toBe(dashboard.latest);

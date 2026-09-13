@@ -1,10 +1,17 @@
 # src/lib/live/
 
-Live values on the Live systems and device dashboard screens, over the tenant stream `GET /v1/tenants/:id/stream` (CLOUD-PLATFORM.md §6.2).
+Live values on the fleet and device dashboard, over `GET /v1/tenants/:id/stream` (CLOUD-PLATFORM.md §6.2).
 
-- `useLiveStream` — one subscription per screen on top of `lib/sse/useEventStream`: validates `reading` and `status` payloads against `@albusforge/schema`, hands them to the screen's handlers, and refreshes the page on every re-open after the first, because events sent while the stream was closed aren't replayed. Returns whether the stream has opened.
-- `live-fleet.ts` — pure: apply an event to the `Fleet` snapshot. A reading on a tile's `channel` reformats its value the way gateway did; any reading refreshes the age and marks the device online; the header's online ratio is recomputed from the tiles.
-- `live-dashboard.ts` — pure: apply an event to a `DeviceDashboard`. A reading updates `latest` and the chart series (replacing the last point inside the same 1m/1h bucket, appending otherwise, trimming to the widget's window). Events for other devices are ignored; a reading older than what's shown is dropped.
-- `useNow` — a ticking clock that starts at the server's `now`, so ages hydrate identically and then advance.
+- `useLiveStream` validates named `reading`/`status` events, scopes one connection to the sorted unique visible device IDs, and refreshes on every open to close the initial snapshot/subscription gap and recover after disconnects. Connection state distinguishes connecting, open, reconnecting, hidden-tab pause and terminal failure. Retry replaces the source; Refresh fetches a new snapshot. No polling.
+- `live-fleet.ts` formats the displayed channel while tracking `value_at` separately from the device's latest reading time. Older/duplicate samples do not replace newer values. Other channels can advance the device age without suppressing a later arrival for the displayed channel. Numeric/status types must match channel metadata; valid ranges describe display expectations, not an outlier filter.
+- `live-dashboard.ts` updates known channels only. Raw series are sorted, deduplicated and bounded to the widget window and 600 points. Server `1m`/`1h` aggregates are never overwritten by raw samples: the current value updates live, while historical averages update on explicit refresh or reconnect.
+- Both reducers order presence by `status.at` independently of measurement time. An old replay or delayed measurement cannot resurrect a device observed offline more recently. Snapshot reconciliation accepts new membership, metadata, permissions and rollups while preserving readings/presence with newer timestamps. `status_at` and `value_at` are optional snapshot additions; older snapshots fall back to `last_reading_at`. Producers should supply both when channels/presence have different timestamps. Removed devices/channels are not restored by reconciliation.
+- `useNow` starts at the server render's clock and advances ages every five seconds.
 
-Locally, `/v1` isn't routed to gateway, so `app/v1/tenants/[tenantId]/stream/route.ts` serves the stream: synthetic events in mock mode, a proxy to gateway in live mode. On staging and prod the load balancer sends `/v1/*` to gateway and that route handler is never reached (ADR 0007).
+## Stream contract and integration boundary
+
+`reading`: `{ device_id, channel, v, t }`. `status`: `{ device_id, status, at, last_reading_at }`, where `at` is the presence observation timestamp. The server must scope devices to the authenticated tenant and replay current state on reconnect. This new telemetry stream contract is separate from the merged M2 build conversation stream.
+
+The gateway tenant stream and real device dashboard/fleet endpoints remain unimplemented in this change. Local mock mode supplies synthetic readings; local live mode uses the merged authenticated `proxyGatewayStream` and preserves upstream failures without a mock fallback. Staging/prod route `/v1/*` directly to gateway (ADR 0007). Mock mode is forbidden on Cloud Run. This PR demonstrates UI behavior, not hardware ingestion or a working deployed telemetry pipeline.
+
+Tests cover ordering, stale snapshot reconciliation, raw/aggregate separation, channel types, source cleanup, retries, visibility changes, malformed events, empty fleets, proxy forwarding/failures, and mock stream/snapshot consistency across separate module graphs.

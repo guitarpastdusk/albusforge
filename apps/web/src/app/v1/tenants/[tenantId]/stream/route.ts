@@ -1,30 +1,14 @@
 import { loadRuntimeConfig } from "@/lib/runtime-config";
-import { mockTenantStream } from "@/mocks/stream";
+import { proxyGatewayStream } from "@/lib/api/gateway-stream.server";
 
-/**
- * GET /v1/tenants/:id/stream, for local development only.
- *
- * On staging and prod the load balancer sends every `/v1/*` path to gateway
- * (ADR 0007), so this handler is never reached there. Locally nothing routes
- * `/v1`, and the browser's EventSource needs a same-origin URL, so:
- * - mock mode serves synthetic readings from the mock fleet;
- * - live mode will proxy to gateway with `proxyGatewayStream` (lib/api/gateway-stream.server.ts, PR #34)
- *   once it lands; until then it answers 501, the same as gateway does for a route it hasn't built.
- * Which branch runs follows `API_MODE`, the same switch as every other call, so
- * mock mode never reaches gateway and live mode never serves synthetic data.
- * The startup guard refuses mock mode on Cloud Run.
- */
+/** Local same-origin stream; staging/prod route /v1 directly to gateway. */
 export async function GET(request: Request, { params }: { params: Promise<{ tenantId: string }> }): Promise<Response> {
   const { tenantId } = await params;
-  const { apiMode } = loadRuntimeConfig(process.env);
-
-  if (apiMode === "mock") {
-    const devices = new URL(request.url).searchParams.get("devices")?.split(",").filter(Boolean) ?? [];
-    return mockTenantStream(tenantId, devices, request.signal);
+  const devices = new URL(request.url).searchParams.get("devices");
+  if (loadRuntimeConfig(process.env).apiMode === "mock") {
+    const { mockTenantStream } = await import("@/mocks/stream");
+    return mockTenantStream(tenantId, devices?.split(",").filter(Boolean) ?? [], request.signal);
   }
-
-  return Response.json(
-    { error: { code: "NOT_IMPLEMENTED", message: "The local stream proxy to gateway is not wired yet." } },
-    { status: 501 },
-  );
+  const query = devices === null ? "" : `?${new URLSearchParams({ devices })}`;
+  return proxyGatewayStream(`/v1/tenants/${encodeURIComponent(tenantId)}/stream${query}`, request);
 }

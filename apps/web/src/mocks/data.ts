@@ -1,3 +1,4 @@
+import { liveReadings } from "./live-state";
 import { readRule } from "./rules";
 import type {
   ActionProposal,
@@ -323,7 +324,7 @@ const SOIL: Channel = { key: "soil_vwc", label: "Soil moisture", unit: "% VWC", 
 const FRIDGE_TEMP: Channel = { key: "temperature_c", label: "Temperature", unit: "°C", kind: "number", precision: 1, valid_range: [-30, 40] };
 
 export function fleet(): Fleet {
-  return {
+  const result: Fleet = {
     stats: { device_count: 8, readings_per_day: 2400, online_ratio: 1 },
     systems: [
       {
@@ -351,6 +352,15 @@ export function fleet(): Fleet {
       },
     ],
   };
+  for (const tile of result.systems.flatMap((system) => system.devices)) {
+    const reading = liveReadings.get(tile.id);
+    if (!reading || tile.channel?.key !== reading.channel || typeof reading.v !== "number") continue;
+    tile.value = reading.v.toFixed(tile.channel.precision);
+    tile.value_at = reading.t;
+    tile.last_reading_at = reading.t;
+    tile.status_at = reading.t;
+  }
+  return result;
 }
 
 // --- device dashboard ---------------------------------------------------------
@@ -371,6 +381,9 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
   if (!found) return null;
 
   const { device, buildId } = found;
+  const primary = device.channel ?? SOIL;
+  const currentValue = device.value === null ? 31.2 : Number(device.value.replace("−", "-"));
+  const primaryValue = Number.isFinite(currentValue) ? currentValue : 31.2;
   const last = SOIL_24H.length - 1;
   const reported = device.status !== "never_seen" && device.last_reading_at !== null;
 
@@ -381,21 +394,22 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       name: device.name,
       status: device.status,
       last_reading_at: device.last_reading_at,
+      status_at: device.status_at,
       chips: [
         { label: "Greenhouse — north wall", accent: "peach" },
-        { label: "Soil moisture · VWC %", accent: "blue" },
+        { label: `${primary.label} · ${primary.unit}`, accent: "blue" },
         { label: "fw 1.4.2 · ESP32", accent: "violet" },
       ],
     },
     channels: [
-      SOIL,
+      primary,
       { key: "battery", label: "Battery", unit: "%", kind: "number", precision: 0, valid_range: [0, 100] },
       { key: "rssi", label: "Signal", unit: "dBm", kind: "number", precision: 0, valid_range: [-120, 0] },
       { key: "uptime", label: "Uptime", unit: "s", kind: "duration", precision: 0, valid_range: null },
       { key: "selftest", label: "Self-test", unit: "", kind: "status", precision: 0, valid_range: null },
     ],
     widgets: [
-      { id: "w-soil", type: "line_chart", channel: "soil_vwc", window: "24h", threshold: { value: 22, label: "dry threshold · 22%" } },
+      { id: "w-soil", type: "line_chart", channel: primary.key, window: "24h", threshold: primary.key === SOIL.key ? { value: 22, label: "dry threshold · 22%" } : null },
       { id: "w-battery", type: "stat", channel: "battery", caption: "solar charging", caption_tone: "success" },
       { id: "w-rssi", type: "stat", channel: "rssi", caption: "Wi-Fi · strong" },
       { id: "w-uptime", type: "stat", channel: "uptime", caption: "since last patch" },
@@ -403,7 +417,7 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
     ],
     latest: reported
       ? {
-          soil_vwc: { v: 31.2, t: ago(40) },
+          [primary.key]: { v: primaryValue, t: device.value_at ?? device.last_reading_at! },
           battery: { v: 87, t: ago(40) },
           rssi: { v: -61, t: ago(40) },
           uptime: { v: 34 * DAY, t: ago(40) },
@@ -413,9 +427,9 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
     series: reported
       ? [
           {
-            channel: "soil_vwc",
+            channel: primary.key,
             bucket: "1h",
-            points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })),
+            points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v: primary.key === SOIL.key ? v : primaryValue })),
           },
         ]
       : [],

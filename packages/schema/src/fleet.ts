@@ -25,6 +25,8 @@ export const DeviceTile = z.object({
   name: z.string(),
   accent: Accent,
   status: DeviceStatus,
+  /** Presence observation time, for ordering reconnect snapshots and status events. */
+  status_at: Timestamp.optional(),
   /**
    * Formatted with the channel's display precision (CLOUD-PLATFORM.md §6.1).
    * Null until the device's first reading.
@@ -41,6 +43,8 @@ export const DeviceTile = z.object({
    * age and status live, just not its value.
    */
   channel: Channel.optional(),
+  /** Timestamp of the displayed channel, distinct from the latest reading on any channel. */
+  value_at: Timestamp.nullable().optional(),
 });
 export type DeviceTile = z.infer<typeof DeviceTile>;
 

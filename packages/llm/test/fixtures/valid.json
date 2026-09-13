@@ -1,0 +1,33 @@
+{
+  "id": "msg_01ValidFixture0000000000",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5",
+  "content": [
+    { "type": "thinking", "thinking": "", "signature": "fixture-signature" },
+    {
+      "type": "text",
+      "text": "{\"spec_patch\":{\"sense\":{\"what\":[\"temperature\",\"humidity\"]},\"connect\":{\"transport\":\"wifi\"},\"capabilities\":[\"read.temperature_c\",\"read.humidity_pct\",\"net.wifi\"]},\"candidate_questions\":[{\"field\":\"power.source\",\"question\":\"Will it run on a battery, or can it plug into USB?\"}],\"assumptions\":[\"Connects over Wi-Fi\"],\"reply\":\"A fridge monitor that tracks temperature and humidity. Will it run on a battery, or can it plug into USB?\"}",
+      "citations": null
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "container": null,
+  "context_management": null,
+  "usage": {
+    "input_tokens": 412,
+    "output_tokens": 640,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 2310,
+    "cache_creation": { "ephemeral_5m_input_tokens": 2310, "ephemeral_1h_input_tokens": 0 },
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "iterations": null,
+    "fallback_credit": null,
+    "output_tokens_details": null,
+    "speed": null
+  }
+}

@@ -12,7 +12,7 @@ import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { ApiError, BuildDetail, BuildUpdatedEvent, CreatedBuild, MessageCreatedEvent, MessageList, PostMessageResponse } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -307,6 +307,26 @@ describe("ownership", () => {
 describe("messages", () => {
   const post = (app: FastifyInstance, buildId: string, cookie: string, text: string, clientMessageId = randomUUID()) =>
     app.inject({ method: "POST", url: `/v1/builds/${buildId}/messages`, headers: { cookie }, payload: { text, client_message_id: clientMessageId } });
+
+  it("appends after recorded history even when the database clock moves backward", async () => {
+    const { app, turns } = makeApp();
+    const { body, cookie } = await createBuild(app, "First ask");
+    await turns.idle();
+    await handle.db.insert(buildMessages).values({
+      buildId: body.id, role: "assistant", text: "Indoors or out?",
+      createdAt: sql`clock_timestamp() + interval '1 minute'`,
+    });
+
+    const accepted = await post(app, body.id, cookie, "Indoors");
+    expect(accepted.statusCode).toBe(202);
+    const response = await app.inject({ method: "GET", url: `/v1/builds/${body.id}/messages`, headers: { cookie } });
+    expect(MessageList.parse(response.json()).messages.map((m) => [m.role, m.text])).toEqual([
+      ["user", "First ask"], ["assistant", "Indoors or out?"], ["user", "Indoors"],
+    ]);
+    // The new question remains the pending message, not the previous answer.
+    expectError(await post(app, body.id, cookie, "Another question"), 409, "TURN_IN_PROGRESS");
+    await turns.idle();
+  });
 
   it("lists the transcript oldest first", async () => {
     const { app } = makeApp();

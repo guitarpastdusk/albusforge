@@ -22,11 +22,14 @@
 
   The same race applies to Cloud Run jobs: an apply can write an older image back into `db-migrate` or `registry-load`, and the next execution then runs old code against a newer schema. `gateway`, `db-migrate` and `registry-load` are one unit here, because the same workflows deploy all three. Applying Terraform that touches any of them means keeping out both gateway workflows.
 
+  `intake` is its own unit: `deploy-intake.yml` and `promote-intake.yml` write its image and nothing else's. Every service with a workflow pair needs its own row — a new service means a new row here, in the same commit as its workflows.
+
   | Resources the plan touches | Workflows to disable and drain |
   | --- | --- |
   | `web` | `deploy-web.yml` (staging), `promote-web.yml` (prod) |
   | `gateway`, `db-migrate` or `registry-load` | `deploy-gateway.yml` (staging), `promote-gateway.yml` (prod) |
-  | several, or not sure | all four for that environment |
+  | `intake` | `deploy-intake.yml` (staging), `promote-intake.yml` (prod) |
+  | several, or not sure | all six for that environment |
 
   To keep deploys out for the whole window:
   1. Disable each workflow from the table: for example `gh workflow disable deploy-gateway.yml` for staging, `gh workflow disable promote-gateway.yml` for prod.
@@ -44,4 +47,4 @@
   3. Re-plan, check the plan, and apply.
   4. Re-enable each workflow with `gh workflow enable`.
 
-  While a workflow is disabled, pushes to `main` don't trigger it. If an image-changing commit landed during the window, dispatch `deploy-web` or `deploy-gateway` once it's re-enabled.
+  While a workflow is disabled, pushes to `main` don't trigger it. If an image-changing commit landed during the window, dispatch each staging workflow you disabled once it's re-enabled — `deploy-web`, `deploy-gateway`, `deploy-intake` — so the environment catches up to `main` instead of serving the image from before the window.

@@ -69,6 +69,7 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
   - otherwise the rate limit, then insert → `202`.
 
   Concurrent requests on any instance therefore agree: one of several different messages gets `202` and the rest `409`, and retries of one `client_message_id` all get that message, never `409`.
+- Message timestamps append monotonically under that lock: the current database clock or the prior maximum plus 2 microseconds, whichever is later. Clock corrections cannot hide a new question behind an earlier reply; the gap also reserves intake's reply slot at the answered user's timestamp plus 1 microsecond.
 - After 60 s a new message is accepted, but the portal never needs to resend: see recovery under Turns. Its "Check for a reply" is a refetch.
 - On `POST /v1/builds`, a `client_message_id` sent with an existing cookie returns the build already created from it (`200`). The create transaction holds an advisory lock on (owner hash, client message id) and re-checks for that build inside it, so concurrent requests create one build, even across instances.
 

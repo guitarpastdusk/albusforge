@@ -16,7 +16,7 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
   - `X-Albus-Internal-Auth: Bearer <ID token>`: a Google-signed ID token for web's runtime service account, with audience `GATEWAY_INTERNAL_URL`
   - `X-Albus-Original-Host`: the host the browser requested
   - `X-Albus-Client-IP`: the visitor's IP
-  - the session cookie only, not every cookie the browser sent
+  - the two authentication cookies only, `__Host-albus_session` and `__Host-albus_anon` (§5), never the full `Cookie` header. `/build/:buildId` renders server-side for anonymous visitors, so the anonymous owner cookie has to be forwarded as well as the session cookie.
 
   Gateway trusts the two forwarded headers **only** when the token verifies: Google signature, `aud` equal to gateway's URL, `email` equal to `SSR_SERVICE_ACCOUNT`, `email_verified`, not expired. Otherwise it ignores them and uses the real `Host` and client IP. A forwarded host that is neither `PUBLIC_DOMAIN` nor `<valid slug>.PUBLIC_DOMAIN` is `400`. The load balancer strips all three headers from public requests as defense in depth; the token check is the actual control. Terraform sets `GATEWAY_INTERNAL_URL` and `PUBLIC_DOMAIN` on web, and `SSR_SERVICE_ACCOUNT` and `PUBLIC_DOMAIN` on gateway.
 - **Session cookies are host-only** (no `Domain` attribute), because `staging.albusforge.ai` sits under the prod apex. Signing in on a tenant subdomain is a redirect handoff from the apex.
@@ -97,8 +97,8 @@ Device counts on the card use the plan's device count before provisioning and re
 
 Chat is anonymous; the only sign-up ask is the gate on the device-ready card.
 
-1. `POST /v1/builds` without a session sets a host-only, httpOnly **anonymous owner cookie** and records its hash on the build (`builds.anon_owner_hash`, `tenant_id` null). `CHECK (tenant_id IS NOT NULL OR anon_owner_hash IS NOT NULL)` guarantees every build has one owner or the other.
-2. `/v1/builds/:id` and its messages are readable only with that cookie. LLM usage for the build is recorded against the same hash.
+1. `POST /v1/builds` without a session sets a host-only, httpOnly **anonymous owner cookie**, `__Host-albus_anon`, and records its hash on the build (`builds.anon_owner_hash`, `tenant_id` null). `CHECK (tenant_id IS NOT NULL OR anon_owner_hash IS NOT NULL)` guarantees every build has one owner or the other.
+2. **Each cookie is an independent credential.** An unclaimed build (and its messages) is readable with a matching `anon_owner_hash`. A claimed build needs a session whose user is a member of the build's tenant. No route requires both. After sign-in a leftover anonymous cookie is harmless, because verify has already cleared the hash it would match. LLM usage for an unclaimed build is recorded against the same hash.
 3. `POST /v1/auth/verify` moves every build carrying the cookie's hash, **and the usage rows those builds incurred**, into the tenant resolved for that request. On a first sign-up that is the new personal tenant. It clears the hash and the cookie in the same transaction and returns the session.
 4. Anonymous builds that are never claimed are removed after 30 days by a scheduled job. Their usage stays as platform cost.
 

@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { actionFailure, actionIncomplete } from "@/lib/action-errors";
 import type { ActionResult } from "@/lib/action-result";
-import { ApiRequestError } from "@/lib/api/core";
+import { ApiRequestError, GatewayError } from "@/lib/api/core";
 import { nextCookieWriter } from "@/lib/api/cookies";
 import { sessionClient } from "@/lib/api/server";
 
@@ -20,6 +20,18 @@ import { sessionClient } from "@/lib/api/server";
  * return value or a log line.
  */
 
+type AuthResult = ActionResult<{ email: string }> | { ok: false; message: string; retryAfterSeconds: number };
+
+function throttled(error: unknown): AuthResult | undefined {
+  const status = error instanceof ApiRequestError ? error.status : error instanceof GatewayError ? error.details.status : undefined;
+  if (status !== 429) return undefined;
+  const seconds = error instanceof ApiRequestError ? error.retryAfterSeconds : error instanceof GatewayError ? error.details.retryAfterSeconds : undefined;
+  const message = "Too many attempts. Wait before trying again.";
+  return typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 31_536_000
+    ? { ok: false, message, retryAfterSeconds: seconds }
+    : { ok: false, message };
+}
+
 const EmailInput = z.string().trim().pipe(z.email());
 const CodeInput = z.string().trim().regex(/^\d{6}$/);
 
@@ -28,7 +40,7 @@ const INVALID_CODE = "Enter the 6-digit code from your email.";
 const SIGN_IN_INCOMPLETE = "We couldn’t finish signing you in. Try again in a moment.";
 
 /** POST /v1/auth/code → 204. */
-export async function requestSignInCode(email: unknown): Promise<ActionResult<{ email: string }>> {
+export async function requestSignInCode(email: unknown): Promise<AuthResult> {
   try {
     const parsed = EmailInput.safeParse(email);
     if (!parsed.success) return { ok: false, message: INVALID_EMAIL };
@@ -37,12 +49,14 @@ export async function requestSignInCode(email: unknown): Promise<ActionResult<{ 
     await client.mutate("POST", routes.auth.requestCode.path(), z.unknown(), { email: parsed.data });
     return { ok: true, data: { email: parsed.data } };
   } catch (error) {
-    return actionFailure("requestSignInCode", error);
+    const limited = throttled(error);
+    if (limited) return limited;
+    return actionFailure("requestSignInCode", error, "We couldn’t confirm the email was sent. Check your connection and try again. If a code arrives, use the most recent email.");
   }
 }
 
 /** POST /v1/auth/verify → the session; claims anonymous builds (PORTAL.md §5). */
-export async function verifySignInCode(email: unknown, code: unknown): Promise<ActionResult<{ email: string }>> {
+export async function verifySignInCode(email: unknown, code: unknown): Promise<AuthResult> {
   try {
     const parsedEmail = EmailInput.safeParse(email);
     if (!parsedEmail.success) return { ok: false, message: INVALID_EMAIL };
@@ -59,8 +73,10 @@ export async function verifySignInCode(email: unknown, code: unknown): Promise<A
     }
     return { ok: true, data: { email: session.user.email } };
   } catch (error) {
-    if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {
-      return { ok: false, message: "That code didn’t work. Check it, or send a new one." };
+    const limited = throttled(error);
+    if (limited) return limited;
+    if (error instanceof ApiRequestError && error.status === 400 && error.code === "INVALID_CODE") {
+      return { ok: false, message: "That code didn’t work. It may be incorrect, expired, or replaced. Check the latest email, or request a new code." };
     }
     return actionFailure("verifySignInCode", error);
   }

@@ -8,6 +8,7 @@ export class ApiRequestError extends Error {
     readonly code: string,
     message: string,
     readonly details?: unknown,
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -29,6 +30,7 @@ export interface GatewayErrorDetails {
   reason: GatewayErrorReason;
   /** Short zod issue summary, for schema_mismatch. */
   issues?: string;
+  retryAfterSeconds?: number;
 }
 
 /**
@@ -81,6 +83,8 @@ export interface TransportResponse {
   json: unknown;
   /** Raw Set-Cookie lines, when the transport has them. Only Server Functions relay any (lib/api/cookies.ts). */
   setCookies?: readonly string[];
+  /** Sanitized Retry-After delay; no raw response header is exposed. */
+  retryAfterSeconds?: number;
 }
 
 /**
@@ -114,16 +118,16 @@ export async function requestWithCookies<S extends z.ZodType>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<{ data: z.infer<S>; setCookies: readonly string[] }> {
-  const { status, contentType, isJson, json, setCookies = [] } = await transport(method, path, body, signal);
+  const { status, contentType, isJson, json, setCookies = [], retryAfterSeconds } = await transport(method, path, body, signal);
   const route = `${method} ${path.split("?")[0]}`;
 
   if (status < 200 || status >= 300) {
     const parsed = isJson ? ApiError.safeParse(json) : undefined;
     if (parsed?.success) {
       const { code, message, details } = parsed.data.error;
-      throw new ApiRequestError(status, code, message, details);
+      throw new ApiRequestError(status, code, message, details, retryAfterSeconds);
     }
-    throw new GatewayError({ route, status, contentType, reason: "unexpected_status" });
+    throw new GatewayError({ route, status, contentType, reason: "unexpected_status", ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }) });
   }
 
   if (!isJson) throw new GatewayError({ route, status, contentType, reason: "not_json" });
@@ -162,17 +166,33 @@ export function fetchTransport(
 
     const contentType = res.headers.get("content-type");
     const setCookies = res.headers.getSetCookie();
+    const retryAfterSeconds = parseRetryAfter(res.headers.get("retry-after"), Date.now());
+    const retry = retryAfterSeconds === undefined ? {} : { retryAfterSeconds };
     const text = await res.text();
 
     // An empty body (204) is valid JSON-less success; the schema decides.
-    if (text === "") return { status: res.status, contentType, isJson: true, json: null, setCookies };
+    if (text === "") return { status: res.status, contentType, isJson: true, json: null, setCookies, ...retry };
     if (!contentType || !/[/+]json\b/i.test(contentType)) {
-      return { status: res.status, contentType, isJson: false, json: undefined, setCookies };
+      return { status: res.status, contentType, isJson: false, json: undefined, setCookies, ...retry };
     }
     try {
-      return { status: res.status, contentType, isJson: true, json: JSON.parse(text), setCookies };
+      return { status: res.status, contentType, isJson: true, json: JSON.parse(text), setCookies, ...retry };
     } catch {
-      return { status: res.status, contentType, isJson: false, json: undefined, setCookies };
+      return { status: res.status, contentType, isJson: false, json: undefined, setCookies, ...retry };
     }
   };
+}
+
+/** RFC delta-seconds or HTTP-date; reject malformed/unrepresentable delays. */
+export function parseRetryAfter(value: string | null, now: number): number | undefined {
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  let seconds: number;
+  if (/^\d+$/.test(trimmed)) seconds = Number(trimmed);
+  else if (/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(trimmed)) {
+    seconds = Math.max(0, Math.ceil((Date.parse(trimmed) - now) / 1000));
+  } else return undefined;
+  // Bound metadata and deadline arithmetic without manufacturing a shorter
+  // retry window. Unsupported values fall back to the non-countdown message.
+  return Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 31_536_000 ? seconds : undefined;
 }

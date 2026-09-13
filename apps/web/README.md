@@ -27,7 +27,7 @@ All data goes through [`src/lib/api`](src/lib/api/) and is validated against [`@
 | [`src/mocks/`](src/mocks/) | mock API responses (the prototype's data) |
 | [`src/styles/`](src/styles/) | design tokens |
 | `Dockerfile` | production image; build from the **repo root** (`docker build -f apps/web/Dockerfile .`) |
-| `turbo.json` | makes `build` depend on `typecheck` — both write `.next` (`next typegen`, `next build`), so they must never run at once |
+| `turbo.json` | makes `typecheck` depend on `build` — both write `.next` (`next build`, `next typegen`), so they must never run at once. A cached build restores `.next/types` from its outputs. |
 
 ## Not yet
 

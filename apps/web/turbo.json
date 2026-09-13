@@ -2,8 +2,8 @@
   "$schema": "https://turborepo.com/schema.json",
   "extends": ["//"],
   "tasks": {
-    "build": {
-      "dependsOn": ["^build", "typecheck"]
+    "typecheck": {
+      "dependsOn": ["^typecheck", "build"]
     }
   }
 }

@@ -7,6 +7,7 @@ Design and architecture documentation for Albus Forge.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture: the core invariant, the six-stage pipeline, services, data model, API contract, infrastructure, and the open forks that must be settled before M0. |
 | [CLOUD-PLATFORM.md](CLOUD-PLATFORM.md) | The cloud tier end to end: transport (MQTT vs HTTPS), the wire envelope, ingestion, storage tiering and retention, how readings reach the UI, and the three-tier intelligence layer — statistics, small model, frontier model. |
 | [PORTAL.md](PORTAL.md) | The web portal: screens and routes, the API additions the design needs, derived project status, how an anonymous build is claimed at sign-up, where the design and the registry disagree, and what is not designed yet. |
+| [ASK-TO-ENCLOSURE.md](ASK-TO-ENCLOSURE.md) | Next build phase: the Claude requirements conversation (intake), parts determination (matcher), enclosure STL generation (bodygen), and the 360° viewer, with deliverables by milestone. |
 | [adr/](adr/) | Architecture decision records. |
 | [checkin/](checkin/) | Hackathon check-in submissions, one every 12 hours: Markdown source plus exported PDF. |
 

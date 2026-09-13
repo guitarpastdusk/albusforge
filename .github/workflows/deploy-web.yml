@@ -70,9 +70,10 @@ jobs:
             --format='value(metadata.name)' >/dev/null \
             || { echo "::error::Cloud Run service ${SERVICE} not found in ${PROJECT}. Apply infra/env first; CI never creates services (ADR 0005)."; exit 1; }
 
-      # Inside the concurrency lock, compare with what staging actually runs. An
-      # older or diverged commit is refused before anything is built; the same
-      # commit is a no-op. Rolling back is not possible from this workflow.
+      # Inside the concurrency lock, compare with the revision staging actually
+      # serves (not the desired image a failed deploy leaves behind). An older or
+      # diverged commit is refused before anything is built; the same commit is a
+      # no-op. Rolling back is not possible from this workflow.
       - name: Check staging freshness
         id: fresh
         run: bash .github/scripts/staging-freshness.sh >> "$GITHUB_OUTPUT"
@@ -144,9 +145,10 @@ jobs:
             --region "${REGION}" \
             --quiet
 
-      # Runs only if the deploy succeeded, or staging already runs this commit.
-      # promote-web refuses any digest without this tag, so an image whose
-      # staging deploy failed can't reach prod.
+      # Runs only if the deploy succeeded, or staging already serves this commit,
+      # and the script itself re-checks that the revision serving all traffic
+      # runs this digest. promote-web refuses any digest without this tag, so an
+      # image whose staging deploy failed can't reach prod, even on a retry.
       - name: Mark the digest as deployed to staging
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}

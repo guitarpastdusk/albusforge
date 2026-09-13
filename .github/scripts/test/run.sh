@@ -11,15 +11,18 @@ passed=0
 failed=0
 
 # --- stub gcloud -----------------------------------------------------------------
-# Behaviour comes from files in $STUB: service_image, images.json, images_fail.
-# Every call is appended to $STUB/calls.
+# Behaviour comes from files in $STUB: service.json, revisions/<name> (that
+# revision's image), images.json, images_fail. Every call is appended to
+# $STUB/calls.
 mkdir -p "$work/bin"
 cat >"$work/bin/gcloud" <<'STUB_EOF'
 #!/usr/bin/env bash
 echo "$*" >>"$STUB/calls"
 case "$*" in
   "run services describe"*)
-    cat "$STUB/service_image" ;;
+    cat "$STUB/service.json" ;;
+  "run revisions describe"*)
+    if [ -f "$STUB/revisions/$4" ]; then cat "$STUB/revisions/$4"; else echo "ERROR: revision $4 not found" >&2; exit 1; fi ;;
   "artifacts docker images list"*)
     if [ -f "$STUB/images_fail" ]; then echo "ERROR: (gcloud) PERMISSION_DENIED" >&2; exit 1; fi
     cat "$STUB/images.json" ;;
@@ -47,6 +50,7 @@ UNKNOWN=ffffffffffffffffffffffffffffffffffffffff
 d1="sha256:$(printf '%064d' 1)"
 d2="sha256:$(printf '%064d' 2)"
 image1="$REPO/$SERVICE@$d1"
+image2="$REPO/$SERVICE@$d2"
 
 # --- helpers ------------------------------------------------------------------------
 case_no=0
@@ -54,12 +58,19 @@ setup() { # setup NAME: a fresh stub for one case
   name="$1"
   case_no=$((case_no + 1))
   STUB="$work/stub-$case_no"
-  mkdir -p "$STUB"
+  mkdir -p "$STUB/revisions"
   : >"$STUB/calls"
   echo '[]' >"$STUB/images.json"
+  echo '{}' >"$STUB/service.json"
   export STUB GITHUB_SHA="$C"
 }
-serving() { printf '%s\n' "$1" >"$STUB/service_image"; }
+# serving IMAGE [DESIRED]: web-00002 runs IMAGE and serves 100% of traffic. The
+# spec's desired image is DESIRED (default IMAGE), as after a failed deploy.
+serving() {
+  local desired="${2:-$1}"
+  printf '%s\n' "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"image\":\"$desired\"}]}}},\"status\":{\"latestCreatedRevisionName\":\"web-00003\",\"latestReadyRevisionName\":\"web-00002\",\"traffic\":[{\"revisionName\":\"web-00002\",\"percent\":100,\"latestRevision\":true}]}}" >"$STUB/service.json"
+  printf '%s\n' "$1" >"$STUB/revisions/web-00002"
+}
 images() { printf '%s\n' "$1" >"$STUB/images.json"; }
 tagged() { images "[{\"package\":\"$REPO/$SERVICE\",\"version\":\"$1\",\"tags\":\"$2\"}]"; }
 run() { # run SCRIPT [ARG]: sets out, err, code
@@ -88,32 +99,32 @@ serving "us-docker.pkg.dev/cloudrun/container/hello"
 run staging-freshness.sh
 expect '[ "$code" = 0 ] && [ "$out" = "action=deploy" ]'
 
-setup "freshness: staging already runs this commit -> skip"
+setup "freshness: staging already serves this commit -> skip"
 serving "$image1"
 tagged "$d1" "$C,staging-deployed-$C"
 run staging-freshness.sh
 expect '[ "$code" = 0 ] && [ "$out" = "action=skip" ]'
 
-setup "freshness: staging runs an ancestor -> deploy"
+setup "freshness: staging serves an ancestor -> deploy"
 serving "$image1"
 tagged "$d1" "$B,staging-deployed-$B"
 run staging-freshness.sh
 expect '[ "$code" = 0 ] && [ "$out" = "action=deploy" ]'
 
-setup "freshness: staging runs a newer commit -> refuse"
+setup "freshness: staging serves a newer commit -> refuse"
 serving "$image1"
 tagged "$d1" "$C"
 export GITHUB_SHA="$B"
 run staging-freshness.sh
 expect '[ "$code" = 1 ] && [ -z "$out" ] && has "Refusing to roll back"'
 
-setup "freshness: staging runs a diverged commit -> refuse"
+setup "freshness: staging serves a diverged commit -> refuse"
 serving "$image1"
 tagged "$d1" "$D"
 run staging-freshness.sh
 expect '[ "$code" = 1 ] && [ -z "$out" ] && has "Refusing to roll back"'
 
-setup "freshness: staging runs a commit not in history -> refuse"
+setup "freshness: staging serves a commit not in history -> refuse"
 serving "$image1"
 tagged "$d1" "$UNKNOWN"
 run staging-freshness.sh
@@ -143,6 +154,33 @@ touch "$STUB/images_fail"
 run staging-freshness.sh
 expect '[ "$code" = 1 ] && [ -z "$out" ] && has "Could not list tags"'
 
+setup "freshness: retry after a failed deploy reads the serving revision, not the desired image -> deploy"
+# C's deploy updated the desired image to image1, but its revision never became
+# ready, so image2 (commit B) still serves. The retry must deploy, not skip.
+serving "$image2" "$image1"
+images "[{\"version\":\"$d1\",\"tags\":\"$C\"},{\"version\":\"$d2\",\"tags\":\"$B,staging-deployed-$B\"}]"
+run staging-freshness.sh
+expect '[ "$code" = 0 ] && [ "$out" = "action=deploy" ]'
+
+setup "freshness: traffic split across revisions -> refuse"
+printf '%s\n' '{"status":{"traffic":[{"revisionName":"web-00001","percent":50},{"revisionName":"web-00002","percent":50}]}}' >"$STUB/service.json"
+printf '%s\n' "$image2" >"$STUB/revisions/web-00001"
+printf '%s\n' "$image1" >"$STUB/revisions/web-00002"
+run staging-freshness.sh
+expect '[ "$code" = 1 ] && [ -z "$out" ] && has "No single ready revision"'
+
+setup "freshness: latest-revision traffic without a name uses latestReadyRevisionName"
+printf '%s\n' '{"status":{"latestReadyRevisionName":"web-00002","traffic":[{"percent":100,"latestRevision":true}]}}' >"$STUB/service.json"
+printf '%s\n' "$image1" >"$STUB/revisions/web-00002"
+tagged "$d1" "$B"
+run staging-freshness.sh
+expect '[ "$code" = 0 ] && [ "$out" = "action=deploy" ]'
+
+setup "freshness: the serving revision can't be read -> refuse"
+printf '%s\n' '{"status":{"traffic":[{"revisionName":"web-00009","percent":100}]}}' >"$STUB/service.json"
+run staging-freshness.sh
+expect '[ "$code" = 1 ] && [ -z "$out" ] && has "Could not read the revision"'
+
 # --- require-staging-deployed.sh ----------------------------------------------------
 setup "promotion: staging-deployed tag present -> allow"
 tagged "$d1" "$C,staging-deployed-$C"
@@ -164,20 +202,45 @@ run require-staging-deployed.sh "latest"
 expect '[ "$code" = 1 ] && has "digest must match" && ! called "artifacts"'
 
 # --- mark-staging-deployed.sh -------------------------------------------------------
-setup "mark: adds staging-deployed-<commit> to the digest"
+setup "mark: staging serves the digest -> adds staging-deployed-<commit>"
+serving "$image1"
 tagged "$d1" "$C"
 run mark-staging-deployed.sh "$d1"
 expect '[ "$code" = 0 ] && called "artifacts docker tags add $image1 $REPO/$SERVICE:staging-deployed-$C"'
 
 setup "mark: leaves an existing marker alone"
+serving "$image1"
 tagged "$d1" "$C,staging-deployed-$C"
 run mark-staging-deployed.sh "$d1"
 expect '[ "$code" = 0 ] && ! called "tags add"'
 
+setup "mark: retry after a failed deploy (desired image1, serving image2) -> refuse, no tag"
+serving "$image2" "$image1"
+tagged "$d1" "$C"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$code" = 1 ] && has "Not marking a digest staging" && ! called "tags add"'
+
+setup "mark: traffic split across revisions -> refuse, no tag"
+printf '%s\n' '{"status":{"traffic":[{"revisionName":"web-00001","percent":90},{"revisionName":"web-00002","percent":10}]}}' >"$STUB/service.json"
+printf '%s\n' "$image1" >"$STUB/revisions/web-00001"
+printf '%s\n' "$image1" >"$STUB/revisions/web-00002"
+tagged "$d1" "$C"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$code" = 1 ] && has "Could not confirm" && ! called "tags add"'
+
 setup "mark: a registry error fails instead of tagging blind"
+serving "$image1"
 touch "$STUB/images_fail"
 run mark-staging-deployed.sh "$d1"
 expect '[ "$code" = 1 ] && ! called "tags add"'
+
+setup "retry regression: after a failed deploy, freshness deploys and mark can't tag the unserved digest"
+serving "$image2" "$image1"
+images "[{\"version\":\"$d1\",\"tags\":\"$C\"},{\"version\":\"$d2\",\"tags\":\"$B,staging-deployed-$B\"}]"
+run staging-freshness.sh
+fresh_out="$out"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$fresh_out" = "action=deploy" ] && [ "$code" = 1 ] && ! called "tags add"'
 
 echo
 echo "$passed passed, $failed failed"

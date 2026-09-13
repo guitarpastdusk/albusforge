@@ -108,3 +108,73 @@ describe("proxyGatewayStream", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("proxyGatewayStream never sends the internal token anywhere but gateway", () => {
+  it("a redirect is refused: the destination is never called, and its Location isn't relayed", async () => {
+    // The real fetch, over real sockets: a gateway that redirects, and the origin it points at.
+    const { createServer } = await import("node:http");
+    const seen: Array<Record<string, string | string[] | undefined>> = [];
+    const elsewhere = createServer((req, res) => {
+      seen.push(req.headers);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end("data: leaked\n\n");
+    });
+    await new Promise<void>((resolve) => elsewhere.listen(0, "127.0.0.1", resolve));
+    const elsewherePort = (elsewhere.address() as { port: number }).port;
+
+    const gateway = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${elsewherePort}/stolen` });
+      res.end();
+    });
+    await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+    const gatewayPort = (gateway.address() as { port: number }).port;
+
+    try {
+      vi.stubEnv("GATEWAY_INTERNAL_URL", `http://127.0.0.1:${gatewayPort}`);
+      const response = await proxyGatewayStream(PATH, incoming());
+
+      expect(response.status).toBe(502);
+      expect(response.headers.get("location")).toBeNull();
+      expect(await response.text()).not.toContain("leaked");
+      expect(seen).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => gateway.close(() => resolve()));
+      await new Promise<void>((resolve) => elsewhere.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    ["a host that extends gateway's", ".evil.example/v1/steal"],
+    ["a scheme", "https://evil.example/v1/steal"],
+    ["a protocol-relative host", "//evil.example/v1/steal"],
+    ["traversal", "/v1/../../steal"],
+    ["a backslash", "/v1\\evil.example/steal"],
+    ["a relative path", "v1/builds"],
+  ])("refuses %s before fetching a token or calling anything", async (_label, path) => {
+    const fetchMock = upstream("");
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await proxyGatewayStream(path, incoming())).status).toBe(500);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(idToken).not.toHaveBeenCalled();
+  });
+
+  it("asks fetch to treat a redirect as an error", async () => {
+    const fetchMock = upstream("");
+    vi.stubGlobal("fetch", fetchMock);
+    await proxyGatewayStream(PATH, incoming());
+    expect(sent(fetchMock).init.redirect).toBe("error");
+  });
+
+  it("a client disconnect propagates, rather than being reported as a gateway failure", async () => {
+    const controller = new AbortController();
+    const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      controller.abort();
+      throw abortError;
+    }));
+
+    const request = new Request("https://albusforge.ai" + PATH, { headers: { host: "albusforge.ai" }, signal: controller.signal });
+    await expect(proxyGatewayStream(PATH, request)).rejects.toBe(abortError);
+  });
+});

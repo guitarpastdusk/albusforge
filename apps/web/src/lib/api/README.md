@@ -9,7 +9,7 @@ The gateway client. Every response is validated against `@albusforge/schema`; a 
 | `core.ts` | both | `request()`, `fetchTransport()`, `ApiRequestError` (the API error shape), `GatewayError` (anything that isn't the contract: non-JSON, wrong shape, a failure without the error shape). Neither is logged here — `onRequestError` logs once per request. |
 | `gateway-headers.server.ts` | `server.ts` only | builds the SSR → gateway headers |
 | `id-token.server.ts` | `server.ts` only | ID token from the metadata server, cached until 5 min before `exp` |
-| `gateway-stream.server.ts` | route handlers | `proxyGatewayStream(path, request)` — proxies a gateway Server-Sent Events stream with the same headers plus `Last-Event-ID`, for local development, where the browser's same-origin `/v1/...` isn't routed to gateway. Staging and prod route `/v1/*` at the load balancer, so nothing calls it there. |
+| `gateway-stream.server.ts` | route handlers | `proxyGatewayStream(path, request)` — proxies a gateway Server-Sent Events stream with the same headers plus `Last-Event-ID`, for local development, where the browser's same-origin `/v1/...` isn't routed to gateway. Staging and prod route `/v1/*` at the load balancer, so nothing calls it there. The internal token travels in a header, which a cross-origin redirect wouldn't strip, so `path` must resolve to gateway's own origin (checked before any token is fetched) and a redirect is a 502, never a second authenticated hop. Pass the route handler's original `Request`, so a client disconnect closes the upstream connection. |
 
 ## SSR → gateway headers (ADR 0007)
 

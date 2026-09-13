@@ -16,7 +16,7 @@ import { clientIp, type InternalAuthVerifier, untrustingVerifier } from "./inter
 import type { Log } from "./log";
 import { anonTokenFromCookieHeader, hashAnonToken } from "./owner";
 import { RateLimiter } from "./rate-limit";
-import { anonOwnerClearCookie, SESSION_MAX_AGE_S, sessionClearCookie, sessionSetCookie, sessionTokenFromCookieHeader } from "./session";
+import { anonOwnerClearCookie, SESSION_MAX_AGE_S, sessionClearCookie, sessionSetCookie, sessionTokenFromCookieHeader } from "./session-cookie";
 
 export interface AuthOptions {
   store: AuthStore;

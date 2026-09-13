@@ -31,9 +31,11 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
     let discard = false;
     try {
       await client.query("BEGIN");
-      // Serializes packets and credential revocation per device, including concurrent retries.
+      // Serializes packets and credential revocation, including concurrent retries.
+      // Allow rollup FK key-share locks: ingestion can wait on a worker's dirty-hour
+      // marker while that worker inserts aggregates referencing this device.
       const device = (await client.query<{ channels: unknown; next_s: number }>(
-        "SELECT channels, next_s FROM telemetry.devices WHERE id=$1 AND token_hash=$2 AND revoked_at IS NULL FOR UPDATE",
+        "SELECT channels, next_s FROM telemetry.devices WHERE id=$1 AND token_hash=$2 AND revoked_at IS NULL FOR NO KEY UPDATE",
         [envelope.dev, tokenHash(match[1]!)],
       )).rows[0];
       if (!device) throw new IngestError(401, "unauthorized");
@@ -85,6 +87,7 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       // Discard on every unexpected failure, even if ROLLBACK appears to succeed.
       discard = !(error instanceof IngestError);
       try { await client.query("ROLLBACK"); } catch { discard = true; }
+      if ((error as { constraint?: string }).constraint === "telemetry_retention_bound") throw new IngestError(422, "timestamp_out_of_range");
       throw error;
     } finally {
       client.release(discard);

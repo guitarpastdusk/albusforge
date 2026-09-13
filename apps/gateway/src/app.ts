@@ -17,6 +17,8 @@ import { describeError } from "./db-log";
 import { HttpError, parse, pathOf, sendError } from "./http";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
+import type { Pool } from "pg";
+import { registerTelemetryReads } from "./telemetry-read";
 
 export { HttpError } from "./http";
 
@@ -27,6 +29,8 @@ declare module "fastify" {
 }
 
 export interface AppOptions {
+  /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
+  telemetryPool?: Pool;
   parts: PartsStore;
   /** Resolves when the database answers; rejects otherwise. */
   ping: () => Promise<void>;
@@ -59,7 +63,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -180,6 +184,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     registerBuildRoutes(app, { parts, log, chat: { ...chat, sessions } });
   }
   if (auth) registerAuthRoutes(app, { log, auth });
+  if (telemetryPool) registerTelemetryReads(app, telemetryPool);
 
   return app;
 }

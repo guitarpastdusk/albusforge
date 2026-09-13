@@ -2,7 +2,11 @@
 
 import { useEffect, useEffectEvent } from "react";
 
+export type StreamState = "connecting" | "open" | "reconnecting" | "paused" | "unavailable";
+
 export interface EventStreamOptions {
+  onState?: (state: StreamState) => void;
+  reconnectKey?: number;
   /** SSE event names to listen for. */
   events: readonly string[];
   onEvent: (type: string, data: unknown) => void;
@@ -31,8 +35,9 @@ export interface EventStreamOptions {
  * visible again. A dropped connection is retried by the browser itself, which
  * resends Last-Event-ID.
  */
-export function useEventStream(path: string | null, { events, onEvent, parse, onOpen, enabled = true }: EventStreamOptions): void {
+export function useEventStream(path: string | null, { events, onEvent, parse, onOpen, onState, reconnectKey = 0, enabled = true }: EventStreamOptions): void {
   const emit = useEffectEvent(onEvent);
+  const changed = useEffectEvent((state: StreamState) => onState?.(state));
   const opened = useEffectEvent(() => onOpen?.());
   const parsePayload = useEffectEvent((type: string, data: unknown) => {
     const parser = parse?.[type];
@@ -47,10 +52,20 @@ export function useEventStream(path: string | null, { events, onEvent, parse, on
 
     const open = () => {
       if (source) return;
+      changed("connecting");
       const next = new EventSource(path);
-      next.addEventListener("open", () => opened());
+      source = next;
+      next.addEventListener("open", () => {
+        if (source !== next) return;
+        changed("open");
+        opened();
+      });
+      next.addEventListener("error", () => {
+        if (source === next) changed(next.readyState === 2 ? "unavailable" : "reconnecting");
+      });
       for (const type of types) {
         next.addEventListener(type, (event) => {
+          if (source !== next) return;
           const raw = (event as MessageEvent<string>).data;
           let data: unknown = raw;
           try {
@@ -62,19 +77,23 @@ export function useEventStream(path: string | null, { events, onEvent, parse, on
           if (value !== undefined) emit(type, value);
         });
       }
-      source = next;
     };
     const close = () => {
       source?.close();
       source = null;
     };
-    const onVisibilityChange = () => (document.visibilityState === "hidden" ? close() : open());
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        close();
+        changed("paused");
+      } else open();
+    };
 
-    if (document.visibilityState !== "hidden") open();
+    onVisibilityChange();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       close();
     };
-  }, [path, enabled, eventsKey]);
+  }, [path, enabled, eventsKey, reconnectKey]);
 }

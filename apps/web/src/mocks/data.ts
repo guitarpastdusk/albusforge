@@ -1,12 +1,16 @@
+import { liveReadings } from "./live-state";
 import { readRule } from "./rules";
 import type {
   ActionProposal,
   AskResponse,
+  Channel,
   BuildDetail,
   BuildList,
   BuildSummary,
   ChatMessage,
-  CreateBuildResponse,
+  CreatedBuild,
+  CandidatePart,
+  BuildStatus,
   DeviceAction,
   DeviceDashboard,
   DeviceReadyCard,
@@ -15,6 +19,8 @@ import type {
   MessageList,
   Usage,
 } from "@albusforge/schema";
+import { summarizePart } from "@albusforge/schema";
+import { EXAMPLE_PARTS } from "@/lib/example-builds";
 
 /*
  * The design prototype's data, shaped to the contract. Timestamps are relative
@@ -171,23 +177,37 @@ interface Conversation {
   updatedAt: number;
 }
 
-/** In-process, mock mode only. Bounded so a long-running dev server can't grow it forever. */
-const conversations = new Map<string, Conversation>();
+/**
+ * Mock-only process state. Next compiles actions/RSC and route handlers into
+ * separate module graphs: a module-local Map makes the SSE route return 404
+ * for builds created by an action. Share the store (and ID sequence) across
+ * those graphs. It remains bounded and is lost when this dev process exits.
+ */
+const mockProcess = globalThis as typeof globalThis & {
+  __albusforgeMockBuilds?: { conversations: Map<string, Conversation>; sequence: number };
+};
+const buildStore = (mockProcess.__albusforgeMockBuilds ??= { conversations: new Map<string, Conversation>(), sequence: 0 });
+const { conversations } = buildStore;
 const MAX_CONVERSATIONS = 500;
-let conversationSeq = 0;
+
+/** How long the scripted reply takes, so typing dots and the event stream show. Immediate under vitest. */
+const REPLY_DELAY_MS = process.env.NODE_ENV === "test" ? 0 : 1_500;
 
 /** The prototype's three scripted replies, in order; the last repeats. */
 const scriptedReplies = () =>
   GREENHOUSE_CONVERSATION.filter(([role]) => role === "assistant").map(([, text]) => text);
 
-function appendMessage(conversation: Conversation, role: ChatMessage["role"], text: string): void {
-  conversation.messages.push({
+function appendMessage(conversation: Conversation, role: ChatMessage["role"], text: string, clientMessageId: string | null = null): ChatMessage {
+  const message: ChatMessage = {
     id: `msg_${conversation.messages.length + 1}`,
     role,
     text,
     created_at: new Date().toISOString(),
-  });
+    client_message_id: role === "user" ? clientMessageId : null,
+  };
+  conversation.messages.push(message);
   conversation.updatedAt = Date.now();
+  return message;
 }
 
 function appendReply(conversation: Conversation): void {
@@ -196,33 +216,93 @@ function appendReply(conversation: Conversation): void {
   conversation.replies += 1;
 }
 
-/** POST /v1/builds: the ask becomes the first message, and the first scripted reply follows. */
-export function createBuild(askText: string): CreateBuildResponse {
+function scheduleReply(conversation: Conversation): void {
+  if (REPLY_DELAY_MS === 0) appendReply(conversation);
+  else setTimeout(() => appendReply(conversation), REPLY_DELAY_MS);
+}
+
+/**
+ * POST /v1/builds: the ask becomes the first message, and the first scripted
+ * reply follows. The same client_message_id again returns that build (replayed).
+ */
+export function createBuild(askText: string, clientMessageId: string | null = null): { build: CreatedBuild; replayed: boolean } {
+  if (clientMessageId) {
+    for (const [id, conversation] of conversations) {
+      if (conversation.messages[0]?.client_message_id === clientMessageId) {
+        return { build: { ...conversationDetail(id, conversation), build_id: id, status: statusOf(conversation) }, replayed: true };
+      }
+    }
+  }
   if (conversations.size >= MAX_CONVERSATIONS) {
     const [oldest] = [...conversations.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt);
     if (oldest) conversations.delete(oldest[0]);
   }
-  conversationSeq += 1;
-  const id = `bld_${Date.now().toString(36)}${conversationSeq}`;
+  buildStore.sequence += 1;
+  const id = `bld_${Date.now().toString(36)}${buildStore.sequence}`;
   const conversation: Conversation = { messages: [], replies: 0, updatedAt: Date.now() };
-  appendMessage(conversation, "user", askText);
-  appendReply(conversation);
+  appendMessage(conversation, "user", askText, clientMessageId);
   conversations.set(id, conversation);
-  return { build_id: id, status: "designing" };
+  const build = { ...conversationDetail(id, conversation), build_id: id, status: statusOf(conversation) };
+  scheduleReply(conversation);
+  return { build, replayed: false };
 }
 
-/** POST /v1/builds/:id/messages. False for an unknown build. */
-export function postBuildMessage(buildId: string, text: string): boolean {
+/** POST /v1/builds/:id/messages. Null for an unknown build; the same client_message_id again returns the stored message. */
+export function postBuildMessage(buildId: string, text: string, clientMessageId: string): { message: ChatMessage; replayed: boolean } | null {
   const conversation = conversations.get(buildId);
-  if (!conversation) return false;
-  appendMessage(conversation, "user", text);
-  appendReply(conversation);
-  return true;
+  if (!conversation) return null;
+  const existing = conversation.messages.find((message) => message.role === "user" && message.client_message_id === clientMessageId);
+  if (existing) return { message: existing, replayed: true };
+  const message = appendMessage(conversation, "user", text, clientMessageId);
+  scheduleReply(conversation);
+  return { message, replayed: false };
+}
+
+/** Gateway's status machine, as the prototype script walks it: specifying while a reply is due, asking, then planning. */
+function statusOf(conversation: Conversation): BuildStatus {
+  if (conversation.messages.at(-1)?.role === "user") return "specifying";
+  return conversation.replies >= 3 ? "planning" : "asking";
+}
+
+/** Registry parts (the example builds' bundle) providing any of the capabilities, like gateway's capability match. */
+function candidatesFor(capabilities: readonly string[]): CandidatePart[] {
+  return [...EXAMPLE_PARTS.values()]
+    .flatMap((part) => {
+      const matched = part.software.capabilities.filter((capability) => capabilities.includes(capability)).sort();
+      return matched.length ? [{ ...summarizePart(part), matched_capabilities: matched }] : [];
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+/** The spec intake would have written after each scripted reply (mock only; shape as spec.ts drafts it). */
+function specAfter(replies: number): Record<string, unknown> | null {
+  if (replies === 0) return null;
+  const capabilities = replies === 1 ? ["read.soil_moisture_pct"] : ["read.soil_moisture_pct", "net.wifi", "power.battery"];
+  return {
+    sense: { what: ["soil moisture"], interval_s: 600 },
+    environment: { location: "greenhouse", flags: ["humid"] },
+    connect: { transport: replies === 1 ? "none" : "wifi", experience: ["phone alerts"] },
+    power: { source: replies === 1 ? "unknown" : "battery" },
+    experience: { alerts: ["soil too dry"], dashboard: true },
+    capabilities,
+    assumptions: replies === 1 ? [] : ["Wi-Fi reaches the north wall", "One probe per bed"],
+    open_questions:
+      replies === 1
+        ? [
+            { field: "sense.what", question: "How large is the area: one bed or the whole greenhouse?" },
+            { field: "connect.transport", question: "Do you have Wi-Fi coverage out there?" },
+          ]
+        : replies === 2
+          ? [{ field: "settled", question: "Does the plan sound right?" }]
+          : [],
+    settled: replies >= 3,
+  };
 }
 
 /** Ready after the third exchange, as in the prototype. */
 function conversationDetail(id: string, conversation: Conversation): BuildDetail {
   const ready = conversation.replies >= 3;
+  const spec = specAfter(conversation.replies);
   return {
     id,
     name: ready ? DESIGN_READY.name : "New build",
@@ -231,13 +311,20 @@ function conversationDetail(id: string, conversation: Conversation): BuildDetail
     device_count: 0,
     updated_at: new Date(conversation.updatedAt).toISOString(),
     ready: ready ? DESIGN_READY : null,
+    status: statusOf(conversation),
+    spec_version: conversation.replies > 0 ? conversation.replies : null,
+    spec,
+    candidate_parts: spec ? candidatesFor(spec.capabilities as string[]) : [],
   };
 }
 
 // --- fleet --------------------------------------------------------------------
 
+const SOIL: Channel = { key: "soil_vwc", label: "Soil moisture", unit: "% VWC", kind: "number", precision: 1, valid_range: [0, 60] };
+const FRIDGE_TEMP: Channel = { key: "temperature_c", label: "Temperature", unit: "°C", kind: "number", precision: 1, valid_range: [-30, 40] };
+
 export function fleet(): Fleet {
-  return {
+  const result: Fleet = {
     stats: { device_count: 8, readings_per_day: 2400, online_ratio: 1 },
     systems: [
       {
@@ -245,12 +332,12 @@ export function fleet(): Fleet {
         name: "Greenhouse soil monitor",
         location: "Home · 44.05°N 123.09°W",
         devices: [
-          { id: "bed-a", name: "Bed A — soil probe", accent: "green", status: "online", value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40) },
-          { id: "bed-b", name: "Bed B — soil probe", accent: "green", status: "online", value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE) },
+          { id: "bed-a", name: "Bed A — soil probe", accent: "green", status: "online", value: "31.2", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(40), channel: SOIL },
+          { id: "bed-b", name: "Bed B — soil probe", accent: "green", status: "online", value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE), channel: SOIL },
           { id: "canopy", name: "Canopy — air sensor", accent: "blue", status: "online", value: "24.1", unit: "°C · 61% RH", metric: "Air temp + humidity", last_reading_at: ago(35) },
           { id: "north-gateway", name: "North wall — gateway", accent: "peach", status: "online", value: "2.4k", unit: "msgs/day", metric: "LoRa gateway", last_reading_at: ago(0) },
           // Provisioned, never powered on: the dashboard exists before the first reading.
-          { id: "bed-c", name: "Bed C — soil probe", accent: "green", status: "never_seen", value: null, unit: null, metric: "Soil moisture", last_reading_at: null },
+          { id: "bed-c", name: "Bed C — soil probe", accent: "green", status: "never_seen", value: null, unit: null, metric: "Soil moisture", last_reading_at: null, channel: SOIL },
         ],
       },
       {
@@ -259,12 +346,21 @@ export function fleet(): Fleet {
         location: "Home · kitchen",
         devices: [
           { id: "fridge", name: "Fridge — door + temp", accent: "blue", status: "online", value: "3.8", unit: "°C", metric: "Door closed · temp", last_reading_at: ago(12) },
-          { id: "freezer", name: "Freezer — temp probe", accent: "violet", status: "online", value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30) },
+          { id: "freezer", name: "Freezer — temp probe", accent: "violet", status: "online", value: "−18.2", unit: "°C", metric: "Temperature", last_reading_at: ago(30), channel: FRIDGE_TEMP },
           { id: "pantry-leak", name: "Pantry — leak sensor", accent: "green", status: "online", value: "DRY", unit: null, metric: "Water presence", last_reading_at: ago(2 * MINUTE) },
         ],
       },
     ],
   };
+  for (const tile of result.systems.flatMap((system) => system.devices)) {
+    const reading = liveReadings.get(tile.id);
+    if (!reading || tile.channel?.key !== reading.channel || typeof reading.v !== "number") continue;
+    tile.value = reading.v.toFixed(tile.channel.precision);
+    tile.value_at = reading.t;
+    tile.last_reading_at = reading.t;
+    tile.status_at = reading.t;
+  }
+  return result;
 }
 
 // --- device dashboard ---------------------------------------------------------
@@ -285,6 +381,9 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
   if (!found) return null;
 
   const { device, buildId } = found;
+  const primary = device.channel ?? SOIL;
+  const currentValue = device.value === null ? 31.2 : Number(device.value.replace("−", "-"));
+  const primaryValue = Number.isFinite(currentValue) ? currentValue : 31.2;
   const last = SOIL_24H.length - 1;
   const reported = device.status !== "never_seen" && device.last_reading_at !== null;
 
@@ -295,21 +394,22 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       name: device.name,
       status: device.status,
       last_reading_at: device.last_reading_at,
+      status_at: device.status_at,
       chips: [
         { label: "Greenhouse — north wall", accent: "peach" },
-        { label: "Soil moisture · VWC %", accent: "blue" },
+        { label: `${primary.label} · ${primary.unit}`, accent: "blue" },
         { label: "fw 1.4.2 · ESP32", accent: "violet" },
       ],
     },
     channels: [
-      { key: "soil_vwc", label: "Soil moisture", unit: "% VWC", kind: "number", precision: 1, valid_range: [0, 60] },
+      primary,
       { key: "battery", label: "Battery", unit: "%", kind: "number", precision: 0, valid_range: [0, 100] },
       { key: "rssi", label: "Signal", unit: "dBm", kind: "number", precision: 0, valid_range: [-120, 0] },
       { key: "uptime", label: "Uptime", unit: "s", kind: "duration", precision: 0, valid_range: null },
       { key: "selftest", label: "Self-test", unit: "", kind: "status", precision: 0, valid_range: null },
     ],
     widgets: [
-      { id: "w-soil", type: "line_chart", channel: "soil_vwc", window: "24h", threshold: { value: 22, label: "dry threshold · 22%" } },
+      { id: "w-soil", type: "line_chart", channel: primary.key, window: "24h", threshold: primary.key === SOIL.key ? { value: 22, label: "dry threshold · 22%" } : null },
       { id: "w-battery", type: "stat", channel: "battery", caption: "solar charging", caption_tone: "success" },
       { id: "w-rssi", type: "stat", channel: "rssi", caption: "Wi-Fi · strong" },
       { id: "w-uptime", type: "stat", channel: "uptime", caption: "since last patch" },
@@ -317,7 +417,7 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
     ],
     latest: reported
       ? {
-          soil_vwc: { v: 31.2, t: ago(40) },
+          [primary.key]: { v: primaryValue, t: device.value_at ?? device.last_reading_at! },
           battery: { v: 87, t: ago(40) },
           rssi: { v: -61, t: ago(40) },
           uptime: { v: 34 * DAY, t: ago(40) },
@@ -327,9 +427,9 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
     series: reported
       ? [
           {
-            channel: "soil_vwc",
+            channel: primary.key,
             bucket: "1h",
-            points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })),
+            points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v: primary.key === SOIL.key ? v : primaryValue })),
           },
         ]
       : [],

@@ -16,7 +16,7 @@ import { googleInternalAuthVerifier, untrustingVerifier } from "./internal-auth"
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
-import { newSessionToken } from "./session";
+import { newSessionToken } from "./session-cookie";
 
 const SHUTDOWN_GRACE_MS = 8000;
 
@@ -71,6 +71,7 @@ async function main(): Promise<void> {
   const fifteenMinutesMs = 15 * 60_000;
 
   const app = buildApp({
+    telemetryPool: pool,
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");

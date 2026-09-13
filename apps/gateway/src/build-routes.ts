@@ -29,7 +29,7 @@ import type { Log } from "./log";
 import { anonOwnerSetCookie, anonTokenFromCookieHeader, hashAnonToken, newAnonToken } from "./owner";
 import type { PartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
-import { sessionTokenFromCookieHeader } from "./session";
+import { sessionTokenFromCookieHeader } from "./session-cookie";
 import { createStreamRegistry, DEFAULT_SSE, DEFAULT_STREAM_LIMITS, type SseOptions, type StreamLimits, streamBuildEvents, toChatMessage } from "./sse";
 
 /** Resolves a session cookie's token to its active tenant (auth-store's sessionTenant). */

@@ -175,6 +175,7 @@ jobs:
           }
           check /healthz 200
           check /readyz 503
+          check /v1/telemetry/devices 401
           check /v1/builds 401
           check /nope 404
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/ingest/v1)" = 404 ]
@@ -210,6 +211,11 @@ jobs:
           echo "parts: ${count}"
           [ "$count" = 12 ] || { docker logs gateway; exit 1; }
           curl -fsS http://localhost:8080/v1/parts/C-001 | jq -e '.part.id == "C-001"'
+          docker run --rm -i --network host -e PGPASSWORD=app-secret postgres:16-alpine \
+            psql -h 127.0.0.1 -U albus_app -d albus -v ON_ERROR_STOP=1 < apps/gateway/scripts/telemetry-read-fixture.sql
+          curl -fsS -H 'Cookie: __Host-albus_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+            http://localhost:8080/v1/telemetry/devices | \
+            jq -e '.devices | length == 1 and .[0].id == "00000000-0000-4000-8000-000000000003" and .[0].status == "never_seen"'
 
       - name: Container logs
         if: failure()
@@ -282,6 +288,17 @@ jobs:
           [ "$count" = 1 ]
           docker stop --time 10 cloudlink
           [ "$(docker inspect --format '{{.State.ExitCode}}' cloudlink)" = 0 ]
+      - name: Smoke-test telemetry jobs from the migration image
+        run: |
+          for attempt in 1 2; do
+            docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+              -e DB_USER=albus_app -e DB_PASSWORD=app-secret db-jobs:ci telemetry-rollup
+          done
+          docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
+            -e DB_USER=albus_migrate -e DB_PASSWORD=migrate-secret db-jobs:ci telemetry-maintain
+          count=$(docker run --rm --network host -e PGPASSWORD=app-secret postgres:16-alpine \
+            psql -h 127.0.0.1 -U albus_app -d albus -Atc "SELECT sum(n) FROM telemetry.rollups WHERE resolution='1h'")
+          [ "$count" = 1 ]
       - name: Container logs
         if: failure()
         run: docker logs cloudlink || true

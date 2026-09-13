@@ -1,18 +1,7 @@
 import { z } from "zod";
 import { Accent, Id, Timestamp } from "./common";
 import { ChatMessage } from "./builds";
-import { DeviceStatus } from "./fleet";
-
-/** From part.cloud.telemetry_schema (CLOUD-PLATFORM.md §6.1). */
-export const Channel = z.object({
-  key: z.string(),
-  label: z.string(),
-  unit: z.string(),
-  kind: z.enum(["number", "duration", "status"]),
-  precision: z.number().int().nonnegative(),
-  valid_range: z.tuple([z.number(), z.number()]).nullable(),
-});
-export type Channel = z.infer<typeof Channel>;
+import { Channel, DeviceStatus } from "./fleet";
 
 const WidgetBase = z.object({
   id: Id,
@@ -137,6 +126,7 @@ export const DeviceDashboard = z.object({
     build_id: Id,
     name: z.string(),
     status: DeviceStatus,
+    status_at: Timestamp.optional(),
     /**
      * Null until the first reading: the dashboard is derived and provisioned
      * before the device is powered on (CLOUD-PLATFORM.md §6.1).
@@ -179,3 +169,32 @@ export const AskResponse = z.object({
   queries: z.array(ExecutedQuery),
 });
 export type AskResponse = z.infer<typeof AskResponse>;
+
+// --- live stream --------------------------------------------------------------
+
+/**
+ * SSE events on GET /v1/tenants/:id/stream (CLOUD-PLATFORM.md §6.2). One
+ * connection per tab, scoped to the devices the session may see; the gateway implementation must
+ * replay current state on connect. Payloads are JSON; unknown event names
+ * are ignored by the portal.
+ */
+export const STREAM_EVENTS = { reading: "reading", status: "status" } as const;
+
+/** `reading`: one accepted reading. May advance presence only when newer than its last observation. */
+export const ReadingEvent = z.object({
+  device_id: Id,
+  channel: z.string(),
+  v: z.union([z.number(), z.string()]),
+  t: Timestamp,
+});
+export type ReadingEvent = z.infer<typeof ReadingEvent>;
+
+/** `status`: the device's presence changed (offline detection, first sighting). */
+export const DeviceStatusEvent = z.object({
+  device_id: Id,
+  status: DeviceStatus,
+  /** When presence was observed, independent of the last measurement time. */
+  at: Timestamp,
+  last_reading_at: Timestamp.nullable(),
+});
+export type DeviceStatusEvent = z.infer<typeof DeviceStatusEvent>;

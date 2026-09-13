@@ -7,7 +7,7 @@ Code with no markup.
 | [`api/`](api/) | the typed gateway client — server and browser variants, mock mode |
 | [`format/`](format/) | relative time, plurals, compact numbers |
 | [`sse/`](sse/) | `useEventStream`, the one EventSource hook for builds and telemetry |
-| `build-transcript.ts` | build transcript and result types, and `waitForReply` — polls the transcript with backoff until the assistant replies; one total deadline bounds every read, aborting an in-flight one through its `AbortSignal` |
+| `build-transcript.ts` | `BuildTranscript` (messages plus status, spec, spec version, candidate parts, ready card), `transcriptFrom(detail, messages)`, and `mergeMessages`: unique by id, a server message replaces the optimistic copy with the same `client_message_id` |
 | `session.ts` | server-only session data access: `getSession()` (memoized per request); `requireSession(path)`, which every signed-in page calls first — logged out redirects to `/signin?next=`, gateway failures throw to the error boundary; and `getHeaderSession()` for the header on every page — a gateway failure shows it signed out and logs one WARNING, so public pages keep rendering |
 | `session-core.ts` | `resolveSession` — the pure rules: no cookie is logged out; live asks GET /v1/me (401 = logged out, anything else throws); mock validates its own cookie |
 | `next-path.ts` | `safeNextPath` (same-origin relative paths only — no `//`, `\\`, schemes or sign-in loops), `signinHref`, `authHref` |

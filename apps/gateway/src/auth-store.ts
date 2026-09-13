@@ -12,7 +12,7 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { builds, type Db, emailCodes, llmCalls, sessions, tenantMembers, tenants, type TenantRole, users } from "@albusforge/db";
 import type { Me, TenantMembership } from "@albusforge/schema";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { hashSessionToken } from "./session";
+import { hashSessionToken } from "./session-cookie";
 
 /** ADR 0008: valid for 10 minutes. */
 export const CODE_TTL_MS = 10 * 60_000;

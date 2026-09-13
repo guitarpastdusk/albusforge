@@ -1,58 +1,71 @@
-/*
- * Session tokens and the two credential cookies (ADR 0008, PORTAL.md §5).
- *
- * A session token is 32 random bytes as base64url; only its SHA-256 is
- * stored (`users.sessions.token_hash`). Both cookies are `__Host-` cookies, so
- * browsers refuse them unless they are Secure, Path=/ and carry no Domain.
- */
-import { createHash, randomBytes } from "node:crypto";
-import { ANON_OWNER_COOKIE, SESSION_COOKIE } from "@albusforge/schema";
+import { createHash } from "node:crypto";
+import { SESSION_COOKIE } from "@albusforge/schema";
+import type { Pool, PoolClient } from "pg";
+import { HttpError } from "./http";
 
-/** 30 days. */
-export const SESSION_MAX_AGE_S = 30 * 24 * 60 * 60;
-
-const COOKIE_ATTRIBUTES = "Path=/; Secure; HttpOnly; SameSite=Lax";
-
-/** 32 bytes as unpadded base64url. */
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-
-export function newSessionToken(): string {
-  return randomBytes(32).toString("base64url");
-}
-
-export function hashSessionToken(token: string): string {
-  return createHash("sha256").update(token, "utf8").digest("hex");
-}
-
-/** The named cookie's value from a Cookie header, or undefined. First occurrence wins. */
-export function cookieValue(header: string | string[] | undefined, name: string): string | undefined {
-  const raw = Array.isArray(header) ? header.join("; ") : header;
-  if (!raw) return undefined;
-  for (const pair of raw.split(";")) {
+/** Opaque 256-bit tokens, hashed exactly as stored by the session issuer. */
+export function sessionTokenHash(cookie: string | undefined): string {
+  const values = (cookie ?? "").split(";").flatMap((pair) => {
     const index = pair.indexOf("=");
-    if (index < 0) continue;
-    if (pair.slice(0, index).trim() !== name) continue;
-    return pair.slice(index + 1).trim();
+    return index >= 0 && pair.slice(0, index).trim() === SESSION_COOKIE ? [pair.slice(index + 1).trim()] : [];
+  });
+  const token = values[0];
+  if (values.length !== 1 || !token || !/^[A-Za-z0-9_-]{43}$/.test(token)
+    || Buffer.from(token, "base64url").toString("base64url") !== token) {
+    throw new HttpError(401, "UNAUTHORIZED", "Sign in required");
   }
-  return undefined;
+  return createHash("sha256").update(token).digest("hex");
 }
 
-/** The session cookie's token when present and well formed; otherwise undefined. */
-export function sessionTokenFromCookieHeader(header: string | string[] | undefined): string | undefined {
-  const value = cookieValue(header, SESSION_COOKIE);
-  return value !== undefined && TOKEN_PATTERN.test(value) ? value : undefined;
+/** Host selects a tenant only under our public domain; forwarded headers are never trusted. */
+function tenantSlug(host: string): string | null {
+  const name = host.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+  if (name === "albusforge.ai" || name === "staging.albusforge.ai") return null;
+  if (!name.endsWith(".albusforge.ai")) return null; // Internal SSR/localhost uses active tenant.
+  const slug = name.slice(0, -".albusforge.ai".length);
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(slug) || ["app", "api", "www", "ingest"].includes(slug)) {
+    throw new HttpError(404, "NOT_FOUND", "Unknown tenant host");
+  }
+  return slug;
 }
 
-export function sessionSetCookie(token: string, maxAgeS: number = SESSION_MAX_AGE_S): string {
-  return `${SESSION_COOKIE}=${token}; ${COOKIE_ATTRIBUTES}; Max-Age=${maxAgeS}`;
-}
-
-/** Deletes the session cookie: an empty value with Max-Age=0, which web relays as a delete. */
-export function sessionClearCookie(): string {
-  return `${SESSION_COOKIE}=; ${COOKIE_ATTRIBUTES}; Max-Age=0`;
-}
-
-/** Deletes the anonymous owner cookie after verify has claimed its builds. */
-export function anonOwnerClearCookie(): string {
-  return `${ANON_OWNER_COOKIE}=; ${COOKIE_ATTRIBUTES}; Max-Age=0`;
+/** Authentication and reads share a consistent, read-only snapshot. */
+export async function withSession<T>(pool: Pool, cookie: string | undefined, host: string,
+  read: (client: PoolClient, tenantId: string) => Promise<T>,
+  options: { historyLayout?: boolean } = {}): Promise<T> {
+  const hash = sessionTokenHash(cookie);
+  const slug = tenantSlug(host);
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    // LOCK is a utility statement: unlike SELECT it does not fix the RR snapshot.
+    // Maintenance takes ACCESS EXCLUSIVE on this parent before moving/dropping
+    // partitions or advancing retention. Lock first so auth/watermark/raw data
+    // share a snapshot taken against that protected layout. Ordinary inserts
+    // remain compatible. ONLY avoids locking every child for unrelated ranges.
+    if (options.historyLayout) await client.query("LOCK TABLE ONLY telemetry.readings IN ACCESS SHARE MODE");
+    const session = (await client.query<{ user_id: string; active_tenant_id: string }>(`WITH RECURSIVE family AS (
+      SELECT id,parent_session_id,user_id,active_tenant_id,expires_at,revoked_at FROM users.sessions WHERE token_hash=$1
+      UNION
+      SELECT s.id,s.parent_session_id,s.user_id,s.active_tenant_id,s.expires_at,s.revoked_at
+      FROM users.sessions s JOIN family f ON s.id=f.parent_session_id
+    ) SELECT user_id,active_tenant_id FROM users.sessions WHERE token_hash=$1
+      AND NOT EXISTS(SELECT 1 FROM family WHERE revoked_at IS NOT NULL OR expires_at <= statement_timestamp())
+      AND NOT EXISTS(SELECT 1 FROM family WHERE user_id <> (SELECT user_id FROM users.sessions WHERE token_hash=$1))`, [hash])).rows[0];
+    if (!session) throw new HttpError(401, "UNAUTHORIZED", "Sign in required");
+    const tenant = (await client.query<{ id: string }>(
+      "SELECT id FROM users.tenants WHERE ($1::text IS NULL AND id=$2) OR slug=$1", [slug, session.active_tenant_id],
+    )).rows[0];
+    if (!tenant) throw new HttpError(404, "NOT_FOUND", "Unknown tenant");
+    const member = await client.query("SELECT 1 FROM users.tenant_members WHERE tenant_id=$1 AND user_id=$2", [tenant.id, session.user_id]);
+    if (!member.rowCount) throw new HttpError(403, "FORBIDDEN", "Tenant membership required");
+    const result = await read(client, tenant.id);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    discard = !(error instanceof HttpError);
+    await client.query("ROLLBACK").catch(() => { discard = true; });
+    throw error;
+  } finally { client.release(discard); }
 }

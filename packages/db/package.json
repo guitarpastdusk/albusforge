@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./migrate": "./src/migrate.ts"
+    "./migrate": "./src/migrate.ts",
+    "./telemetry-storage": "./src/telemetry-storage.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -13,7 +14,9 @@
     "lint": "eslint . && node scripts/check-migrations.mjs",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsc -p tsconfig.build.json && node dist/migrate.js"
+    "db:migrate": "tsc -p tsconfig.build.json && node dist/migrate.js",
+    "telemetry:rollup": "tsc -p tsconfig.build.json && node dist/telemetry-job.js rollup",
+    "telemetry:maintain": "tsc -p tsconfig.build.json && node dist/telemetry-job.js maintain"
   },
   "dependencies": {
     "drizzle-orm": "~0.45.2",

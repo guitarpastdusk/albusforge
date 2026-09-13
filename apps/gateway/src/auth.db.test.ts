@@ -26,7 +26,7 @@ import { createLogger } from "./log";
 import { hashAnonToken } from "./owner";
 import { createPartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
-import { hashSessionToken, newSessionToken } from "./session";
+import { hashSessionToken, newSessionToken } from "./session-cookie";
 
 let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;

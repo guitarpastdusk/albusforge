@@ -194,7 +194,7 @@ On `SIGTERM` or `SIGINT` the server ends open event streams, stops accepting con
 | `src/build-routes.ts` | the build, message and event routes: ownership (session or anonymous), idempotency, 409, rate limits |
 | `src/auth-routes.ts` | sign-in: code, verify, me, sign-out; per-email and per-IP limits |
 | `src/auth-store.ts` | `AuthStore` over `users.*`: codes, users and tenants, sessions, the claim transaction |
-| `src/session.ts` | session tokens and the two credential cookies |
+| `src/session-cookie.ts` | session tokens and the two credential cookies |
 | `src/email.ts` | the Resend and log email adapters |
 | `src/internal-auth.ts` | the SSR ID token check and the client IP |
 | `src/chat-store.ts` | `ChatStore` over `builds.builds`, `build_messages` and `specs`; message cursors |

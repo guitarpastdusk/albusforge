@@ -10,6 +10,8 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { processTelemetryRollups } from "@albusforge/db/telemetry-storage";
 import { tokenHash } from "./routes.js";
 import { buildApp } from "./app.js";
 import { simulatorChannels } from "./local.js";
@@ -166,4 +168,74 @@ it("deduplicates retries across independent service instances and SQL pools", as
     expect(await count(f.dev, "readings")).toBe(2);
     expect((await handle.pool.query("SELECT readings_in FROM telemetry.usage WHERE device_id=$1", [f.dev])).rows[0].readings_in).toBe("2");
   } finally { await second.close(); await secondDb.pool.end(); }
+});
+
+it("rejects data behind the storage retention boundary without a receipt or partial writes", async () => {
+  const f = await fixture();
+  await owner.query("UPDATE telemetry.retention_state SET raw_before=$1 WHERE id=1", [new Date((epoch + 1) * 1000)]);
+  try {
+    expect((await f.send()).statusCode).toBe(422);
+    expect(await count(f.dev, "packets")).toBe(0);
+    expect(await count(f.dev, "readings")).toBe(0);
+  } finally { await owner.query("UPDATE telemetry.retention_state SET raw_before='1970-01-01 00:00:00+00' WHERE id=1"); }
+});
+
+it("HTTP ingestion and the real rollup worker overlap without deadlocking or losing late samples", async () => {
+  // Drain other fixtures so the worker claims this device's hour.
+  while (await processTelemetryRollups(handle.pool)) { /* drain */ }
+  const f = await fixture();
+  const packet = { ...f.body, r: [{ c: "temperature_c", t: epoch, v: 1 }] };
+  expect((await f.send(packet)).statusCode).toBe(202);
+  const worker = await handle.pool.connect();
+  const pid = (await worker.query("SELECT pg_backend_pid() AS pid")).rows[0].pid as number;
+  let resume!: () => void;
+  let reached!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const ready = new Promise<void>((resolve) => { reached = resolve; });
+  let paused = false;
+  // Only pause scheduling: all SQL, FK checks and transactions are production code.
+  const scheduled = new Proxy(worker, { get(target, property) {
+    if (property === "release") return () => {};
+    if (property === "query") return async (sql: string, values?: unknown[]) => {
+      if (!paused && sql.includes("WITH samples AS MATERIALIZED")) {
+        paused = true; reached(); await gate;
+      }
+      return target.query(sql, values);
+    };
+    return Reflect.get(target, property);
+  } });
+  const pool = new Proxy(handle.pool, { get(target, property) {
+    return property === "connect" ? async () => scheduled : Reflect.get(target, property);
+  } });
+  const rollup = processTelemetryRollups(pool, 1);
+  // Handle rejection immediately, including during test cleanup.
+  const outcome = rollup.then((value) => ({ value }), (error: unknown) => ({ error }));
+  let upload: ReturnType<typeof f.send> | undefined;
+  try {
+    await Promise.race([ready, rollup.then(() => { throw new Error("Worker did not reach aggregate insertion"); })]);
+    upload = f.send({ ...packet, seq: 2, r: [{ c: "temperature_c", t: epoch, v: 2 }] });
+    // Fastify injection is lazy; start the request before observing its SQL lock wait.
+    void upload.then(() => {});
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      blocked = (await handle.pool.query(`SELECT 1 FROM pg_stat_activity
+        WHERE $1=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock'
+        AND query LIKE 'INSERT INTO telemetry.readings%'`, [pid])).rowCount === 1;
+      if (blocked) break;
+      await delay(10);
+    }
+    expect(blocked).toBe(true);
+    resume();
+    expect(await outcome).toEqual({ value: 1 });
+    expect((await upload).statusCode).toBe(202);
+    expect(await processTelemetryRollups(handle.pool)).toBe(1);
+    expect((await handle.pool.query("SELECT n,sum FROM telemetry.rollups WHERE device_id=$1 AND resolution='1h'", [f.dev])).rows).toEqual([{ n: "2", sum: "3" }]);
+    expect(await count(f.dev, "packets")).toBe(2);
+    expect(await count(f.dev, "readings")).toBe(2);
+  } finally {
+    resume();
+    await outcome;
+    await upload;
+    worker.release();
+  }
 });

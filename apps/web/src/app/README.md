@@ -5,7 +5,8 @@ Routes (Next.js App Router). Route-segment folders don't carry their own README 
 | Route | Screen | Auth | State |
 | --- | --- | --- | --- |
 | `/` | Landing — chat-first, device carousel; the chat starts in place | anonymous | built to design |
-| `/build/[buildId]` | The same conversation, reopened from its URL | anonymous until checkout | built to design |
+| `/build/[buildId]` | The same conversation, reopened from its URL, with the spec so far and candidate parts | anonymous until checkout | built to design; live replies over SSE (M2) |
+| `v1/builds/[buildId]/events` | Route handler: the build event stream for local dev (proxy to gateway, or the mock stream). Staging and prod route `/v1/*` to gateway, so it's never reached there | — | dev only |
 | `(auth)/signup`, `(auth)/signin` | Email → 6-digit code → done | — | built to design |
 | `(app)/projects` | Projects grid | session | built to design |
 | `(app)/projects/[buildId]` | Track kit / review parts (not designed yet) | session | stub |

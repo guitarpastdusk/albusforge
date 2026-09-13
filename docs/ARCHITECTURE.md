@@ -525,7 +525,7 @@ Three behaviors:
 1. **Capability coverage** — every `spec.sense`/`act` item maps to at least one part capability.
 2. **Brain compatibility** — all `electrical.requires` satisfied; I²C addresses unique; `conflicts` respected.
 3. **Electrical fit** — voltage windows overlap across the assembly; connector standards match.
-4. **Power** — `battery_capacity_mah / weighted_avg_current_ma × 24 ≥ target_life_days`, duty cycle derived from `interval_s`.
+4. **Power** — `usable_battery_capacity_mah / weighted_avg_source_current_ma / 24 ≥ target_life_days`, duty cycle derived from `interval_s` and measured active durations. Capacity accounts for cutoff and reserve; current includes conversion losses and board overhead.
 5. **Compat matrix** — the `(driver_version, runtime, brain)` triple must be green.
 
 Infeasible returns a **minimal conflict set** to `explain.ts`, which renders it as a human trade-off question rather than a failure.
@@ -614,11 +614,13 @@ Rules: SemVer at every boundary · a CI matrix job rebuilds every driver against
 
 The wire envelope is the transport contract: devices upload authenticated `POST /ingest/v1` batches, and the server acknowledges only after durable storage. MQTT and its broker/bridge remain deferred to M8; see [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.
 
-**M6a implementation (2026-09-13, branch `m6/telemetry-ingest`, pending review/merge):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
+**M6a implementation (merged PR #32, 2026-09-13):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
 Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
 
-Production BuildPlan provisioning, partitioning/retention, rollups, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
+M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued minute/hour rollups and guarded retention; see [`TELEMETRY-STORAGE.md`](TELEMETRY-STORAGE.md) for the job/rollout contract. Production BuildPlan provisioning, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
+
+M6c read API on `m6/telemetry-read-api` adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. The richer provisioned dashboard contract, sign-in issuance and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
 
 ### 7.7 Marketplace
 
@@ -940,7 +942,7 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 
 ## 16. Milestones
 
-**Brought forward alongside M2:** M6a telemetry ingestion is implemented on `m6/telemetry-ingest`, pending review/merge. It uses standalone `apps/cloudlink` and PostgreSQL plus a simulator; infrastructure is coordinated with the infra owner. M6b operations, M6c dashboards and M6.5 intelligence remain next, as detailed in [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md).
+**Brought forward alongside M2:** M6a telemetry ingestion is merged in PR #32, and partitioned storage/rollups/retention are merged in PR #40. It uses standalone `apps/cloudlink` and PostgreSQL plus a simulator; infrastructure is coordinated with the infra owner. M6b operations, M6c dashboards and M6.5 intelligence remain next, as detailed in [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md).
 
 | M | Scope | Infra added |
 | --- | --- | --- |

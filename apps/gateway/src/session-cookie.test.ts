@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anonOwnerClearCookie, cookieValue, hashSessionToken, newSessionToken, sessionClearCookie, sessionSetCookie, sessionTokenFromCookieHeader } from "./session";
+import { anonOwnerClearCookie, cookieValue, hashSessionToken, newSessionToken, sessionClearCookie, sessionSetCookie, sessionTokenFromCookieHeader } from "./session-cookie";
 
 describe("session tokens", () => {
   it("are 32 random bytes as base64url, hashed with SHA-256", () => {

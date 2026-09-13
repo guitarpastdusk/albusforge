@@ -46,6 +46,9 @@ module "web" {
   env = {
     PUBLIC_DOMAIN        = local.domain
     GATEWAY_INTERNAL_URL = module.gateway.uri
+    # Structured logs link each entry to its request trace:
+    # logging.googleapis.com/trace = projects/<this>/traces/<id>.
+    GOOGLE_CLOUD_PROJECT = local.project_id
   }
 }
 

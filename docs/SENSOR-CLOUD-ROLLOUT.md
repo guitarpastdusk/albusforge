@@ -78,6 +78,8 @@ An additional local test used PostgreSQL 16 and actual HTTP servers for cloudlin
 
 The gateway branch also passed a browser check with contract-stub transport at desktop, 390px and 320px widths, including long channel identifiers and Ask evidence, without document overflow or page errors. Infrastructure validation includes Terraform validation/mocked configuration tests, actionlint, and 94 shell checks. Ask failure-path corrections also pass the three independent reviewer reproductions for socket loss, post-body disconnect and pool acquisition deadlines. Infrastructure release-gate corrections pass the three adapted reviewer probes for newer failed/running migrations and imported policy changes. Cloud read-only plans are described above; the final infrastructure delta changes shell guards and docs, with Terraform unchanged from `83eae51`. Review verdicts and current CI belong to each PR's exact head; passing local checks do not substitute for review.
 
+After that combined run, infrastructure `bcc0222` tightened only the release guard, its tests and runbook. It rejects overlapping terminal migration histories regardless of completion order and requires a fresh matching success created after all other observed attempts finished. All **103 shell checks** pass, including the independent reviewer overlap reproduction with only its target path and expected rejection changed. Terraform and application code are unchanged; the earlier combined test and plan evidence remains attributed to its original commits. This corrective delta awaits independent review.
+
 ## Acceptance evidence to collect
 
 | Claim | Required evidence |

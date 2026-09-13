@@ -19,21 +19,56 @@ async function authorize(client: PoolClient, q: SensorAskRequest) {
 }
 async function transaction<T>(pool: Pool, read: boolean, work: (client: PoolClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
-  let expired = false;
   let client: PoolClient | undefined;
   let released = false;
-  const release = (destroy = false) => { if (client && !released) { released = true; client.release(destroy); } };
-  const abort = () => { expired = true; release(true); };
+  let broken = false;
+  let expired = false;
+  const unavailable = () => new AskError(503,"UNAVAILABLE","Sensor chat database operation interrupted");
+  const removeErrorHandler = () => { client?.off("error",onClientError); };
+  const release = (destroy = false) => {
+    if (!client || released) return;
+    released = true;
+    if (destroy || broken) {
+      // A destroyed client can still emit a queued socket error. Keep its
+      // handler until end; it will never return to the pool for another lease.
+      client.once("end",removeErrorHandler);
+      client.release(true);
+    } else {
+      // pg-pool installs its idle error handler synchronously on release.
+      // Remove ours afterwards so active -> idle has no unhandled-error gap.
+      client.release();
+      removeErrorHandler();
+    }
+  };
+  const onClientError = () => { broken = true; release(true); };
+  let rejectAbort!: (error: Error) => void;
+  const interrupted = new Promise<never>((_resolve,reject) => { rejectAbort = reject; });
+  const abort = () => { expired = true; release(true); rejectAbort(unavailable()); };
   signal?.addEventListener("abort",abort,{once:true});
+  const acquiring = Promise.resolve().then(() => pool.connect()).then((lease) => {
+    client = lease;
+    client.on("error",onClientError);
+    if (expired || signal?.aborted) {
+      release(true);
+      throw unavailable();
+    }
+    return lease;
+  });
+  // Observe both losing promises, including a checkout/error arriving after
+  // this transaction has returned. A late lease issues no SQL and is destroyed.
+  acquiring.catch(() => undefined);
+  interrupted.catch(() => undefined);
   try {
-    // pg's bounded connectionTimeout also bounds pool queueing. A late lease is destroyed.
-    client = await pool.connect();
-    if (expired || signal?.aborted) { release(true); throw new AskError(503,"UNAVAILABLE","Sensor chat deadline reached"); }
-    await client.query(read ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN");
-    if (read) await client.query("LOCK TABLE ONLY telemetry.readings IN ACCESS SHARE MODE");
-    const result = await work(client);
+    if (signal?.aborted) abort();
+    await Promise.race([acquiring,interrupted]);
     signal?.throwIfAborted();
-    await client.query("COMMIT");
+    if (released || broken) throw unavailable();
+    await client!.query(read ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN");
+    if (read) await client!.query("LOCK TABLE ONLY telemetry.readings IN ACCESS SHARE MODE");
+    const result = await work(client!);
+    signal?.throwIfAborted();
+    if (broken) throw unavailable();
+    await client!.query("COMMIT");
     return result;
   } catch (error) {
     if (client && !released) await client.query("ROLLBACK").catch(() => release(true));

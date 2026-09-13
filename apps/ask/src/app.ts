@@ -13,7 +13,7 @@ export function buildApp(options: AnswerOptions & { concurrency: number; deadlin
   });
   app.get("/healthz",async () => ({ok:true}));
   app.get("/readyz",async () => { await options.ping(); return {ok:true}; });
-  app.post("/v1/ask",async (request) => {
+  app.post("/v1/ask",async (request,reply) => {
     const parsed = SensorAskRequest.safeParse(request.body);
     if (!parsed.success) throw new AskError(400,"INVALID_REQUEST","Invalid sensor chat request");
     if (active >= options.concurrency) throw new AskError(429,"BUSY","Sensor chat is busy; retry later");
@@ -21,9 +21,11 @@ export function buildApp(options: AnswerOptions & { concurrency: number; deadlin
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(),options.deadlineMs);
     const abort = () => controller.abort();
+    const responseClosed = () => { if (!reply.raw.writableFinished) abort(); };
     request.raw.on("aborted",abort);
+    reply.raw.on("close",responseClosed);
     try { return await answer(parsed.data,options,controller.signal); }
-    finally { active--; clearTimeout(timer); request.raw.off("aborted",abort); }
+    finally { active--; clearTimeout(timer); request.raw.off("aborted",abort); reply.raw.off("close",responseClosed); }
   });
   return app;
 }

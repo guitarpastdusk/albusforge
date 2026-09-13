@@ -1,9 +1,12 @@
+import { request } from "node:http";
+import type { Socket } from "node:net";
+import { buildApp } from "./app";
 import { randomUUID } from "node:crypto";
 import { createDb,type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { PostgreSqlContainer,type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import pg from "pg";
-import { afterAll,beforeAll,expect,it } from "vitest";
+import { afterAll,beforeAll,expect,it,vi } from "vitest";
 import { createStore } from "./store";
 let container:StartedPostgreSqlContainer;
 let handle:ReturnType<typeof createDb>;
@@ -108,4 +111,52 @@ it("persists actual model tokens and cost under the accepted sensor identity",as
     stopReason:"end_turn",buildId:null,tenantId:q.tenant_id,anonOwnerHash:null,prefixHash:null});
   const row=(await handle.pool.query("SELECT * FROM telemetry.sensor_ask_requests WHERE request_id=$1",[q.request_id])).rows[0];
   expect(row).toMatchObject({model_attempted:true,usage_known:true,outcome:'model',cost_usd:'0.002000',input_tokens:100,output_tokens:20,tenant_id:q.tenant_id});
+});
+function realApp(pool: pg.Pool) {
+  return buildApp({store:createStore(pool,{user:100,tenant:100,global:1000}),maxTokens:512,concurrency:1,deadlineMs:10000,write:()=>{},ping:async()=>{}});
+}
+it("returns 503 on checked-out socket loss without uncaught errors and recovers on a fresh connection",async()=>{
+  const {q}=await fixture();const pool=new pg.Pool({...handle.pool.options,password:"app-secret",max:1});const app=realApp(pool);
+  const blocker=await owner.connect();await blocker.query("BEGIN");await blocker.query("SELECT pg_advisory_xact_lock(1936028275,1)");
+  let leased:pg.PoolClient|undefined;
+  pool.on('acquire',(client)=>{leased=client;});pool.on('error',()=>{});
+  const uncaught:unknown[]=[];const trap=(error:unknown)=>{uncaught.push(error);};process.on('uncaughtException',trap);
+  try {
+    const response=Promise.resolve(app.inject({method:'POST',url:'/v1/ask',payload:q}));
+    await vi.waitFor(async()=>expect((await owner.query("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=1936028275 AND objid=1 AND NOT granted")).rowCount).toBeGreaterThan(0),{timeout:5000});
+    (leased as pg.PoolClient & {connection:{stream:Socket}}).connection.stream.destroy();
+    const failed=await response;expect(failed.statusCode).toBe(503);expect(failed.body).not.toContain('Connection terminated');expect(uncaught).toEqual([]);
+    await blocker.query("ROLLBACK");
+    const recovered=await app.inject({method:'POST',url:'/v1/ask',payload:{...q,request_id:randomUUID()}});expect(recovered.statusCode).toBe(200);
+    expect(uncaught).toEqual([]);
+  } finally {process.off('uncaughtException',trap);await blocker.query("ROLLBACK");blocker.release();await app.close();await pool.end();}
+});
+it("bounds waiting for a held pool slot by the shared deadline and destroys a late checkout once",async()=>{
+  const {q}=await fixture();const pool=new pg.Pool({...handle.pool.options,password:"app-secret",max:1,connectionTimeoutMillis:3000});const held=await pool.connect();
+  let late:pg.PoolClient|undefined;let releaseSpy:ReturnType<typeof vi.spyOn>|undefined;let querySpy:ReturnType<typeof vi.spyOn>|undefined;
+  const observedPool=new Proxy(pool,{get(target,key) {
+    if(key==='connect') return async()=>{const client=await target.connect();late=client;releaseSpy=vi.spyOn(client,'release');querySpy=vi.spyOn(client,'query');return client;};
+    return Reflect.get(target,key);
+  }});
+  const controller=new AbortController();const pending=createStore(observedPool,{user:100,tenant:100,global:1000}).evidence(q,controller.signal);
+  const outcome=pending.catch(error=>error);
+  try {
+    await vi.waitFor(()=>expect(pool.waitingCount).toBe(1));const before=performance.now();controller.abort();
+    const result=await outcome;expect(result).toMatchObject({status:503});expect(performance.now()-before).toBeLessThan(500);
+    held.release();await vi.waitFor(()=>expect(late).toBeDefined());await vi.waitFor(()=>expect(pool.totalCount).toBe(0));
+    expect(releaseSpy).toHaveBeenCalledExactlyOnceWith(true);expect(querySpy).not.toHaveBeenCalled();
+    expect((await createStore(pool,{user:100,tenant:100,global:1000}).evidence(q)).count).toBe(0);
+  } finally {if(!late)held.release();await pool.end();}
+});
+it("cancels post-body disconnect during blocked SQL and promptly restores HTTP capacity",async()=>{
+  const {q}=await fixture();const pool=new pg.Pool({...handle.pool.options,password:"app-secret",max:1});const app=realApp(pool);
+  const blocker=await owner.connect();await blocker.query("BEGIN");await blocker.query("SELECT pg_advisory_xact_lock(1936028275,1)");
+  await app.listen({host:'127.0.0.1',port:0});
+  const caller=request(app.listeningOrigin+'/v1/ask',{method:'POST',headers:{'content-type':'application/json'}});caller.on('error',()=>{});
+  try {
+    caller.end(JSON.stringify(q));await vi.waitFor(async()=>expect((await owner.query("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND classid=1936028275 AND objid=1 AND NOT granted")).rowCount).toBeGreaterThan(0),{timeout:5000});
+    caller.destroy();await vi.waitFor(()=>expect(pool.totalCount).toBe(0));
+    await blocker.query('ROLLBACK');
+    const next=await app.inject({method:'POST',url:'/v1/ask',payload:{...q,request_id:randomUUID()}});expect(next.statusCode).toBe(200);
+  } finally {caller.destroy();await blocker.query('ROLLBACK');blocker.release();await app.close();await pool.end();}
 });

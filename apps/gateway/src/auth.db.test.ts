@@ -195,11 +195,14 @@ describe("POST /v1/auth/code", () => {
     expect(rows).toHaveLength(6);
     const live = rows.filter((row) => row.consumedAt === null);
     expect(live).toHaveLength(1);
-    // Only the surviving code verifies, and only once.
+    // Superseded codes are rejected (and count as attempts); the survivor verifies exactly once.
+    const attempt = (code: string) => store.verifyCode({ email: address, code, anonOwnerHash: undefined, currentSessionToken: undefined, sessionMaxAgeS: 60 });
     const codes = issued.map((i) => i.code);
-    const outcomes = await Promise.all(codes.map((code) => store.verifyCode({ email: address, code, anonOwnerHash: undefined, currentSessionToken: undefined, sessionMaxAgeS: 60 })));
-    expect(outcomes.filter((o) => o.kind === "verified")).toHaveLength(1);
-    expect((await store.verifyCode({ email: address, code: codes.find((c) => hashCode(live[0]!.id, c) === live[0]!.codeHash)!, anonOwnerHash: undefined, currentSessionToken: undefined, sessionMaxAgeS: 60 })).kind).toBe("rejected");
+    const survivor = codes.find((c) => hashCode(live[0]!.id, c) === live[0]!.codeHash)!;
+    const superseded = codes.filter((c) => c !== survivor).slice(0, 2); // fewer than the attempt cap
+    for (const code of superseded) expect((await attempt(code)).kind).toBe("rejected");
+    expect((await attempt(survivor)).kind).toBe("verified");
+    expect((await attempt(survivor)).kind).toBe("rejected");
   });
 
   it("rejects a malformed body and never logs or stores anything for it", async () => {

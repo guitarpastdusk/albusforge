@@ -19,4 +19,5 @@ Consumed as TypeScript source (`exports` points at `src/index.ts`); Next.js comp
 | `src/usage.ts` | the tenant's usage for the current period, per model tier |
 | `src/routes.ts` | every route's method, path pattern and path builder |
 | `src/part.ts` | the Part Definition (ARCHITECTURE.md §4) that [`registry/`](../../registry/) validates against |
+| `src/parts.ts` | `GET /v1/parts` and `/v1/parts/:id`: the query, and the list and detail responses around the Part Definition |
 | `src/connector.ts` | connector standards referenced by `electrical.connector` |

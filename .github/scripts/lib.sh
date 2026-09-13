@@ -1,6 +1,21 @@
-# Shared helpers for the web deploy scripts. Sourced, not run.
-# Callers set REPO (the Artifact Registry repository path) and SERVICE.
-: "${REPO:?REPO is required}" "${SERVICE:?SERVICE is required}"
+# Shared helpers for the deploy scripts. Sourced, not run.
+#
+# Callers set REPO (the Artifact Registry repository path), the image, and what
+# runs it:
+#   SERVICE=<name>             a Cloud Run service. The image is $REPO/$SERVICE
+#                              unless IMAGE names another.
+#   JOBS="<job> <job>"         Cloud Run jobs that all run IMAGE. IMAGE is
+#                              required, and SERVICE is ignored.
+#   IMAGE=<name> alone         for scripts that only read the registry
+#                              (require-staging-deployed.sh).
+# deploy-web sets only REPO and SERVICE=web.
+: "${REPO:?REPO is required}"
+JOBS="${JOBS:-}"
+if [ -n "$JOBS" ]; then
+  : "${IMAGE:?IMAGE is required with JOBS}"
+else
+  IMAGE="${IMAGE:-${SERVICE:?SERVICE is required}}"
+fi
 
 note() { echo "$*" >&2; }
 fail() {
@@ -34,14 +49,33 @@ serving_image() {
   printf '%s\n' "$img"
 }
 
+# job_image PROJECT JOB
+# Prints the image of JOB's most recent successful execution in PROJECT. That is
+# what last ran to completion, unlike the job's template: a job updated to a new
+# image whose execution then failed still names the new image.
+# Returns 4 if no execution has succeeded, 2 if gcloud or parsing fails. Needs
+# REGION.
+job_image() {
+  local project="$1" job="$2" json img
+  : "${REGION:?REGION is required}"
+  json="$(gcloud run jobs executions list --job "$job" --project "$project" --region "$REGION" --format=json)" || return 2
+  img="$(printf '%s' "$json" | jq -r '
+    [ .[] | select(any((.status.conditions // [])[]; .type == "Completed" and .status == "True")) ]
+    | sort_by(.metadata.creationTimestamp // "")
+    | if length == 0 then "" else (last | .spec.template.spec.containers[0].image // "__NO_IMAGE__") end')" || return 2
+  [ -n "$img" ] || return 4
+  [ "$img" != "__NO_IMAGE__" ] || return 2
+  printf '%s\n' "$img"
+}
+
 # image_tags DIGEST
-# Prints the tag names on DIGEST in $REPO/$SERVICE, one per line.
+# Prints the tag names on DIGEST in $REPO/$IMAGE, one per line.
 # Returns 3 if the digest isn't in the repository, 2 if the listing fails.
 # Accepts tags as a comma-separated string or an array, as bare names or full
 # resource names, and versions as a digest or a .../versions/<digest> path.
 image_tags() {
   local digest="$1" json out
-  json="$(gcloud artifacts docker images list "$REPO/$SERVICE" --include-tags --format=json)" || return 2
+  json="$(gcloud artifacts docker images list "$REPO/$IMAGE" --include-tags --format=json)" || return 2
   out="$(printf '%s' "$json" | jq -r --arg d "$digest" '
     [ .[] | select((.version // "") as $v | $v == $d or ($v | endswith("/" + $d)) or ($v | endswith("@" + $d))) ] as $m
     | if ($m | length) == 0 then "__NOT_FOUND__"

@@ -1,6 +1,7 @@
 "use client";
 
 import type { ShowcaseCard } from "@albusforge/schema";
+import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { PulseDot } from "@/components/ui";
 import { accentClasses } from "@/lib/accent";
@@ -29,7 +30,11 @@ function usePrefersReducedMotion() {
   );
 }
 
-export function DeviceCarousel({ cards }: { cards: CarouselCard[] }) {
+/**
+ * `examples`: the cards are example builds (real designs, sample readings), not live devices. The heading
+ * says so, cards drop the live pulse, and each card links to its build in the Marketplace.
+ */
+export function DeviceCarousel({ cards, examples = false }: { cards: CarouselCard[]; examples?: boolean }) {
   const positions = cards.length;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
@@ -49,7 +54,7 @@ export function DeviceCarousel({ cards }: { cards: CarouselCard[] }) {
   return (
     <section
       aria-roledescription="carousel"
-      aria-label="Live devices built by people like you"
+      aria-label={examples ? "Example builds" : "Live devices built by people like you"}
       className="mt-16 w-full max-w-[1080px]"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
@@ -60,7 +65,7 @@ export function DeviceCarousel({ cards }: { cards: CarouselCard[] }) {
     >
       <div className="flex items-center justify-between gap-5">
         <h2 className="text-left font-mono text-[13px] uppercase tracking-[0.2em] text-muted">
-          Live right now — built by people like you
+          {examples ? "Example builds — real designs, sample readings" : "Live right now — built by people like you"}
         </h2>
         <div className="flex gap-2">
           <ArrowButton label="Previous device" onClick={() => go(index - 1)}>
@@ -72,13 +77,21 @@ export function DeviceCarousel({ cards }: { cards: CarouselCard[] }) {
         </div>
       </div>
 
-      <div className="mt-[18px] overflow-hidden">
+      {/* clip, not hidden: a focused card must not scroll the track, only move it (onFocus below). */}
+      <div className="mt-[18px] overflow-clip">
         <div
           className="flex gap-5 transition-transform duration-600 ease-carousel motion-reduce:transition-none"
           style={{ transform: `translateX(-${index * STEP_PX}px)` }}
         >
           {track.map((card, i) => (
-            <DeviceCard key={`${card.id}-${i}`} card={card} duplicate={i >= positions} />
+            <DeviceCard
+              key={`${card.id}-${i}`}
+              card={card}
+              duplicate={i >= positions}
+              example={examples}
+              // Tabbing to a card that is off to the side brings it into view.
+              onFocus={i < positions ? () => go(i) : undefined}
+            />
           ))}
         </div>
       </div>
@@ -115,17 +128,30 @@ function ArrowButton({ label, onClick, children }: { label: string; onClick: () 
   );
 }
 
-function DeviceCard({ card, duplicate }: { card: CarouselCard; duplicate: boolean }) {
+function DeviceCard({
+  card,
+  duplicate,
+  example,
+  onFocus,
+}: {
+  card: CarouselCard;
+  duplicate: boolean;
+  example: boolean;
+  onFocus?: () => void;
+}) {
   const { bg, fg } = accentClasses[card.accent];
 
-  return (
+  const body = (
     <article
       aria-hidden={duplicate || undefined}
-      className="w-[340px] flex-none overflow-hidden rounded-[22px] border border-hairline bg-white text-left"
+      className={cx(
+        "w-[340px] flex-none overflow-hidden rounded-[22px] border border-hairline bg-white text-left",
+        example && "transition-shadow hover:shadow-card",
+      )}
     >
       <div className={cx("flex items-center justify-between gap-3 px-6 py-5", bg)}>
         <div className="flex items-center gap-2">
-          <PulseDot />
+          {example ? null : <PulseDot />}
           <h3 className={cx("text-[14px] font-semibold", fg)}>{card.name}</h3>
         </div>
         <span className={cx("whitespace-nowrap font-mono text-[18px]", fg)}>{card.reading}</span>
@@ -138,5 +164,19 @@ function DeviceCard({ card, duplicate }: { card: CarouselCard; duplicate: boolea
         </div>
       </div>
     </article>
+  );
+
+  if (!example) return body;
+  return (
+    <Link
+      href={`/marketplace/${encodeURIComponent(card.id)}`}
+      aria-label={duplicate ? undefined : `${card.name}: see the build`}
+      aria-hidden={duplicate || undefined}
+      tabIndex={duplicate ? -1 : undefined}
+      onFocus={onFocus}
+      className="flex-none rounded-[22px]"
+    >
+      {body}
+    </Link>
   );
 }

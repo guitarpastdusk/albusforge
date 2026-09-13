@@ -105,7 +105,6 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       return data.postBuildMessage(id, text) ? empty(202) : notFound(`build ${id}`);
     },
   ],
-  [routes.showcase, () => ok(data.showcase())],
   [routes.tenants.devices, () => ok(data.fleet())],
   [routes.devices.dashboard, ([id = ""]) => orNotFound(`device ${id}`, data.dashboard(id))],
   [
@@ -116,8 +115,36 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       return orNotFound(`device ${id}`, data.askDevice(id));
     },
   ],
-  [routes.listings.list, (_, query) => ok(data.listingList(query.get("tags"), query.get("cursor"), query.get("limit")))],
-  [routes.listings.get, ([id = ""]) => orNotFound(`listing ${id}`, data.listing(id))],
+  [
+    routes.devices.actions.setEnabled,
+    ([id = "", actionId = ""], _query, body) => {
+      const enabled = typeof body === "object" && body !== null ? (body as Record<string, unknown>).enabled : undefined;
+      if (typeof enabled !== "boolean") return badRequest("enabled must be a boolean");
+      return orNotFound(`action ${actionId} on device ${id}`, data.setActionEnabled(id, actionId, enabled));
+    },
+  ],
+  [
+    routes.devices.actions.propose,
+    async ([id = ""], _query, body) => {
+      const text = field(body, "text")?.trim();
+      if (!text) return badRequest("text is required");
+      await latency(DEVICE_REPLY_MS);
+      return orNotFound(`device ${id}`, data.proposeAction(id, text));
+    },
+  ],
+  [
+    routes.devices.actions.create,
+    ([id = ""], _query, body) => {
+      const proposalId = field(body, "proposal_id");
+      if (!proposalId) return badRequest("proposal_id is required");
+      const outcome = data.confirmAction(id, proposalId);
+      if (outcome.ok) return jsonResponse(outcome.created ? 201 : 200, outcome.action);
+      if (outcome.reason === "unresolved") {
+        return jsonResponse(409, { error: { code: "unresolved_proposal", message: "Resolve the proposal's issues before confirming it.", details: outcome.issues } });
+      }
+      return notFound(`proposal ${proposalId}`);
+    },
+  ],
   [routes.usage, () => ok(data.usage())],
 ];
 

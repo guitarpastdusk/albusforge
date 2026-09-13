@@ -3,7 +3,16 @@
   "extends": ["//"],
   "tasks": {
     "typecheck": {
-      "dependsOn": ["^typecheck", "build"]
+      "dependsOn": ["^typecheck", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/registry/parts/**", "$TURBO_ROOT$/registry/known-issues.json", "$TURBO_ROOT$/registry/scripts/**"]
+    },
+    // The example builds (src/lib/example-builds.ts) bundle registry part data, and their tests import
+    // registry scripts: a registry change must invalidate web's cached build, test and typecheck.
+    "build": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/registry/parts/**", "$TURBO_ROOT$/registry/known-issues.json", "$TURBO_ROOT$/registry/scripts/**"]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/registry/parts/**", "$TURBO_ROOT$/registry/known-issues.json", "$TURBO_ROOT$/registry/scripts/**"]
     }
   }
 }

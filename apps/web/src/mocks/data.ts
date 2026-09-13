@@ -1,4 +1,6 @@
+import { readRule } from "./rules";
 import type {
+  ActionProposal,
   AskResponse,
   BuildDetail,
   BuildList,
@@ -9,11 +11,8 @@ import type {
   DeviceDashboard,
   DeviceReadyCard,
   Fleet,
-  Listing,
-  ListingList,
   Me,
   MessageList,
-  Showcase,
   Usage,
 } from "@albusforge/schema";
 
@@ -235,67 +234,6 @@ function conversationDetail(id: string, conversation: Conversation): BuildDetail
   };
 }
 
-export function showcase(): Showcase {
-  return {
-    cards: [
-      {
-        id: "sc-greenhouse",
-        name: "Greenhouse soil monitor",
-        accent: "green",
-        reading: "31.2% VWC",
-        chain: ["soil probe ×4", "ESP32", "cloud"],
-        caption: "Soil moisture · solar powered",
-        last_reading_at: ago(40),
-      },
-      {
-        id: "sc-fridge",
-        name: "Fridge door sentinel",
-        accent: "blue",
-        reading: "3.8°C",
-        chain: ["hall sensor", "ESP32-C3", "SMS"],
-        caption: "Door + temperature",
-        last_reading_at: ago(12),
-      },
-      {
-        id: "sc-compressor",
-        name: "Compressor vibration watch",
-        accent: "peach",
-        reading: "0.9 mm/s",
-        chain: ["accel", "FFT on-device", "alert"],
-        caption: "Bearing-wear anomaly",
-        last_reading_at: ago(5),
-      },
-      {
-        id: "sc-beehive",
-        name: "Beehive scale + temp",
-        accent: "violet",
-        reading: "41.6 kg",
-        chain: ["load cells", "nRF52840", "LoRa"],
-        caption: "Hive weight + brood temp",
-        last_reading_at: ago(2 * MINUTE),
-      },
-      {
-        id: "sc-sump",
-        name: "Sump pump failover",
-        accent: "blue",
-        reading: "DRY",
-        chain: ["level probe", "current clamp", "siren"],
-        caption: "Water level + pump draw",
-        last_reading_at: ago(30),
-      },
-      {
-        id: "sc-cold-room",
-        name: "Cold-room logger",
-        accent: "peach",
-        reading: "−18.2°C",
-        chain: ["PT100", "ESP32", "signed log"],
-        caption: "Audit-grade temperature",
-        last_reading_at: ago(15),
-      },
-    ],
-  };
-}
-
 // --- fleet --------------------------------------------------------------------
 
 export function fleet(): Fleet {
@@ -400,8 +338,106 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       : device.id === "bed-a"
         ? BED_A_GREETING
         : `Hi — I'm ${device.name}. Ask me anything about my readings.`,
-    ...(device.id === "bed-a" ? { actions: BED_A_ACTIONS, last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+      permissions: { edit_actions: true },
+    ...actionsBlock(device.id),
   };
+}
+
+// --- closed-loop actions ------------------------------------------------------
+
+/**
+ * Mock mode's rule store: bed-a starts with the prototype's three rules,
+ * every other device with none. Lives for the process, like the chat
+ * transcripts, so a toggle survives a refresh.
+ */
+const actionStore = new Map<string, DeviceAction[]>();
+const proposals = new Map<string, { deviceId: string; proposal: ActionProposal }>();
+/** Confirmed proposals, kept so a retried confirmation returns the rule it already created (ADR 0010). */
+const consumed = new Map<string, { deviceId: string; actionId: string; until: number }>();
+const PROPOSAL_TTL_MS = 10 * MINUTE * 1000;
+
+function actionsOf(deviceId: string): DeviceAction[] {
+  let actions = actionStore.get(deviceId);
+  if (!actions) {
+    actions = deviceId === "bed-a" ? BED_A_ACTIONS.map((a) => ({ ...a, version: 1 })) : [];
+    actionStore.set(deviceId, actions);
+  }
+  return actions;
+}
+
+function actionsBlock(deviceId: string): Pick<DeviceDashboard, "actions" | "last_action"> {
+  const actions = actionsOf(deviceId);
+  if (actions.length === 0) return {};
+  return {
+    actions: actions.map((a) => ({ ...a })),
+    ...(deviceId === "bed-a" ? { last_action: { summary: "valve opened", at: yesterdayAt(6, 12) } } : {}),
+  };
+}
+
+/** PATCH /v1/devices/:id/actions/:actionId. Null when the device or the rule is unknown. */
+export function setActionEnabled(deviceId: string, actionId: string, enabled: boolean): DeviceAction | null {
+  if (!dashboardExists(deviceId)) return null;
+  const action = actionsOf(deviceId).find((a) => a.id === actionId);
+  if (!action) return null;
+  action.enabled = enabled;
+  // The device picks the change up on its next check-in (CLOUD-PLATFORM.md §3.4); it acks this version.
+  action.sync = "pending";
+  action.version = (action.version ?? 0) + 1;
+  return { ...action };
+}
+
+/** POST /v1/devices/:id/actions/proposals. Reads the words against the device's channels; writes nothing. */
+export function proposeAction(deviceId: string, text: string): ActionProposal | null {
+  const dash = dashboard(deviceId);
+  if (!dash) return null;
+  const reading = readRule(text, dash.channels);
+  const proposal: ActionProposal = {
+    id: `prop_${Date.now().toString(36)}_${proposals.size}`,
+    ...reading,
+    expires_at: new Date(Date.now() + PROPOSAL_TTL_MS).toISOString(),
+  };
+  proposals.set(proposal.id, { deviceId, proposal });
+  return proposal;
+}
+
+export type ConfirmOutcome =
+  | { ok: true; action: DeviceAction; created: boolean }
+  | { ok: false; reason: "not_found" | "unresolved"; issues?: string[] };
+
+/**
+ * POST /v1/devices/:id/actions. A proposal is confirmed for the device it was
+ * made for, before it expires. Confirming it again returns the rule it
+ * created (`created: false`), so a retry after a lost response is safe.
+ */
+export function confirmAction(deviceId: string, proposalId: string): ConfirmOutcome {
+  const done = consumed.get(proposalId);
+  if (done && done.deviceId === deviceId && done.until > Date.now()) {
+    const action = actionsOf(deviceId).find((a) => a.id === done.actionId);
+    if (action) return { ok: true, action: { ...action }, created: false };
+  }
+  const held = proposals.get(proposalId);
+  if (!held || held.deviceId !== deviceId || Date.parse(held.proposal.expires_at) < Date.now()) return { ok: false, reason: "not_found" };
+  if (held.proposal.issues.length > 0) return { ok: false, reason: "unresolved", issues: held.proposal.issues };
+  proposals.delete(proposalId);
+  const { kind, rule, via } = held.proposal;
+  const action: DeviceAction = { id: `act_${Date.now().toString(36)}_${actionsOf(deviceId).length}`, kind, rule, via, enabled: true, sync: "pending", version: 1 };
+  actionsOf(deviceId).push(action);
+  consumed.set(proposalId, { deviceId, actionId: action.id, until: Date.now() + PROPOSAL_TTL_MS });
+  return { ok: true, action: { ...action }, created: true };
+}
+
+/** Tests only: the device acknowledged its rules, as cloudlink will record from an ingest (ADR 0010). */
+export function ackActions(deviceId: string): void {
+  for (const action of actionsOf(deviceId)) action.sync = "synced";
+}
+
+const dashboardExists = (deviceId: string) => fleet().systems.some((s) => s.devices.some((d) => d.id === deviceId));
+
+/** Tests only: forget toggles, rules and proposals. */
+export function resetActions(): void {
+  actionStore.clear();
+  proposals.clear();
+  consumed.clear();
 }
 
 // --- marketplace --------------------------------------------------------------
@@ -433,39 +469,6 @@ export function askDevice(deviceId: string): AskResponse | null {
     message: { id: `ask_${Date.now().toString(36)}`, role: "assistant", text: DEVICE_REPLY, created_at: new Date().toISOString() },
     queries: [{ tool: "compare_to_baseline", input: { device_id: deviceId, channel: "soil_vwc", window: "24h" } }],
   };
-}
-
-// --- marketplace listings -------------------------------------------------------
-
-const LISTINGS: Listing[] = [
-  { id: "greenhouse-soil-monitor", name: "Greenhouse soil monitor", category: "garden", accent: "green", description: "Solar 4-probe moisture rig with dry-threshold alerts. The build this site was born from.", author: { handle: "maya" }, remix_count: 412 },
-  { id: "fridge-door-sentinel", name: "Fridge door sentinel", category: "home", accent: "blue", description: "Texts you when the door is open 90+ seconds. Saves a fridge of groceries once a year.", author: { handle: "tomek" }, remix_count: 388 },
-  { id: "compressor-vibration-watch", name: "Compressor vibration watch", category: "workshop", accent: "peach", description: "On-device FFT catches bearing wear weeks early. Runs fully local, cloud optional.", author: { handle: "ines" }, remix_count: 201 },
-  { id: "beehive-scale-temp", name: "Beehive scale + temp", category: "garden", accent: "violet", description: "Weight trend spots swarms and honey flow; brood temp guards winter clusters.", author: { handle: "arvid" }, remix_count: 176 },
-  { id: "sump-pump-failover", name: "Sump pump failover alarm", category: "home", accent: "blue", description: "Water level + current draw; screams before the basement floods, not after.", author: { handle: "june" }, remix_count: 154 },
-  { id: "cold-room-logger", name: "Cold-room compliance logger", category: "industrial", accent: "peach", description: "Audit-grade temperature log with signed records and monthly PDF export.", author: { handle: "osei" }, remix_count: 97 },
-  { id: "the-vibration-prophet", name: "The Vibration Prophet", category: "industrial", accent: "violet", description: "ADXL355 + ESP32 learns each motor's signature and flags drift early. ~$51/machine.", author: { handle: "priya" }, remix_count: 88 },
-  { id: "the-thermal-watchman", name: "The Thermal Watchman", category: "industrial", accent: "peach", description: "MLX90640 heat map finds breaker-panel hot spots weeks before the fire. ~$90/panel.", author: { handle: "marco" }, remix_count: 76 },
-  { id: "the-cold-chain-witness", name: "The Cold Chain Witness", category: "industrial", accent: "blue", description: "SHT31 + GPS + LTE-M signed 2–8°C custody log, dock to dock. ~$84/pallet.", author: { handle: "lena" }, remix_count: 71 },
-  { id: "the-tank-teller", name: "The Tank Teller", category: "industrial", accent: "green", description: "Off-grid ultrasonic level over cellular; refill orders fire at threshold. ~$97/tank.", author: { handle: "sam" }, remix_count: 64 },
-  { id: "the-blind-corner-beacon", name: "The Blind Corner Beacon", category: "industrial", accent: "peach", description: "mmWave radar lights the floor before the forklift arrives. ~$46/corner.", author: { handle: "kai" }, remix_count: 59 },
-  { id: "the-air-marshal", name: "The Air Marshal", category: "industrial", accent: "green", description: "PMS5003 + SCD40 traffic-light air quality the whole shop can see. ~$68/zone.", author: { handle: "ines" }, remix_count: 52 },
-];
-
-const LISTING_PAGE = 12;
-
-/** GET /v1/listings?tags=&cursor=&limit= — filtered before paging, so a category's matches are never lost to the page size. */
-export function listingList(tags: string | null, cursor: string | null = null, limit: string | null = null): ListingList {
-  const wanted = tags?.split(",").filter(Boolean) ?? [];
-  const matching = wanted.length ? LISTINGS.filter((l) => wanted.includes(l.category)) : LISTINGS;
-  const offset = cursor && /^\d+$/.test(cursor) ? Number(cursor) : 0;
-  const size = limit && /^\d+$/.test(limit) ? Math.min(Math.max(Number(limit), 1), 50) : LISTING_PAGE;
-  const end = offset + size;
-  return { listings: matching.slice(offset, end), next_cursor: end < matching.length ? String(end) : null };
-}
-
-export function listing(id: string): Listing | null {
-  return LISTINGS.find((l) => l.id === id) ?? null;
 }
 
 // --- usage --------------------------------------------------------------------

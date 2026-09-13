@@ -82,6 +82,10 @@ export async function apiPost<S extends z.ZodType>(path: string, schema: S, body
   return request(await transport(), "POST", path, schema, body);
 }
 
+export async function apiPatch<S extends z.ZodType>(path: string, schema: S, body: unknown): Promise<z.infer<S>> {
+  return request(await transport(), "PATCH", path, schema, body);
+}
+
 /**
  * Server Functions only (cookies can only be written there). Mutations relay
  * gateway's `__Host-albus_session` / `__Host-albus_anon` cookies to the browser

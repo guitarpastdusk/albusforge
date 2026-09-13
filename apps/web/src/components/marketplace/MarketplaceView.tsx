@@ -9,24 +9,31 @@ import { ListingCard } from "./ListingCard";
  * Header, category pills and one page of builds. Gateway filters by category
  * before paging, and the pills navigate, so a category is complete across
  * pages. "No builds" is said only when gateway reports no further page.
+ * `examples`: the listings are example builds (lib/example-builds.ts), and the header says so.
  */
 export function MarketplaceView({
   listings,
   category,
   cursor,
   nextCursor,
+  examples = false,
 }: {
   listings: Listing[];
   category: ListingCategory | null;
   cursor: string | null;
   nextCursor: string | null;
+  examples?: boolean;
 }) {
   return (
     <>
       <PageTitle
-        kicker="Community builds"
+        kicker={examples ? "Example builds" : "Community builds"}
         title="Marketplace"
-        description="Clone a proven build into your workspace — parts, firmware, enclosure and cloud config included."
+        description={
+          examples
+            ? "Real designs from our parts registry, with sample authors and clone counts until the Marketplace opens. Open one to see its parts."
+            : "Clone a proven build into your workspace — parts, firmware, enclosure and cloud config included."
+        }
         actions={
           <nav aria-label="Filter by category" className="flex flex-wrap gap-2">
             {MARKETPLACE_FILTERS.map((filter) => {

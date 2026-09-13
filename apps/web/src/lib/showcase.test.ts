@@ -12,6 +12,7 @@ const { apiGet } = await import("./api/server");
 const { unstable_rethrow } = await import("next/navigation");
 const { log } = await import("./log");
 const { loadShowcaseCards } = await import("./showcase");
+const { exampleShowcase } = await import("./example-builds");
 
 beforeEach(() => {
   vi.mocked(apiGet).mockReset();
@@ -20,16 +21,14 @@ beforeEach(() => {
 });
 
 describe("loadShowcaseCards", () => {
-  it("a 501 (route not built yet): no cards, one traced WARNING", async () => {
-    const failure = new ApiRequestError(501, "NOT_IMPLEMENTED", "GET /v1/showcase is not implemented");
-    vi.mocked(apiGet).mockRejectedValue(failure);
+  it("a 501 (route not built yet): the example builds, marked as examples, nothing logged", async () => {
+    vi.mocked(apiGet).mockRejectedValue(new ApiRequestError(501, "NOT_IMPLEMENTED", "GET /v1/showcase is not implemented"));
 
-    await expect(loadShowcaseCards()).resolves.toEqual([]);
-    expect(log).toHaveBeenCalledTimes(1);
-    const [severity, message, options] = vi.mocked(log).mock.calls[0]!;
-    expect(severity).toBe("WARNING");
-    expect(message).toContain("GET /v1/showcase is not implemented");
-    expect(options).toMatchObject({ error: failure, trace: TRACE, fields: { component: "showcase" } });
+    const { cards, examples } = await loadShowcaseCards();
+    expect(examples).toBe(true);
+    expect(cards.map((c) => c.id)).toEqual(exampleShowcase().map((c) => c.id));
+    expect(cards.every((c) => typeof c.age === "string" && !("last_reading_at" in c))).toBe(true);
+    expect(log).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -37,13 +36,15 @@ describe("loadShowcaseCards", () => {
     ["an HTML placeholder", new GatewayError({ route: "GET /v1/showcase", status: 200, contentType: "text/html", reason: "not_json" })],
     ["JSON that isn't a showcase", new GatewayError({ route: "GET /v1/showcase", status: 200, contentType: "application/json", reason: "schema_mismatch", issues: "cards: expected array" })],
     ["a network failure", new TypeError("fetch failed")],
-  ])("%s: no cards, one traced ERROR", async (_label, failure) => {
+  ])("%s: no cards and no examples (a real outage isn't papered over), one traced ERROR", async (_label, failure) => {
     vi.mocked(apiGet).mockRejectedValue(failure);
 
-    await expect(loadShowcaseCards()).resolves.toEqual([]);
+    await expect(loadShowcaseCards()).resolves.toEqual({ cards: [], examples: false });
     expect(log).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(log).mock.calls[0]![0]).toBe("ERROR");
-    expect(vi.mocked(log).mock.calls[0]![2]).toMatchObject({ error: failure, trace: TRACE });
+    const [severity, message, options] = vi.mocked(log).mock.calls[0]!;
+    expect(severity).toBe("ERROR");
+    expect(message).toContain("showcase unavailable");
+    expect(options).toMatchObject({ error: failure, trace: TRACE, fields: { component: "showcase" } });
   });
 
   it("Next's control flow is rethrown, not logged", async () => {
@@ -57,11 +58,12 @@ describe("loadShowcaseCards", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
-  it("cards come back with their age, and nothing is logged", async () => {
+  it("live cards come back with their age, not marked as examples, and nothing is logged", async () => {
     const lastReading = new Date(Date.now() - 5 * 60_000).toISOString();
     vi.mocked(apiGet).mockResolvedValue({ cards: [{ id: "card-1", last_reading_at: lastReading }] });
 
-    const cards = await loadShowcaseCards();
+    const { cards, examples } = await loadShowcaseCards();
+    expect(examples).toBe(false);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ id: "card-1" });
     expect(cards[0]).not.toHaveProperty("last_reading_at");

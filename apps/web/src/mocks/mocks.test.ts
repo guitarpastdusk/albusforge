@@ -1,21 +1,20 @@
 import {
+  ActionProposal,
   AskResponse,
+  DeviceAction,
   BuildDetail,
   BuildList,
   CreateBuildResponse,
   DeviceDashboard,
   DeviceTile,
   Fleet,
-  Listing,
-  ListingList,
   Me,
   MessageList,
   routes,
-  Showcase,
   Usage,
   VerifyCodeResponse,
 } from "@albusforge/schema";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ApiRequestError, request } from "@/lib/api/core";
 import * as data from "./data";
@@ -27,6 +26,9 @@ const get = <S extends Parameters<typeof request>[3]>(path: string, schema: S) =
 const post = <S extends Parameters<typeof request>[3]>(path: string, schema: S, body: unknown) =>
   request(mockTransport, "POST", path, schema, body);
 
+const patch = <S extends Parameters<typeof request>[3]>(path: string, schema: S, body: unknown) =>
+  request(mockTransport, "PATCH", path, schema, body);
+
 describe("every mock parses against the schema", () => {
   it("session", async () => {
     await expect(get(routes.me.get.path(), Me)).resolves.toBeTruthy();
@@ -35,11 +37,6 @@ describe("every mock parses against the schema", () => {
   it("usage", async () => {
     const usage = await get(routes.usage.path(), Usage);
     expect(Date.parse(usage.period.end)).toBeGreaterThan(Date.parse(usage.period.start));
-  });
-
-  it("showcase", async () => {
-    const { cards } = await get(routes.showcase.path(), Showcase);
-    expect(cards.length).toBeGreaterThanOrEqual(6);
   });
 
   it("builds, their detail and their messages", async () => {
@@ -81,15 +78,6 @@ describe("every mock parses against the schema", () => {
     expect(DeviceTile.safeParse({ ...withoutStatus, online: true }).success).toBe(false);
   });
 
-  it("listings, filtered and single", async () => {
-    const all = await get(routes.listings.list.path(), ListingList);
-    const garden = await get(`${routes.listings.list.path()}?tags=garden`, ListingList);
-    expect(garden.listings.length).toBeLessThan(all.listings.length);
-    expect(garden.listings.every((l) => l.category === "garden")).toBe(true);
-    for (const { id } of all.listings) {
-      await expect(get(routes.listings.get.path(id), Listing)).resolves.toMatchObject({ id });
-    }
-  });
 });
 
 describe("mock transport errors", () => {
@@ -97,6 +85,12 @@ describe("mock transport errors", () => {
     const call = get(routes.devices.dashboard.path("nope"), DeviceDashboard);
     await expect(call).rejects.toBeInstanceOf(ApiRequestError);
     await expect(call).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("answers 501 for the showcase and listings, like gateway until they're built, so local dev shows the example builds", async () => {
+    for (const path of [routes.showcase.path(), routes.listings.list.path(), routes.listings.get.path("fridge-monitor")]) {
+      await expect(get(path, z.unknown())).rejects.toMatchObject({ status: 501 });
+    }
   });
 
   it("returns 501 for a route with no mock", async () => {
@@ -169,33 +163,66 @@ describe("mock conversation, device chat and sign-in", () => {
 
     const bedC = await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard);
     expect(bedC.actions).toBeUndefined();
+    expect(bedC.permissions).toEqual({ edit_actions: true });
   });
 
-  it("the marketplace has twelve builds, seven of them industrial", async () => {
-    const { listings } = await get(routes.listings.list.path(), ListingList);
-    expect(listings).toHaveLength(12);
-    expect(listings.filter((l) => l.category === "industrial")).toHaveLength(7);
-    expect(listings.map((l) => l.name)).toEqual(expect.arrayContaining(["The Vibration Prophet", "The Air Marshal"]));
+});
+
+describe("mock closed-loop rules (ADR 0010)", () => {
+  beforeEach(() => data.resetActions());
+
+  it("toggling a rule returns it pending, and the dashboard reflects it until reset", async () => {
+    const off = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: false });
+    expect(off).toMatchObject({ id: "act-irrigate", enabled: false, sync: "pending" });
+    const dashboard = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(dashboard.actions?.find((a) => a.id === "act-irrigate")).toMatchObject({ enabled: false, sync: "pending" });
+
+    await expect(patch(routes.devices.actions.setEnabled.path("bed-a", "nope"), DeviceAction, { enabled: true })).rejects.toMatchObject({ status: 404 });
+    await expect(patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: "yes" })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("plain words become a proposal; confirming it creates a pending rule on a device that had none", async () => {
+    const proposal = await post(routes.devices.actions.propose.path("bed-c"), ActionProposal, { text: "water for 5 min when soil drops below 22%" });
+    expect(proposal).toMatchObject({ kind: "SERVO", rule: "Soil moisture < 22% → water for 5 min", issues: [] });
+    expect(Date.parse(proposal.expires_at)).toBeGreaterThan(Date.now());
+
+    const created = await post(routes.devices.actions.create.path("bed-c"), DeviceAction, { proposal_id: proposal.id });
+    expect(created).toMatchObject({ kind: "SERVO", rule: proposal.rule, enabled: true, sync: "pending" });
+    expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toEqual([created]);
+
+    // Confirming again (a retry after a lost response) returns the same rule and creates nothing.
+    const again = await mockTransport("POST", routes.devices.actions.create.path("bed-c"), { proposal_id: proposal.id });
+    expect(again.status).toBe(200);
+    expect(again.json).toEqual(created);
+    expect((await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard)).actions).toHaveLength(1);
+    // But not on another device.
+    await expect(post(routes.devices.actions.create.path("bed-a"), DeviceAction, { proposal_id: proposal.id })).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("each write bumps the rule's version; an ack flips it to synced on the next dashboard", async () => {
+    const first = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: false });
+    const second = await patch(routes.devices.actions.setEnabled.path("bed-a", "act-irrigate"), DeviceAction, { enabled: true });
+    expect([first.version, second.version]).toEqual([2, 3]);
+    data.ackActions("bed-a");
+    const dashboard = await get(routes.devices.dashboard.path("bed-a"), DeviceDashboard);
+    expect(dashboard.actions?.find((a) => a.id === "act-irrigate")).toMatchObject({ enabled: true, sync: "synced", version: 3 });
+  });
+
+  it("a proposal with issues is 409 on confirm; a proposal for one device can't be confirmed on another", async () => {
+    const vague = await post(routes.devices.actions.propose.path("bed-a"), ActionProposal, { text: "when it's dry" });
+    expect(vague.issues.length).toBeGreaterThan(0);
+    await expect(post(routes.devices.actions.create.path("bed-a"), DeviceAction, { proposal_id: vague.id })).rejects.toMatchObject({
+      status: 409,
+      code: "unresolved_proposal",
+    });
+
+    const clean = await post(routes.devices.actions.propose.path("bed-a"), ActionProposal, { text: "text me when battery is below 10%" });
+    await expect(post(routes.devices.actions.create.path("bed-b"), DeviceAction, { proposal_id: clean.id })).rejects.toMatchObject({ status: 404 });
+    await expect(post(routes.devices.actions.propose.path("nope"), ActionProposal, { text: "text me when battery is below 10%" })).rejects.toMatchObject({ status: 404 });
   });
 });
 
-describe("mock pagination and cookies", () => {
-  it("filters before paging: a category's matches beyond the first unfiltered page are returned", async () => {
-    const firstUnfiltered = await get(`${routes.listings.list.path()}?limit=6`, ListingList);
-    expect(firstUnfiltered.next_cursor).toBe("6");
-    expect(firstUnfiltered.listings.map((l) => l.name)).not.toContain("The Vibration Prophet");
-
-    const industrial = await get(`${routes.listings.list.path()}?tags=industrial&limit=6`, ListingList);
-    expect(industrial.listings).toHaveLength(6);
-    expect(industrial.listings.every((l) => l.category === "industrial")).toBe(true);
-    expect(industrial.listings.map((l) => l.name)).toContain("The Vibration Prophet");
-    expect(industrial.next_cursor).toBe("6");
-
-    const rest = await get(`${routes.listings.list.path()}?tags=industrial&limit=6&cursor=6`, ListingList);
-    expect(rest.listings.map((l) => l.name)).toEqual(["The Air Marshal"]);
-    expect(rest.next_cursor).toBeNull();
-  });
-
+describe("mock cookies", () => {
   it("creating a build sets the anonymous owner cookie; verifying sets the session and clears it", async () => {
     const created = await mockTransport("POST", routes.builds.create.path(), { ask_text: "A sensor" });
     expect(created.setCookies).toEqual([expect.stringMatching(/^__Host-albus_anon=mock-anon-bld_\w+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/)]);

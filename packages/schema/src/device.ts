@@ -64,12 +64,19 @@ export const DeviceActionKind = z.enum(["SERVO", "API", "ALERT"]);
 export type DeviceActionKind = z.infer<typeof DeviceActionKind>;
 
 /**
+ * Where a change to a rule stands on the device. Changes ride back on the
+ * device's next check-in (CLOUD-PLATFORM.md §3.4), so a rule the portal just
+ * enabled is `pending` until the device acknowledges it. Absent means synced,
+ * so older responses still parse.
+ */
+export const ActionSync = z.enum(["synced", "pending"]);
+export type ActionSync = z.infer<typeof ActionSync>;
+
+/**
  * One closed-loop rule: a condition on the device's readings and what it does
  * — drive an actuator (SERVO), call an integration (API), or hand over to a
- * human (ALERT).
- *
- * TODO(api): read-only today. There is no route to create, enable or disable
- * an action; PORTAL.md §3 needs one (e.g. PATCH /v1/devices/:id/actions/:actionId).
+ * human (ALERT). Created by confirming an ActionProposal, never written
+ * directly (PORTAL.md §3, ADR 0010).
  */
 export const DeviceAction = z.object({
   id: Id,
@@ -77,8 +84,52 @@ export const DeviceAction = z.object({
   rule: z.string(),
   via: z.string(),
   enabled: z.boolean(),
+  sync: ActionSync.optional(),
+  /** Increments on every write; the device acks a version, so a late ack can't regress a newer change (ADR 0010). */
+  version: z.number().int().nonnegative().optional(),
 });
 export type DeviceAction = z.infer<typeof DeviceAction>;
+
+/** PATCH /v1/devices/:id/actions/:actionId → DeviceAction, `sync: "pending"`. */
+export const SetActionEnabledRequest = z.object({
+  enabled: z.boolean(),
+});
+export type SetActionEnabledRequest = z.infer<typeof SetActionEnabledRequest>;
+
+/** POST /v1/devices/:id/actions/proposals — a rule in plain words. */
+export const ProposeActionRequest = z.object({
+  text: z.string().trim().min(1).max(400),
+});
+export type ProposeActionRequest = z.infer<typeof ProposeActionRequest>;
+
+/**
+ * How the service read a plain-words rule. The person confirms this reading,
+ * not their words, so the card shows the normalized rule and any `issues`
+ * (a channel the device doesn't have, a missing threshold). A proposal with
+ * issues can't be confirmed; `expires_at` bounds how long it can be.
+ */
+export const ActionProposal = z.object({
+  id: Id,
+  kind: DeviceActionKind,
+  rule: z.string(),
+  via: z.string(),
+  summary: z.string(),
+  issues: z.array(z.string()),
+  expires_at: Timestamp,
+});
+export type ActionProposal = z.infer<typeof ActionProposal>;
+
+/** POST /v1/devices/:id/actions → 201 DeviceAction, `sync: "pending"`. */
+export const ConfirmActionRequest = z.object({
+  proposal_id: Id,
+});
+export type ConfirmActionRequest = z.infer<typeof ConfirmActionRequest>;
+
+/** What the session may do with this device's rules; absent means read-only (a viewer, or an older response). */
+export const DashboardPermissions = z.object({
+  edit_actions: z.boolean(),
+});
+export type DashboardPermissions = z.infer<typeof DashboardPermissions>;
 
 export const DeviceDashboard = z.object({
   device: z.object({
@@ -105,6 +156,8 @@ export const DeviceDashboard = z.object({
   actions: z.array(DeviceAction).optional(),
   /** The most recent action a rule fired. */
   last_action: z.object({ summary: z.string(), at: Timestamp }).nullable().optional(),
+  /** Resolved by gateway from the session's role on the device's tenant (ADR 0009). */
+  permissions: DashboardPermissions.optional(),
 });
 export type DeviceDashboard = z.infer<typeof DeviceDashboard>;
 

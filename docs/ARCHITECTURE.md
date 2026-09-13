@@ -440,7 +440,7 @@ stateDiagram-v2
 
 ## 6. Gateway API contract
 
-All routes under `/v1`, zod-validated, cookie session auth (Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
+All routes under `/v1`, zod-validated, cookie session auth (6-digit email code, sessions in Postgres — proposed in [ADR 0008](adr/0008-sign-in-by-email-code.md), replacing Lucia + magic link). **Anonymous builds are allowed until checkout.** Error shape everywhere: `{ error: { code, message, details? } }`.
 
 ```
 POST   /v1/builds                  { ask_text } → { build_id, status }
@@ -455,6 +455,16 @@ POST   /v1/builds/:id/checkout     { fulfillment: home_print|full_ship, address?
 GET    /v1/parts?category=&q=      registry browse (active parts)
 GET    /v1/parts/:id               part page, all blocks
 
+# portal additions — PORTAL.md §3
+POST   /v1/auth/code               { email } → 204
+POST   /v1/auth/verify             { email, code } → { user, tenant } + session cookie
+POST   /v1/auth/signout            → 204
+GET    /v1/me                      → { user, tenant } | 401
+GET    /v1/builds?status=          tenant's builds + display_status
+GET    /v1/builds/:id/messages     chat transcript
+POST   /v1/builds/:id/messages     { text } → 202, reply over events
+GET    /v1/showcase                curated public live cards
+
 GET    /v1/listings?query=&tags=&sort=trending|built
 GET    /v1/listings/:id            listing + snapshot summary + remix tree
 POST   /v1/listings                { build_id, title, story, tags }
@@ -465,7 +475,10 @@ POST   /v1/media/uploads           { listing_id, content_type } → presigned PU
 POST   /v1/devices/claim           { build_id, claim_code } → device credentials
 GET    /v1/devices/:id/dashboard   widget config + recent readings
 PUT    /v1/devices/:id/alerts      { rules[] }
+POST   /v1/devices/:id/ask         { text } → answer; /v1/ask with device bound — PORTAL.md §3
 ```
+
+The web portal is a client of this contract and adds no API of its own. Its routes, the screens that read each endpoint, and how anonymous builds are claimed are in [`PORTAL.md`](PORTAL.md).
 
 ### 6.1 Edge and service-to-service auth
 
@@ -742,7 +755,8 @@ This is simultaneously the strongest differentiator — it answers the complianc
 | CAD | Python 3.12 + CadQuery, containerized, queue-invoked |
 | Firmware | PlatformIO, ESP32-S3 only for MVP; compile gate in `workers/fwbuild` |
 | Device ingest | MQTT (EMQX) → ingest → partitioned Postgres |
-| Auth | Lucia session cookies + magic link; passkeys later |
+| Auth | ~~Lucia session cookies + magic link~~ — proposed: 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
+| Web portal | Next.js App Router in `apps/web`, a client of the gateway only ([`PORTAL.md`](PORTAL.md)) |
 | API style | REST + zod-to-openapi; one gateway, no GraphQL |
 | Testing | vitest, supertest, testcontainers |
 
@@ -1025,7 +1039,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | Decision | The fork |
 | --- | --- |
 | **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
-| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) recommends **tenant, from `h(order)`, added in M1** — every cloud surface it specifies is tenant-scoped |
+| **Tenant or build as the root** | everything hangs off `build_id` today; the deck hangs it off a tenant derived from the order hash. Cheap now, expensive across seven services later. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) recommends **tenant, from `h(order)`, added in M1** — every cloud surface it specifies is tenant-scoped. The portal's Projects screen lists builds before any order exists, so [ADR 0009](adr/0009-tenant-created-at-sign-up.md) proposes **a tenant created at sign-up** instead of one derived from the order |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
 | ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |
 | **Connector standard** | `hsx-3pin-v1` (invent, adapt every part) vs Qwiic/Grove (I²C-only for data, separate power convention). The solver enforces whichever is chosen |

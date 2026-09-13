@@ -18,6 +18,12 @@ locals {
       web_min_instances     = 0
       sql_tier              = "db-g1-small" # ARCHITECTURE.md §5.2
       deletion_protection   = false
+
+      # Every MVP part is still a draft; staging shows them so chat can be tested.
+      registry_include_drafts = true
+      llm_build_token_ceiling = 200000
+      llm_hourly_budget_usd   = 5
+      llm_daily_budget_usd    = 20
     }
     prod = {
       subnet_cidr           = "10.20.0.0/24"
@@ -26,6 +32,11 @@ locals {
       web_min_instances     = 1 # first page load shouldn't wait on a cold start
       sql_tier              = "db-custom-2-7680"
       deletion_protection   = true
+
+      registry_include_drafts = false
+      llm_build_token_ceiling = 200000
+      llm_hourly_budget_usd   = 10
+      llm_daily_budget_usd    = 50
     }
   }
 

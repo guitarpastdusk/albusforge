@@ -24,14 +24,21 @@ module "gateway" {
   min_instances       = local.settings.gateway_min_instances
   deletion_protection = local.settings.deletion_protection
 
+  # Gateway calls intake after answering the client (the chat reply arrives over
+  # SSE), so CPU must stay allocated between requests.
+  cpu_idle = false
+
   env = merge(local.db_env, {
-    PUBLIC_DOMAIN        = local.domain
-    SSR_SERVICE_ACCOUNT  = module.web.service_account_email
-    GOOGLE_CLOUD_PROJECT = local.project_id
-    DB_USER              = local.db_app_role
+    PUBLIC_DOMAIN           = local.domain
+    SSR_SERVICE_ACCOUNT     = module.web.service_account_email
+    GOOGLE_CLOUD_PROJECT    = local.project_id
+    DB_USER                 = local.db_app_role
+    INTAKE_URL              = module.intake.uri
+    REGISTRY_INCLUDE_DRAFTS = tostring(local.settings.registry_include_drafts)
   })
   secret_env = {
-    DB_PASSWORD = { secret = module.sql.app_password_secret }
+    DB_PASSWORD    = { secret = module.sql.app_password_secret }
+    RESEND_API_KEY = { secret = google_secret_manager_secret.external["resend-api-key"].id }
   }
 }
 

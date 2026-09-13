@@ -7,3 +7,8 @@ variable "region" {
   type    = string
   default = "us-central1"
 }
+
+variable "alert_email" {
+  description = "Where LLM spend alerts go."
+  type        = string
+}

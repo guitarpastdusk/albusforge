@@ -33,3 +33,7 @@ output "sql_instance" {
 output "jobs" {
   value = [module.db_migrate.name, module.registry_load.name]
 }
+
+output "intake_service" {
+  value = module.intake.name
+}

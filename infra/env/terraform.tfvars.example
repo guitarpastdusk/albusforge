@@ -1,1 +1,2 @@
 tfstate_bucket = "albusforge-ci-tfstate"
+alert_email    = "you@example.com"

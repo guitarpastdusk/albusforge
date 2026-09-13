@@ -5,8 +5,8 @@
 
 resource "google_secret_manager_secret" "external" {
   for_each = toset([
-    "anthropic-api-key", # intake, M2
-    "resend-api-key",    # gateway sign-in codes, M2 (docs/adr/0008)
+    "anthropic-api-key", # intake (intake.tf)
+    "resend-api-key",    # gateway sign-in codes (docs/adr/0008)
   ])
 
   project   = local.project_id
@@ -17,8 +17,8 @@ resource "google_secret_manager_secret" "external" {
   }
 }
 
-resource "google_secret_manager_secret_iam_member" "gateway_resend" {
-  secret_id = google_secret_manager_secret.external["resend-api-key"].id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = module.gateway.service_account_member
+# Gateway's Resend access now comes from its secret_env mount (main.tf).
+moved {
+  from = google_secret_manager_secret_iam_member.gateway_resend
+  to   = module.gateway.google_secret_manager_secret_iam_member.secret_env["RESEND_API_KEY"]
 }

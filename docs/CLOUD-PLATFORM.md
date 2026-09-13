@@ -1,10 +1,10 @@
 # Albus Forge — The Cloud Platform
 
-> **Implementation boundary, 2026-09-13:** M6a is merged in PR #32: standalone `apps/cloudlink`, shared wire contract, transactional PostgreSQL storage and local simulator. Gateway contains no ingestion code. Its separate Cloud Run/NEG/Armor infrastructure is owned by Claude session albusforge-44, following ADR 0003. [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) records runtime configuration, autoscaling/connection budgets, implemented behavior and remaining work.
+> **Implementation boundary, 2026-09-13:** M6a is merged in PR #32: standalone `apps/cloudlink`, shared wire contract, transactional PostgreSQL storage and local simulator. Gateway contains no ingestion code. Its separate Cloud Run/NEG/Armor infrastructure is being prepared in the sensor infrastructure workstream, following ADR 0003; resource inventory and rollout gates are tracked in [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md). [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) records runtime configuration, autoscaling/connection budgets, implemented behavior and remaining work.
 
-> M6b partitioned storage, rollups and retention are merged in PR #40. The M6c [telemetry read API](TELEMETRY-READ-API.md) adds session/tenant-bound gateway reads on `m6/telemetry-read-api`; sign-in issuance, dashboard adaptation and SSE remain pending.
+> M6b partitioned storage, rollups and retention are merged in PR #40. The M6c [telemetry read API](TELEMETRY-READ-API.md) is merged in PR #44, and gateway sign-in/session issuance in PR #45. Dashboard adaptation and sensor Ask are in progress; durable event delivery and backend telemetry SSE remain pending.
 
-**Status:** draft, pre-M0. Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md); expands §7.6 (ingest) and §11.3 (intelligence), which the source spec covers in two sentences.
+**Status:** target architecture with implementation boundaries above; later-stage diagrams are not deployment evidence. Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md); expands §7.6 (ingest) and §11.3 (intelligence), which the source spec covers in two sentences.
 
 > The registry and the generator get a device built. **This document is the part that makes it worth keeping.** A gadget that works is a weekend; a gadget whose data becomes answers is a subscription.
 
@@ -537,6 +537,10 @@ Implementation notes that matter:
 - **Nightly digests go through the Batch API** at 50% cost. A summary written at 03:00 is not latency-sensitive.
 
 ### 7.4 Tier 3: the conversational surface
+
+**Bounded single-sensor slice, authorized 2026-09-13:** the first sensor chatbot uses a configurable small hosted model to interpret questions for an explicitly selected channel/time window. Gateway binds the session's actor, tenant and device; the internal Ask service rechecks scope and uses deterministic bounded queries and evidence-based numerical answers. Per-call limits are paired with durable actor/tenant/environment request budgets and sensor-attributed metering. The selected scope and whether previous messages are used must be visible in the UI. See [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) for delivery and deployment evidence.
+
+The larger cross-sensor tool loop below remains the target architecture. Its frontier-model selection is for that later reasoning workload; it does not require the initial single-sensor chatbot to use the intake model. Baselines, anomaly tools, work orders and persistent conversations are not claimed by the first slice.
 
 A tool-use loop where every tool is a **deterministic, tenant-scoped query**:
 

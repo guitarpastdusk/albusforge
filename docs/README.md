@@ -7,6 +7,7 @@ Design and architecture documentation for Albus Forge.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture: the core invariant, the six-stage pipeline, services, data model, API contract, infrastructure, and the open forks that must be settled before M0. |
 | [CLOUD-PLATFORM.md](CLOUD-PLATFORM.md) | The cloud tier end to end: transport (MQTT vs HTTPS), the wire envelope, ingestion, storage tiering and retention, how readings reach the UI, and the three-tier intelligence layer — statistics, small model, frontier model. |
 | [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) | M6a standalone ingestion, wire/storage semantics, simulator runbook, production gates and dashboard/intelligence follow-ups. |
+| [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) | Sensor ingestion/processing/Ask implementation ownership, observed cloud inventory, rollout dependencies and acceptance gates. |
 | [TELEMETRY-STORAGE.md](TELEMETRY-STORAGE.md) | M6b native partitions, catch-up rollups, guarded retention and background-job contract. |
 | [PORTAL.md](PORTAL.md) | The web portal: screens and routes, the API additions the design needs, derived project status, how an anonymous build is claimed at sign-up, where the design and the registry disagree, and what is not designed yet. |
 | [UI-ANALYTICS.md](UI-ANALYTICS.md) | Scoping and architectural assessment for UI usage tracking via Google Analytics (GA4) and privacy-first alternatives. |

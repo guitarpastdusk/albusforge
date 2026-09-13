@@ -130,7 +130,8 @@ albusforge/
 │   ├── matcher/        Spec → BuildPlan: solver, power, rank, explain
 │   ├── codegen/        BuildPlan → firmware: scaffold, applayer, edits, compilegate
 │   ├── fulfillment/    BOM → supplier carts; STL → print partner
-│   ├── cloudlink/      provision, ingest, dashboards, alerts
+│   ├── cloudlink/      standalone device-authenticated ingest (merged); separate edge backend
+│   ├── ask/            bounded single-sensor queries and small-model intent (in progress)
 │   └── marketplace/    listings, snapshots, remix, media, reviews, payouts
 ├── workers/
 │   ├── bodygen/        Python + CadQuery: layout, shell, flags, lint, export, qr
@@ -612,11 +613,14 @@ Rules: SemVer at every boundary · a CI matrix job rebuilds every driver against
 
 ### 7.6 Device ingest — HTTPS first
 
+**Sensor cloud rollout, 2026-09-13:** ingestion/storage/read APIs and the portal live UI are merged; cloudlink/processing jobs and sensor Ask are being delivered in separate infrastructure, service and gateway/portal PRs. [SENSOR-CLOUD-ROLLOUT.md](SENSOR-CLOUD-ROLLOUT.md) tracks ownership, observed deployed resources, dependency order and acceptance evidence. The initial Ask slice is a user-selected sensor/channel/window with a small hosted model interpreting bounded questions and deterministic code supplying the numerical answer. It does not implement the later cross-sensor agent, anomaly detectors or write tools.
+
+
 The wire envelope is the transport contract: devices upload authenticated `POST /ingest/v1` batches, and the server acknowledges only after durable storage. MQTT and its broker/bridge remain deferred to M8; see [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.
 
 **M6a implementation (merged PR #32, 2026-09-13):** `apps/cloudlink` is the standalone stateless ingest service, with its own Dockerfile and CI Docker smoke job. It authenticates devices, validates shared envelope/channel schemas, normalizes timestamps and atomically stores raw readings, latest values, status, deduplication receipts and usage in PostgreSQL. Gateway has no ingest code or route. A local provisioning CLI and simulator exercise retries without hardware.
 
-Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. Claude session albusforge-44 owns that Terraform. No external IoT/telemetry application participates in ingestion.
+Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-and-separate-ingest-backend.md), production uses cloudlink’s own Cloud Run service, NEG/backend and Authorization-keyed Armor policy behind `/ingest/*`, with LB-only ingress. The runtime uses a small direct PostgreSQL pool over private VPC networking and bounded admission; production needs a warm instance floor and a maximum derived from the shared Cloud SQL connection budget. The sensor infrastructure workstream now prepares that Terraform in an isolated PR, coordinated with the existing infra owner; see the rollout ledger. No external IoT/telemetry application participates in ingestion.
 
 M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued minute/hour rollups and guarded retention; see [`TELEMETRY-STORAGE.md`](TELEMETRY-STORAGE.md) for the job/rollout contract. Production BuildPlan provisioning, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 
@@ -953,7 +957,7 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M4 — Code** | `hsx-rt`, `hsx-sdk`, four drivers, codegen, compile gate, code endpoints | `fwbuild` container; Cloud Run Job + `run.jobs.run()` trigger path; Memorystore and BullMQ; GCS artifact bucket and signed URLs; PlatformIO cache |
 | **M5 — Body** | bodygen for box enclosures, lint, QR, body endpoints, fridge golden build passing e2e | CadQuery image (large — budget a day), bodygen Cloud Run Job, STEP/STL to GCS |
 | **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
-| **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. **The milestone the business model actually rests on, and it has no place in the current plan** |
+| **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. The bounded single-sensor Ask slice is brought forward in the sensor cloud rollout; the broader intelligence layer remains later work. |
 | **M7 — Marketplace** | snapshots, listings, media upload, pin-preserving remix, reviews, trending sort | media bucket + CDN, presigned PUT, sharp variants in a Cloud Run Job, nightly ranking job on Cloud Scheduler |
 
 ```mermaid

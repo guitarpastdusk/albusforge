@@ -16,7 +16,7 @@ vi.mock("./EnclosureCanvas", () => ({
 const { EnclosurePreview } = await import("./EnclosurePreview");
 const { EnclosureDialogButton } = await import("./EnclosureDialog");
 const { ENCLOSURE_FIXTURE } = await import("./fixture");
-const { previewMode, resetWebGLSupportCache } = await import("./modes");
+const { ModelLoadError, previewMode, RendererUnavailableError, resetWebGLSupportCache, supportsWebGL2 } = await import("./modes");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -113,7 +113,7 @@ describe("EnclosurePreview (lazy wrapper)", () => {
     webgl(true);
     await render(<EnclosurePreview preview={ENCLOSURE_FIXTURE} />);
     await waitForCanvas();
-    await act(async () => lastCanvas().onError(new Error("404")));
+    await act(async () => lastCanvas().onError(new ModelLoadError("GET /enclosure/fixture.glb returned 404")));
 
     const alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Service unavailable");
@@ -122,6 +122,35 @@ describe("EnclosurePreview (lazy wrapper)", () => {
     await click(byName("Try again"));
     expect(document.querySelector('[role="alert"]')).toBeNull();
     expect(document.querySelector('[role="status"]')?.textContent).toBe("Loading 3D preview…");
+  });
+
+  it("a WebGL-1-only browser (webgl2 null, webgl available) gets the static image, not a download error", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(((id: string) => (id === "webgl2" ? null : { getExtension: () => null })) as never);
+    await render(<EnclosurePreview preview={ENCLOSURE_FIXTURE} />);
+    await flush();
+    expect(document.querySelector("img")?.getAttribute("alt")).toBe(ENCLOSURE_FIXTURE.description);
+    expect(canvasProps).toHaveLength(0);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(byName("Try again")).toBeUndefined();
+  });
+
+  it("if the renderer still can't start, the static image replaces the stage — no Try again", async () => {
+    webgl(true);
+    await render(<EnclosurePreview preview={ENCLOSURE_FIXTURE} />);
+    await waitForCanvas();
+    await act(async () => lastCanvas().onError(new RendererUnavailableError(new Error("Error creating WebGL context."))));
+    expect(document.querySelector("img")?.getAttribute("src")).toBe("/enclosure/fixture.png");
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(byName("Try again")).toBeUndefined();
+    expect(document.querySelector('[data-testid="enclosure-canvas"]')).toBeNull();
+  });
+
+  it("probes WebGL 2 specifically", () => {
+    const doc = (contexts: Record<string, unknown>) =>
+      ({ createElement: () => ({ getContext: (id: string) => contexts[id] ?? null }) }) as unknown as Document;
+    expect(supportsWebGL2(doc({ webgl: {} }))).toBe(false);
+    expect(supportsWebGL2(doc({}))).toBe(false);
+    expect(supportsWebGL2(doc({ webgl2: { getExtension: () => null } }))).toBe(true);
   });
 
   it("without WebGL shows the static image with alt text, loads no 3D stage, and disables the controls", async () => {
@@ -195,6 +224,46 @@ describe("EnclosureDialogButton", () => {
     await key("Escape");
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("makes the background inert while open — even a programmatic focus() can't land there — and restores it after", async () => {
+    webgl(true);
+    const outside = document.createElement("div");
+    outside.innerHTML = '<a href="/signup">Sign up</a>';
+    document.body.prepend(outside);
+    const alreadyInert = document.createElement("div");
+    alreadyInert.setAttribute("inert", "");
+    document.body.append(alreadyInert);
+
+    await render(
+      <>
+        <a href="/docs">Docs</a>
+        <EnclosureDialogButton preview={ENCLOSURE_FIXTURE} title="Greenhouse soil monitor" />
+      </>,
+    );
+    const trigger = byName("View enclosure in 3D →")!;
+    await click(trigger);
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+
+    expect(outside.hasAttribute("inert")).toBe(true);
+    expect(container.hasAttribute("inert")).toBe(true);
+    expect(dialog.closest("[inert]")).toBeNull();
+
+    const link = outside.querySelector("a")!;
+    await act(async () => link.focus());
+    expect(document.activeElement).not.toBe(link);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await act(async () => container.querySelector<HTMLElement>('a[href="/docs"]')!.focus());
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await key("Escape");
+    expect(outside.hasAttribute("inert")).toBe(false);
+    expect(container.hasAttribute("inert")).toBe(false);
+    expect(alreadyInert.hasAttribute("inert")).toBe(true);
+    expect(document.activeElement).toBe(trigger);
+    expect(document.body.style.overflow).toBe("");
+    outside.remove();
+    alreadyInert.remove();
   });
 
   it("Close returns focus to the trigger too", async () => {

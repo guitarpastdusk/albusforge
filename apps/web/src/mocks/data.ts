@@ -215,7 +215,7 @@ export function showcase(): Showcase {
 
 export function fleet(): Fleet {
   return {
-    stats: { device_count: 7, readings_per_day: 2400, online_ratio: 1 },
+    stats: { device_count: 8, readings_per_day: 2400, online_ratio: 1 },
     systems: [
       {
         build_id: "greenhouse-soil",
@@ -226,6 +226,8 @@ export function fleet(): Fleet {
           { id: "bed-b", name: "Bed B — soil probe", accent: "green", online: true, value: "28.7", unit: "% VWC", metric: "Soil moisture", last_reading_at: ago(MINUTE) },
           { id: "canopy", name: "Canopy — air sensor", accent: "blue", online: true, value: "24.1", unit: "°C · 61% RH", metric: "Air temp + humidity", last_reading_at: ago(35) },
           { id: "north-gateway", name: "North wall — gateway", accent: "peach", online: true, value: "2.4k", unit: "msgs/day", metric: "LoRa gateway", last_reading_at: ago(0) },
+          // Provisioned, never powered on: the dashboard exists before the first reading.
+          { id: "bed-c", name: "Bed C — soil probe", accent: "green", online: false, value: null, unit: "% VWC", metric: "Soil moisture", last_reading_at: null },
         ],
       },
       {
@@ -248,7 +250,11 @@ const SOIL_24H = [
   42, 41, 40.5, 39, 38.6, 38, 37.2, 36.8, 36, 35.1, 34.8, 34, 33.5, 33.2, 32.8, 32.4, 32, 31.8, 31.5, 31.4, 31.3, 31.2,
 ];
 
-/** Every device gets Bed A's dashboard under its own name until per-part mocks exist. */
+/**
+ * Every device gets Bed A's dashboard under its own name until per-part mocks
+ * exist. A device that has never reported gets the same widgets with no
+ * latest values and empty series.
+ */
 export function dashboard(deviceId: string): DeviceDashboard | null {
   const found = fleet()
     .systems.flatMap((system) => system.devices.map((device) => ({ device, buildId: system.build_id })))
@@ -257,6 +263,7 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
 
   const { device, buildId } = found;
   const last = SOIL_24H.length - 1;
+  const reported = device.last_reading_at !== null;
 
   return {
     device: {
@@ -285,18 +292,20 @@ export function dashboard(deviceId: string): DeviceDashboard | null {
       { id: "w-uptime", type: "stat", channel: "uptime", caption: "since last patch" },
       { id: "w-selftest", type: "stat", channel: "selftest", caption: "all 6 checks" },
     ],
-    latest: {
-      soil_vwc: { v: 31.2, t: ago(40) },
-      battery: { v: 87, t: ago(40) },
-      rssi: { v: -61, t: ago(40) },
-      uptime: { v: 34 * DAY, t: ago(40) },
-      selftest: { v: "PASS", t: ago(6 * HOUR) },
-    },
+    latest: reported
+      ? {
+          soil_vwc: { v: 31.2, t: ago(40) },
+          battery: { v: 87, t: ago(40) },
+          rssi: { v: -61, t: ago(40) },
+          uptime: { v: 34 * DAY, t: ago(40) },
+          selftest: { v: "PASS", t: ago(6 * HOUR) },
+        }
+      : { soil_vwc: null, battery: null, rssi: null, uptime: null, selftest: null },
     series: [
       {
         channel: "soil_vwc",
         bucket: "1h",
-        points: SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })),
+        points: reported ? SOIL_24H.map((v, i) => ({ t: ago(Math.round(((last - i) * DAY) / last)), v })) : [],
       },
     ],
   };

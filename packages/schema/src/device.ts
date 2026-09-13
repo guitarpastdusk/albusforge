@@ -59,12 +59,18 @@ export const DeviceDashboard = z.object({
     build_id: Id,
     name: z.string(),
     online: z.boolean(),
-    last_reading_at: Timestamp,
+    /**
+     * Null until the first reading: the dashboard is derived and provisioned
+     * before the device is powered on (CLOUD-PLATFORM.md §6.1).
+     */
+    last_reading_at: Timestamp.nullable(),
     chips: z.array(z.object({ label: z.string(), accent: Accent })),
   }),
   channels: z.array(Channel),
   widgets: z.array(Widget),
-  latest: z.record(z.string(), LatestReading),
+  /** Per channel key; null (or absent) for a channel with no reading yet. */
+  latest: z.record(z.string(), LatestReading.nullable()),
+  /** A series with no points is a channel that hasn't reported in the window. */
   series: z.array(Series),
 });
 export type DeviceDashboard = z.infer<typeof DeviceDashboard>;

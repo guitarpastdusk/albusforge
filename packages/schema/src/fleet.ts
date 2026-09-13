@@ -6,11 +6,18 @@ export const DeviceTile = z.object({
   name: z.string(),
   accent: Accent,
   online: z.boolean(),
-  /** Formatted with the channel's display precision (CLOUD-PLATFORM.md §6.1). */
-  value: z.string(),
+  /**
+   * Formatted with the channel's display precision (CLOUD-PLATFORM.md §6.1).
+   * Null until the device's first reading.
+   */
+  value: z.string().nullable(),
   unit: z.string(),
   metric: z.string(),
-  last_reading_at: Timestamp,
+  /**
+   * Null for a device that is provisioned but has never reported — the
+   * dashboard exists before the device is powered on (CLOUD-PLATFORM.md §6.1).
+   */
+  last_reading_at: Timestamp.nullable(),
 });
 export type DeviceTile = z.infer<typeof DeviceTile>;
 

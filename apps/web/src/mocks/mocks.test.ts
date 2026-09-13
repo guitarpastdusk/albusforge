@@ -54,6 +54,17 @@ describe("every mock parses against the schema", () => {
     }
   });
 
+  it("a provisioned device that has never reported", async () => {
+    const fleet = await get(routes.tenants.devices.path(data.me().tenant.id), Fleet);
+    const tile = fleet.systems.flatMap((s) => s.devices).find((d) => d.id === "bed-c");
+    expect(tile).toMatchObject({ value: null, last_reading_at: null });
+
+    const dashboard = await get(routes.devices.dashboard.path("bed-c"), DeviceDashboard);
+    expect(dashboard.device.last_reading_at).toBeNull();
+    expect(Object.values(dashboard.latest).every((reading) => reading === null)).toBe(true);
+    expect(dashboard.series.every((series) => series.points.length === 0)).toBe(true);
+  });
+
   it("listings, filtered and single", async () => {
     const all = await get(routes.listings.list.path(), ListingList);
     const garden = await get(`${routes.listings.list.path()}?tags=garden`, ListingList);

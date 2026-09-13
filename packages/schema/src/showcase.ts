@@ -13,6 +13,7 @@ export const ShowcaseCard = z.object({
   reading: z.string(),
   chain: z.tuple([z.string(), z.string(), z.string()]),
   caption: z.string(),
+  /** Required: the showcase is curated from devices that are reporting. */
   last_reading_at: Timestamp,
 });
 export type ShowcaseCard = z.infer<typeof ShowcaseCard>;

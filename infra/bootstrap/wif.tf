@@ -33,6 +33,10 @@ resource "google_service_account" "deployer" {
   project      = google_project.this["ci"].project_id
   account_id   = "deploy-${each.key}"
   display_name = "GitHub Actions deployer (${each.key})"
+
+  # The IAM bindings below reach the API only through this resource, so this
+  # one dependency orders all of them.
+  depends_on = [google_project_service.this]
 }
 
 resource "google_service_account_iam_member" "deployer_wif" {

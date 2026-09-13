@@ -33,8 +33,11 @@ terraform init
 terraform apply
 
 # 2. move bootstrap state into the bucket it just created
-#    uncomment the backend block in backend.tf, then:
-terraform init -migrate-state -backend-config="bucket=$(terraform output -raw tfstate_bucket)"
+#    capture the bucket name FIRST — once the backend block is uncommented,
+#    `terraform output` fails with "Backend initialization required"
+TFSTATE_BUCKET=$(terraform output -raw tfstate_bucket)
+#    now uncomment the backend block in backend.tf, then:
+terraform init -migrate-state -backend-config="bucket=$TFSTATE_BUCKET"
 
 # 3. point GoDaddy at Cloud DNS — see "Domain" below
 terraform output prod_name_servers

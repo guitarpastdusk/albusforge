@@ -37,7 +37,7 @@ Gateway resolves the tenant from the hostname (ADR 0009) and rate-limits by clie
 | `X-Albus-Internal-Auth` | `Bearer <ID token>`: a Google-signed ID token for web's runtime SA, with audience `GATEWAY_INTERNAL_URL`, minted from the metadata server |
 | `X-Albus-Original-Host` | the host the browser requested |
 | `X-Albus-Client-IP` | the visitor's IP |
-| `Cookie` | the session cookie only, not the browser's full cookie header |
+| `Cookie` | the two authentication cookies only, the session cookie and the anonymous owner cookie (PORTAL.md §5). Never the browser's full cookie header |
 
 **Gateway trusts `X-Albus-Original-Host` and `X-Albus-Client-IP` only when `X-Albus-Internal-Auth` verifies:** a valid Google signature, `aud` equal to gateway's URL, `email` equal to `SSR_SERVICE_ACCOUNT` with `email_verified`, and not expired. Otherwise it ignores both headers and uses the real `Host` and client IP. A trusted original host must be `PUBLIC_DOMAIN` or `<slug>.PUBLIC_DOMAIN` with a well-formed slug, or the request gets a 400. Tenant resolution and the membership check then run exactly as for a browser request.
 

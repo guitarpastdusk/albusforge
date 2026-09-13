@@ -100,4 +100,4 @@ TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock \
 
 ## Telemetry foundation
 
-Migration `0001_telemetry_ingest.sql` adds the `telemetry` schema: device identities and channel snapshots, retry receipts, raw readings, latest samples and monthly usage. The app-role grant list includes the schema. These are ordinary development tables; partitioning and retention jobs remain M6b work. See [the ingestion runbook](../../docs/TELEMETRY-INGEST.md) for the atomic write contract and replay semantics.
+Migration `0001_telemetry_ingest.sql` adds the `telemetry` schema: device identities and channel snapshots, retry receipts, raw readings, latest samples and monthly usage. The app-role grant list includes the schema. M6b migrations `0002`/`0003` add daily partitions, dirty-hour markers, rollups and a retention watermark. See [the storage runbook](../../docs/TELEMETRY-STORAGE.md) for owner/application job roles, upgrade locking, retention and deployment order. See [the ingestion runbook](../../docs/TELEMETRY-INGEST.md) for the atomic write contract and replay semantics.

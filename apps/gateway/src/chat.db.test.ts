@@ -298,9 +298,9 @@ describe("ownership", () => {
     expectError(await app.inject({ method: "GET", url: `/v1/builds/${randomUUID()}`, headers: { cookie } }), 404, "NOT_FOUND");
   });
 
-  it("keeps the list route a 501", async () => {
+  it("answers 401 on the list route without a session", async () => {
     const { app } = makeApp();
-    expectError(await app.inject({ method: "GET", url: "/v1/builds" }), 501, "NOT_IMPLEMENTED");
+    expectError(await app.inject({ method: "GET", url: "/v1/builds" }), 401, "UNAUTHENTICATED");
   });
 });
 

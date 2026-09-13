@@ -15,6 +15,20 @@
       "when": 1789312322961,
       "tag": "0001_telemetry_ingest",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789316447407,
+      "tag": "0002_telemetry_rollups",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789316448639,
+      "tag": "0003_telemetry_partitions",
+      "breakpoints": true
     }
   ]
 }

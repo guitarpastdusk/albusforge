@@ -16,6 +16,8 @@ task="${1:-${CLOUD_RUN_JOB:-}}"
 case "$task" in
   migrate | db-migrate) exec node packages/db/dist/migrate.js ;;
   registry-load) exec node registry/dist/load.js ;;
+  telemetry-rollup) exec node packages/db/dist/telemetry-job.js rollup ;;
+  telemetry-maintain) exec node packages/db/dist/telemetry-job.js maintain ;;
 esac
 
 if [ "$#" -gt 0 ]; then

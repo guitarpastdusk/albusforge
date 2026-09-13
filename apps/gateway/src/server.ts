@@ -7,12 +7,16 @@
  */
 import { createDb } from "@albusforge/db";
 import { buildApp } from "./app";
+import { createAuthStore } from "./auth-store";
 import { createChatStore } from "./chat-store";
 import { configFromEnv } from "./config";
+import { logEmailSender, resendEmailSender } from "./email";
 import { createTurnScheduler, googleIdTokenAuth, httpIntakeClient } from "./intake";
+import { googleInternalAuthVerifier, untrustingVerifier } from "./internal-auth";
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
+import { newSessionToken } from "./session-cookie";
 
 const SHUTDOWN_GRACE_MS = 8000;
 
@@ -56,7 +60,18 @@ async function main(): Promise<void> {
       : httpIntakeClient({ url: intakeUrl, authHeader: intakeAuth === "google" ? googleIdTokenAuth(intakeUrl) : async () => undefined });
   if (intake === null) log("WARNING", "INTAKE_URL is not set: messages are stored but get no reply");
 
+  // Sign-in (ADR 0008). The log adapter prints codes: never the production setting.
+  const { auth: authConfig } = config;
+  if (authConfig.emailAdapter === "log") log("WARNING", "EMAIL_ADAPTER=log: sign-in codes are written to the log, not emailed");
+  if (authConfig.internalAuth === null) log("WARNING", "INTERNAL_AUTH_AUDIENCE is not set: X-Albus-Client-IP is ignored and SSR requests rate-limit as web's own IP");
+  const email =
+    authConfig.emailAdapter === "resend"
+      ? resendEmailSender({ apiKey: authConfig.resendApiKey!, from: authConfig.emailFrom })
+      : logEmailSender(log);
+  const fifteenMinutesMs = 15 * 60_000;
+
   const app = buildApp({
+    telemetryPool: pool,
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");
@@ -68,6 +83,17 @@ async function main(): Promise<void> {
       includeDrafts: config.registryIncludeDrafts,
       rateLimits: { anonOwners: new RateLimiter(config.anonBuildsPerHour, 60 * 60_000) },
       streamLimits: config.sseStreamLimits,
+    },
+    auth: {
+      store: createAuthStore(db, { newSessionToken }),
+      email,
+      internalAuth: authConfig.internalAuth === null ? untrustingVerifier : googleInternalAuthVerifier(authConfig.internalAuth),
+      trustedProxyHops: authConfig.trustedProxyHops,
+      rateLimits: {
+        codesPerEmail: new RateLimiter(authConfig.codesPerEmail, fifteenMinutesMs),
+        codesPerIp: new RateLimiter(authConfig.codesPerIp, fifteenMinutesMs),
+        verifiesPerIp: new RateLimiter(authConfig.verifiesPerIp, fifteenMinutesMs),
+      },
     },
   });
 

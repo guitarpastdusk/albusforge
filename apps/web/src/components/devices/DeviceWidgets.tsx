@@ -33,7 +33,7 @@ export function DeviceWidgets({ dashboard }: { dashboard: DeviceDashboard }) {
 
   return groups.map((group) =>
     Array.isArray(group) ? (
-      <div key={group[0]!.id} className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4">
+      <div key={group[0]!.id} className="grid grid-cols-[repeat(auto-fit,minmax(min(160px,100%),1fr))] gap-4">
         {group.map((widget) => (
           <StatTile
             key={widget.id}
@@ -73,7 +73,7 @@ export function LineChartCard({
   const label = `${channel?.label ?? widget.channel} · last ${widget.window}`;
 
   return (
-    <section className="rounded-[24px] border border-hairline bg-white px-8 py-7">
+    <section className="rounded-[24px] border border-hairline bg-white px-4 py-7 sm:px-8">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
         <CardLabel>{label}</CardLabel>
         {reading ? (

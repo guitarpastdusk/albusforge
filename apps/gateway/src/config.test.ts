@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { configFromEnv } from "./config";
 
-const DB = { DB_HOST: "10.0.0.3", DB_NAME: "albus", DB_USER: "albus_app", DB_PASSWORD: "s3cret-value" };
+const DB = { DB_HOST: "10.0.0.3", DB_NAME: "albus", DB_USER: "albus_app", DB_PASSWORD: "s3cret-value", RESEND_API_KEY: "re_test" };
+
+const AUTH_DEFAULTS = {
+  emailAdapter: "resend",
+  resendApiKey: "re_test",
+  emailFrom: "Albusforge <sign-in@auth.albusforge.ai>",
+  internalAuth: null,
+  trustedProxyHops: 1,
+  codesPerEmail: 5,
+  codesPerIp: 20,
+  verifiesPerIp: 30,
+};
 
 describe("configFromEnv", () => {
   it("defaults PORT to 8080, DB_SSL to require, and bounds every database wait", () => {
@@ -13,7 +24,48 @@ describe("configFromEnv", () => {
       registryIncludeDrafts: false,
       anonBuildsPerHour: 60,
       sseStreamLimits: { perOwner: 3, perInstance: 100 },
+      auth: AUTH_DEFAULTS,
     });
+  });
+
+  it("reads the sign-in settings", () => {
+    const config = configFromEnv({
+      ...DB,
+      AUTH_EMAIL_FROM: "Staging <codes@auth.staging.albusforge.ai>",
+      INTERNAL_AUTH_AUDIENCE: "https://gateway-123.us-central1.run.app",
+      SSR_SERVICE_ACCOUNT: "web@project.iam.gserviceaccount.com",
+      TRUSTED_PROXY_HOPS: "2",
+      AUTH_CODES_PER_EMAIL: "3",
+      AUTH_CODES_PER_IP: "50",
+      AUTH_VERIFIES_PER_IP: "60",
+    });
+    expect(config.auth).toEqual({
+      ...AUTH_DEFAULTS,
+      emailFrom: "Staging <codes@auth.staging.albusforge.ai>",
+      internalAuth: { audience: "https://gateway-123.us-central1.run.app", serviceAccount: "web@project.iam.gserviceaccount.com" },
+      trustedProxyHops: 2,
+      codesPerEmail: 3,
+      codesPerIp: 50,
+      verifiesPerIp: 60,
+    });
+  });
+
+  it("allows the log email adapter without a Resend key, and requires the key otherwise", () => {
+    const withoutKey = Object.fromEntries(Object.entries(DB).filter(([name]) => name !== "RESEND_API_KEY"));
+    expect(configFromEnv({ ...withoutKey, EMAIL_ADAPTER: "log" }).auth).toEqual({ ...AUTH_DEFAULTS, emailAdapter: "log", resendApiKey: null });
+    expect(() => configFromEnv(withoutKey)).toThrow(/RESEND_API_KEY/);
+    expect(() => configFromEnv({ ...withoutKey, RESEND_API_KEY: "" })).toThrow(/RESEND_API_KEY/);
+  });
+
+  it("requires SSR_SERVICE_ACCOUNT with INTERNAL_AUTH_AUDIENCE, but tolerates the account alone (today's Terraform)", () => {
+    expect(() => configFromEnv({ ...DB, INTERNAL_AUTH_AUDIENCE: "https://gateway-123.us-central1.run.app" })).toThrow(/SSR_SERVICE_ACCOUNT/);
+    expect(configFromEnv({ ...DB, SSR_SERVICE_ACCOUNT: "web@project.iam.gserviceaccount.com" }).auth.internalAuth).toBeNull();
+  });
+
+  it("refuses the log email adapter on Cloud Run", () => {
+    expect(() => configFromEnv({ ...DB, EMAIL_ADAPTER: "log", K_SERVICE: "gateway" })).toThrow(/K_SERVICE/);
+    expect(configFromEnv({ ...DB, EMAIL_ADAPTER: "log" }).auth.emailAdapter).toBe("log");
+    expect(configFromEnv({ ...DB, K_SERVICE: "gateway" }).auth.emailAdapter).toBe("resend");
   });
 
   it("reads the intake URL, its auth mode, REGISTRY_INCLUDE_DRAFTS and ANON_BUILDS_PER_HOUR", () => {
@@ -39,6 +91,11 @@ describe("configFromEnv", () => {
     ["ANON_BUILDS_PER_HOUR", "lots"],
     ["SSE_MAX_STREAMS_PER_OWNER", "0"],
     ["SSE_MAX_STREAMS", "many"],
+    ["EMAIL_ADAPTER", "smtp"],
+    ["INTERNAL_AUTH_AUDIENCE", "http://gateway.internal"],
+    ["SSR_SERVICE_ACCOUNT", "web"],
+    ["TRUSTED_PROXY_HOPS", "-1"],
+    ["AUTH_CODES_PER_EMAIL", "0"],
   ])("rejects a bad %s", (name, value) => {
     expect(() => configFromEnv({ ...DB, [name]: value })).toThrow(new RegExp(name));
   });

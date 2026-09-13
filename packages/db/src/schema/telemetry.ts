@@ -1,4 +1,4 @@
-import { bigint, doublePrecision, index, integer, jsonb, pgSchema, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, doublePrecision, index, integer, jsonb, numeric, pgSchema, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { tenants } from "./users.js";
 import { createdAt } from "./columns.js";
 
@@ -31,7 +31,7 @@ export const telemetryReadings = telemetrySchema.table("readings", {
   channel: text("channel").notNull(),
   ts: timestamp("ts", { withTimezone: true }).notNull(),
   value: doublePrecision("value").notNull(),
-}, (t) => [primaryKey({ columns: [t.deviceId, t.seq, t.ordinal] }), index("readings_series_idx").on(t.deviceId, t.channel, t.ts)]);
+}, (t) => [primaryKey({ columns: [t.deviceId, t.seq, t.ordinal, t.ts] }), index("readings_series_idx").on(t.deviceId, t.channel, t.ts)]);
 export const telemetryLatest = telemetrySchema.table("latest", {
   deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id, { onDelete: "cascade" }),
   channel: text("channel").notNull(),
@@ -46,3 +46,29 @@ export const telemetryUsage = telemetrySchema.table("usage", {
   readingsIn: bigint("readings_in", { mode: "number" }).notNull(),
   payloadBytes: bigint("payload_bytes", { mode: "number" }).notNull(),
 }, (t) => [primaryKey({ columns: [t.deviceId, t.period] })]);
+
+/** Hour buckets requiring recomputation; populated transactionally by the insert trigger. */
+export const telemetryDirtyHours = telemetrySchema.table("dirty_hours", {
+  deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(),
+  bucket: timestamp("bucket", { withTimezone: true }).notNull(),
+  queuedAt: createdAt(),
+  touchedAt: timestamp("touched_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ columns: [t.deviceId, t.channel, t.bucket] }), index("dirty_hours_bucket_idx").on(t.bucket)]);
+export const telemetryRollups = telemetrySchema.table("rollups", {
+  deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(),
+  resolution: text("resolution").notNull(),
+  bucket: timestamp("bucket", { withTimezone: true }).notNull(),
+  n: bigint("n", { mode: "number" }).notNull(),
+  sum: numeric("sum").notNull(),
+  min: doublePrecision("min").notNull(),
+  max: doublePrecision("max").notNull(),
+  last: doublePrecision("last").notNull(),
+  stddev: numeric("stddev").notNull(),
+}, (t) => [primaryKey({ columns: [t.deviceId, t.channel, t.resolution, t.bucket] }), index("rollups_retention_idx").on(t.resolution, t.bucket)]);
+
+export const telemetryRetentionState = telemetrySchema.table("retention_state", {
+  id: integer("id").primaryKey(),
+  rawBefore: timestamp("raw_before", { withTimezone: true }).notNull(),
+});

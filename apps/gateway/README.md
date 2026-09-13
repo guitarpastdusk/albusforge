@@ -12,12 +12,14 @@ M1 added health checks and the parts registry. M2 adds the anonymous chat: start
 | `GET /readyz` | `200` when `SELECT 1` answers within 2 s, otherwise `503` |
 | `GET /v1/parts?status=&category=` | `PartList`: the highest SemVer version of each part among versions whose status matches, sorted by id, without blocks |
 | `GET /v1/parts/:id?status=` | `PartDetail`: every block of that version, or `404` |
-| `POST /v1/builds` | `{ ask_text, client_message_id? }` → `201 CreatedBuild` (below). Sets the anonymous owner cookie when the request has no valid one |
+| `POST /v1/builds` | `{ ask_text, client_message_id? }` → `201 CreatedBuild` (below). Without a session, sets the anonymous owner cookie when the request has no valid one; with one, the build belongs to the session's tenant |
+| `GET /v1/builds?status=` | `BuildList`: the session tenant's builds, newest first, or `401`. Anonymous builds are never listed |
 | `GET /v1/builds/:id` | `BuildDetail` with `status`, `spec_version`, `spec` and `candidate_parts` |
 | `GET /v1/builds/:id/messages` | `MessageList`, oldest first |
 | `POST /v1/builds/:id/messages` | `{ text, client_message_id }` → `202 { message }`; `200 { message }` for a repeated `client_message_id` |
 | `GET /v1/builds/:id/events` | `text/event-stream`: `message.created`, `build.updated` |
-| `GET /v1/builds` and any other `/v1` path or method | `501 {"error":{"code":"NOT_IMPLEMENTED",…}}` |
+| `POST /v1/auth/code`, `POST /v1/auth/verify`, `GET /v1/me`, `POST /v1/auth/signout` | sign-in, see below |
+| any other `/v1` path or method | `501 {"error":{"code":"NOT_IMPLEMENTED",…}}` |
 | anything else | `404 {"error":{"code":"NOT_FOUND",…}}` |
 
 `status` is comma-separated or repeated (`?status=active,draft`) and defaults to every status except `retired`. The filter applies before "latest": with `?status=active`, a part whose newest version is a draft shows its newest active version. An unknown query parameter, status or category is a `400` with `details`.
@@ -26,7 +28,7 @@ Every error, including the 501 and 404, uses the API error shape `{ error: { cod
 
 Reads use the registry's SemVer comparator (`@albusforge/registry/semver`), not string order, so `1.10.0` beats `1.9.0` and a release beats its pre-release.
 
-The SSR contract in ADR 0007 (`X-Albus-Internal-Auth` and the forwarded host and client IP) isn't implemented yet. Nothing depends on the tenant yet, and the chat rate limits key on the anonymous owner, not the client IP.
+Of the SSR contract in ADR 0007, gateway implements the client IP: `X-Albus-Client-IP` is trusted when `X-Albus-Internal-Auth` carries a valid Google ID token for `SSR_SERVICE_ACCOUNT` with audience `INTERNAL_AUTH_AUDIENCE` (see Sign-in). `X-Albus-Original-Host` and tenant subdomains are not read yet: every session resolves to its active tenant, as on the apex. The chat rate limits key on the anonymous owner, not the client IP.
 
 ## Builds and chat (M2)
 
@@ -34,7 +36,9 @@ The SSR contract in ADR 0007 (`X-Albus-Internal-Auth` and the forwarded host and
 
 `POST /v1/builds` without a well-formed `__Host-albus_anon` cookie creates a random 32-byte token and sets `__Host-albus_anon=<token>; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`. The build stores `anon_owner_hash = sha256(token)` as hex. The token is never stored or logged. A valid cookie is reused, so one browser's builds share a hash.
 
-Every other build route loads the build only when it is unclaimed (`tenant_id` null) and its hash matches the cookie's. Anything else is a `404 NOT_FOUND`, never a 403: no cookie, someone else's build, a claimed build, an unknown or malformed id. So ids can't be probed. Claimed builds and sessions arrive with sign-in ([ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md), [0009](../../docs/adr/0009-tenant-created-at-sign-up.md)).
+With a live `__Host-albus_session` (see Sign-in), `POST /v1/builds` stores `tenant_id` instead and sets no anonymous cookie.
+
+Every other build route loads the build only for its **owner**: the tenant of the caller's live session, or, while the build is unclaimed (`tenant_id` null), the anonymous cookie whose hash it carries. A browser that carries both cookies may read by either. Anything else is a `404 NOT_FOUND`, never a 403: no credential, someone else's build, a build claimed into another tenant, an unknown or malformed id. So ids can't be probed. Verify moves a browser's anonymous builds into the tenant, so `/build/:id` keeps working across sign-in ([ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md), [0009](../../docs/adr/0009-tenant-created-at-sign-up.md)).
 
 SSR server actions call gateway on the visitor's behalf, so web has to relay the `Set-Cookie` to the browser and forward the cookie on later calls (ADR 0007).
 
@@ -80,14 +84,14 @@ After storing the first message (`POST /v1/builds`) or a new user message, gatew
 - A `: ping` comment every 15 s and `retry: 3000`. The stream ends after 10 minutes and the client reconnects with `Last-Event-ID`. Shutdown ends every open stream first.
 - A failed poll logs `build events poll failed` at WARNING, with database metadata only, and ends the stream.
 - **Authorization holds for the life of the stream.** Both poll queries are scoped to the owner hash the stream opened with and to an unclaimed build. The stream ends at the first poll after the build is claimed (`tenant_id` set, hash cleared), deleted or re-owned, and a message written after a claim is never sent.
-- **Admission is bounded.** At most `SSE_MAX_STREAMS_PER_OWNER` (3) open streams per anonymous owner and `SSE_MAX_STREAMS` (100) per instance. Beyond that the answer is `429 RATE_LIMITED` with `Retry-After: 5`, before the stream opens. A slot is released when the client disconnects, the stream ends, or on shutdown.
+- **Admission is bounded.** At most `SSE_MAX_STREAMS_PER_OWNER` (3) open streams per owner (the tenant when signed in, else the anonymous hash) and `SSE_MAX_STREAMS` (100) per instance. Beyond that the answer is `429 RATE_LIMITED` with `Retry-After: 5`, before the stream opens. A slot is released when the client disconnects, the stream ends, or on shutdown.
 - **Slow clients are dropped.** While a write is still buffered, polling and heartbeats pause. A client that doesn't drain within 30 s, or whose unsent buffer passes 1 MiB, is disconnected, and `closing slow event stream` is logged at INFO. A reader that drains before the next poll is never made to wait: the `drain` listener is attached as the write buffers, and the next tick tests the socket rather than a latched flag.
 
 ### Rate limits
 
-These are held in memory per instance, keyed by the anonymous owner hash: 10 new builds an hour and 30 messages in 10 minutes. Beyond that: `429 RATE_LIMITED` with `Retry-After` and `details.retry_after_s`. They are **defence in depth behind Cloud Armor**. Each instance counts separately and a restart forgets. A replayed `client_message_id` doesn't count.
+These are held in memory per instance, keyed by the owner (the tenant when signed in, else the anonymous hash): 10 new builds an hour and 30 messages in 10 minutes. Beyond that: `429 RATE_LIMITED` with `Retry-After` and `details.retry_after_s`. They are **defence in depth behind Cloud Armor**. Each instance counts separately and a restart forgets. A replayed `client_message_id` doesn't count.
 
-A request without a cookie always gets a fresh hash, so the per-owner limits can't bound it. As a spend backstop, builds that create a **new anonymous owner** are also capped for the whole instance at `ANON_BUILDS_PER_HOUR` (default 60) in a sliding hour. A new owner is one whose hash no stored build carries yet. That covers a missing cookie and a well-formed but unknown one, so rotating made-up cookies doesn't escape the cap. Beyond the cap it answers the same `429 RATE_LIMITED` with `Retry-After`, and logs `anonymous build cap reached on this instance` at WARNING once per window. An owner who already has a build isn't counted. A per-IP limit waits for the SSR contract to give gateway a trustworthy client IP.
+A request without a cookie always gets a fresh hash, so the per-owner limits can't bound it. As a spend backstop, builds that create a **new anonymous owner** are also capped for the whole instance at `ANON_BUILDS_PER_HOUR` (default 60) in a sliding hour. A new owner is one whose hash no stored build carries yet. That covers a missing cookie and a well-formed but unknown one, so rotating made-up cookies doesn't escape the cap. Beyond the cap it answers the same `429 RATE_LIMITED` with `Retry-After`, and logs `anonymous build cap reached on this instance` at WARNING once per window. An owner who already has a build isn't counted, and a signed-in request is never a new anonymous owner. The sign-in routes are the ones limited per client IP (see Sign-in).
 
 ## Run it
 
@@ -120,8 +124,17 @@ Browsers only send `__Host-` cookies over HTTPS, but curl doesn't enforce that l
 | `INTAKE_AUTH` | `google` | `google`: an ID token for audience `INTAKE_URL` from the metadata server. `none`: no `Authorization` header (local, tests) |
 | `REGISTRY_INCLUDE_DRAFTS` | `false` | `true`: `candidate_parts` considers draft parts as well as active ones |
 | `ANON_BUILDS_PER_HOUR` | `60` | builds that create a new anonymous owner (no stored build has its hash), per instance per sliding hour |
-| `SSE_MAX_STREAMS_PER_OWNER` | `3` | open event streams per anonymous owner, per instance |
+| `SSE_MAX_STREAMS_PER_OWNER` | `3` | open event streams per owner, per instance |
 | `SSE_MAX_STREAMS` | `100` | open event streams per instance |
+| `EMAIL_ADAPTER` | `resend` | `resend`: sign-in codes go through Resend. `log`: they are written to the log at INFO, for local runs and CI only; refused when `K_SERVICE` (Cloud Run) is set |
+| `RESEND_API_KEY` | unset | required unless `EMAIL_ADAPTER=log` |
+| `AUTH_EMAIL_FROM` | `Albusforge <sign-in@auth.albusforge.ai>` | the From mailbox; the domain must be verified in Resend (`infra/bootstrap/email_dns.tf`) |
+| `INTERNAL_AUTH_AUDIENCE` | unset | gateway's own `https://…run.app` URL, the `aud` of web's `X-Albus-Internal-Auth` token. Requires `SSR_SERVICE_ACCOUNT`. Unset: the forwarded client IP is never trusted, and every SSR request counts against web's own IP (a startup WARNING) |
+| `SSR_SERVICE_ACCOUNT` | unset | web's runtime service account, the token's `email`. Terraform sets it already; alone it enables nothing |
+| `TRUSTED_PROXY_HOPS` | `1` | `X-Forwarded-For` entries at the right end that are our own proxies (the load balancer) |
+| `AUTH_CODES_PER_EMAIL` | `5` | sign-in code requests per email in a sliding 15 minutes, per instance |
+| `AUTH_CODES_PER_IP` | `20` | sign-in code requests per client IP in a sliding 15 minutes, per instance |
+| `AUTH_VERIFIES_PER_IP` | `30` | verify attempts per client IP in a sliding 15 minutes, per instance |
 
 An empty variable counts as unset.
 
@@ -137,7 +150,26 @@ pg-pool destroys any client whose query failed rather than returning it to the p
 
 Each open event stream runs two short queries a second against the 5-client pool.
 
-Terraform also sets `PUBLIC_DOMAIN` and `SSR_SERVICE_ACCOUNT`, for the SSR contract; nothing reads them yet.
+Terraform also sets `PUBLIC_DOMAIN`; nothing reads it yet.
+
+## Sign-in
+
+Email code sign-in per [ADR 0008](../../docs/adr/0008-sign-in-by-email-code.md), with the tenant model of [ADR 0009](../../docs/adr/0009-tenant-created-at-sign-up.md). Tables are `users.*` in [packages/db](../../packages/db); the routes live in `src/auth-routes.ts` over `src/auth-store.ts`.
+
+| Route | Answer |
+| --- | --- |
+| `POST /v1/auth/code {email}` | `204`. Stores a six-digit code, valid 10 minutes, hashed as SHA-256(`<row id>:<code>`), and emails it. A new request invalidates the previous code. `429 RATE_LIMITED` with `Retry-After` beyond the per-email or per-IP window; `503 UNAVAILABLE` when the email provider refuses or times out (10 s) |
+| `POST /v1/auth/verify {email, code}` | `200` `Me` plus two `Set-Cookie` lines: the session and a deletion of `__Host-albus_anon`. Any failure to verify (no live code, expired, wrong, already used, tried 5 times) is `400 INVALID_CODE`, so nothing tells a guesser which. Wrong attempts are counted in a transaction that commits even though the request fails; the fifth kills the code |
+| `GET /v1/me` | `200` `Me`, or `401 UNAUTHENTICATED` for a missing, unknown, revoked or expired session. Never sets a cookie: web relays `Set-Cookie` only from mutations |
+| `POST /v1/auth/signout` | `204` and a deletion of the session cookie, whether or not a live session was found. A live session is revoked with its whole family (parent chain and descendants, ADR 0009) |
+
+Verify, in one transaction under an advisory lock per email: checks the code, finds or creates the user (`users.users` is unique on `lower(email)`; the address is stored lowercased), creates the personal tenant named `Personal` with the user as `admin` on a first sign-in, opens a 30-day session whose active tenant is the current session's when the caller is already signed in as the same user and otherwise the oldest membership, and claims anonymous work (PORTAL.md §5): `builds` and `llm_calls` carrying the `__Host-albus_anon` cookie's hash get the tenant and lose the hash. The build routes then serve the claimed build to the session (Ownership, above) and `GET /v1/builds` lists it.
+
+Sessions are 32 random bytes as base64url in `__Host-albus_session` (`Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`, no `Domain`), stored as their SHA-256. There is no sliding renewal yet: a session lasts 30 days from sign-in. Resolving a session to its tenant also checks `tenant_members` (ADR 0009), so a removed member loses the tenant's builds at once, and an open event stream re-resolves the session before every poll and closes when it is signed out, expired or no longer a member.
+
+`PUT /v1/me/active-tenant` (ADR 0009) is not built: every user has exactly one tenant until teams arrive.
+
+Logs: `signed in` with `userId`, `tenantId`, `claimedBuilds`, `claimedLlmCalls`; `signed out` with `revokedSessions`; `sign-in code email failed` at ERROR with the provider error. No line carries an email address or a code, except the `log` email adapter's own line.
 
 ## Logs
 
@@ -160,7 +192,12 @@ On `SIGTERM` or `SIGINT` the server ends open event streams, stops accepting con
 | --- | --- |
 | `src/server.ts` | the process: config, pool, intake client, listen, signals |
 | `src/app.ts` | `buildApp`: hooks, error and not-found handlers, health and parts routes |
-| `src/build-routes.ts` | the build, message and event routes: ownership, idempotency, 409, rate limits |
+| `src/build-routes.ts` | the build, message and event routes: ownership (session or anonymous), idempotency, 409, rate limits |
+| `src/auth-routes.ts` | sign-in: code, verify, me, sign-out; per-email and per-IP limits |
+| `src/auth-store.ts` | `AuthStore` over `users.*`: codes, users and tenants, sessions, the claim transaction |
+| `src/session-cookie.ts` | session tokens and the two credential cookies |
+| `src/email.ts` | the Resend and log email adapters |
+| `src/internal-auth.ts` | the SSR ID token check and the client IP |
 | `src/chat-store.ts` | `ChatStore` over `builds.builds`, `build_messages` and `specs`; message cursors |
 | `src/sse.ts` | the polling event stream |
 | `src/intake.ts` | intake HTTP client, ID token auth, background turn scheduler |
@@ -169,7 +206,7 @@ On `SIGTERM` or `SIGINT` the server ends open event streams, stops accepting con
 | `src/rate-limit.ts` | in-memory sliding-window limiter |
 | `src/http.ts` | `HttpError`, the error shape, request parsing |
 | `src/parts.ts` | `PartsStore` over `registry.parts`, and `latestPerId` |
-| `src/config.ts` | `PORT`, the database, intake and registry env |
+| `src/config.ts` | `PORT`, the database, intake, registry and sign-in env |
 | `src/log.ts` | structured logs and trace parsing |
 | `Dockerfile` | production image; build from the **repo root** (`docker build -f apps/gateway/Dockerfile .`) |
 

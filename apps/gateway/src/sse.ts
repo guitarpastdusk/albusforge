@@ -39,7 +39,7 @@
  */
 import { BUILD_EVENT, type BuildUpdatedEvent, type ChatMessage, type MessageCreatedEvent } from "@albusforge/schema";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { type BuildState, type ChatStore, compareCursors, type Cursor, type MessageRow, parseCursor } from "./chat-store";
+import { type BuildState, type ChatStore, compareCursors, type Cursor, type MessageRow, type Owner, parseCursor } from "./chat-store";
 import { describeError } from "./db-log";
 import type { Log } from "./log";
 
@@ -82,8 +82,8 @@ export interface StreamLease {
 }
 
 export interface StreamRegistry {
-  /** A lease, or null when the owner or the instance is at its limit. */
-  reserve(ownerHash: string): StreamLease | null;
+  /** A lease for this owner key (chat-store's ownerKey), or null when the owner or the instance is at its limit. */
+  reserve(ownerKey: string): StreamLease | null;
   /** Ends every open stream (Fastify preClose), so shutdown doesn't wait for maxMs. */
   closeAll(): void;
   readonly size: number;
@@ -130,13 +130,21 @@ export function streamBuildEvents(input: {
   request: FastifyRequest;
   reply: FastifyReply;
   buildId: string;
-  ownerHash: string;
+  owner: Owner;
+  /**
+   * Re-resolves the caller's credentials before each poll, so a session that
+   * is signed out, expired or dropped from the tenant loses the stream within
+   * one poll instead of keeping it until maxMs. Undefined means the owner
+   * can't change (anonymous only), and the claim check in buildState suffices.
+   */
+  refreshOwner?: () => Promise<Owner | undefined>;
   store: ChatStore;
   log: Log;
   options: SseOptions;
   lease: StreamLease;
 }): void {
-  const { request, reply, buildId, ownerHash, store, log, options, lease } = input;
+  const { request, reply, buildId, refreshOwner, store, log, options, lease } = input;
+  let owner = input.owner;
   const lastEventId = request.headers["last-event-id"];
   const resumeFrom = parseCursor(Array.isArray(lastEventId) ? lastEventId[0] : lastEventId);
   const logFields = { requestId: request.id, buildId };
@@ -229,15 +237,20 @@ export function streamBuildEvents(input: {
   };
 
   const poll = async () => {
-    const state = await store.buildState(buildId, ownerHash);
-    if (!state) return close(); // deleted, claimed or re-owned: this cookie may no longer read it
+    if (refreshOwner) {
+      const current = await refreshOwner();
+      if (!current) return close(); // signed out, expired, or no longer a member
+      owner = current;
+    }
+    const state = await store.buildState(buildId, owner);
+    if (!state) return close(); // deleted, claimed or re-owned: this credential may no longer read it
     if (!lastState || state.status !== lastState.status || state.specVersion !== lastState.specVersion) {
       const payload: BuildUpdatedEvent = { status: state.status, spec_version: state.specVersion };
       event(BUILD_EVENT.buildUpdated, payload, cursor);
       lastState = state;
     }
 
-    const rows = await store.messagesSince(buildId, ownerHash, cursor, options.lookbackMs);
+    const rows = await store.messagesSince(buildId, owner, cursor, options.lookbackMs);
     for (const row of rows) {
       if (closed) return;
       const position = parseCursor(row.cursor);

@@ -9,8 +9,8 @@ const TONE: Record<DeviceStatus, KickerTone> = {
   never_seen: "muted",
 };
 
-/** Status line and name at the top of the device dashboard. */
-export function DeviceStatusHeader({ device, now }: { device: DeviceDashboard["device"]; now: Date }) {
+/** Status line and name at the top of the device dashboard. `live` adds "· live" once the stream is open. */
+export function DeviceStatusHeader({ device, now, live = false }: { device: DeviceDashboard["device"]; now: Date; live?: boolean }) {
   const awaiting = isAwaitingFirstReading(device);
 
   return (
@@ -19,6 +19,7 @@ export function DeviceStatusHeader({ device, now }: { device: DeviceDashboard["d
         {!awaiting && device.status === "online" ? <PulseDot size={10} /> : null}
         <Kicker tone={awaiting ? "muted" : TONE[device.status]} tracking={0.16}>
           {formatDeviceStatus(device, now)}
+          {live ? " · live" : ""}
         </Kicker>
       </div>
       <h1 className="mt-2.5 font-display text-[44px] font-medium tracking-[-0.01em]">{device.name}</h1>

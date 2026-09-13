@@ -10,7 +10,21 @@
  * itself, so a claim takes effect on the very next poll.
  */
 import { buildMessages, builds, type BuildStatus, type Db, type MessageRole, specs } from "@albusforge/db";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, sql } from "drizzle-orm";
+
+/**
+ * Who may read a build: the tenant of a live session, the hash of an
+ * anonymous owner cookie, or both when a signed-in browser still carries an
+ * anonymous cookie. A build matches when its tenant is `tenantId`, or when it
+ * is unclaimed and carries `anonHash`.
+ */
+export interface Owner {
+  tenantId: string | null;
+  anonHash: string | null;
+}
+
+/** One string per owner for in-memory limits: the tenant when signed in, else the anonymous hash. */
+export const ownerKey = (owner: Owner): string => (owner.tenantId !== null ? `tenant:${owner.tenantId}` : `anon:${owner.anonHash ?? ""}`);
 
 export interface BuildRow {
   id: string;
@@ -80,18 +94,21 @@ export interface ChatStore {
    * user message. `isNewOwner` is true when no build carries the owner hash yet.
    */
   createBuild(input: {
-    ownerHash: string;
+    /** A tenant owner stores `tenant_id`; an anonymous one stores `anon_owner_hash`. A tenant wins when both are present. */
+    owner: Owner;
     askText: string;
     clientMessageId: string | null;
     admit: (owner: { isNewOwner: boolean }) => void;
   }): Promise<CreateBuildResult>;
-  /** The build when it is unclaimed and its anon_owner_hash matches; otherwise null. */
-  findOwnedBuild(id: string, ownerHash: string): Promise<BuildRow | null>;
+  /** The build when the owner holds it (see Owner); otherwise null. */
+  findOwnedBuild(id: string, owner: Owner): Promise<BuildRow | null>;
+  /** The tenant's builds, most recently updated first. */
+  listBuilds(tenantId: string): Promise<BuildRow[]>;
   latestSpec(buildId: string): Promise<SpecRow | null>;
-  /** Null once the build is gone, claimed, or no longer carries this owner hash. */
-  buildState(buildId: string, ownerHash: string): Promise<BuildState | null>;
+  /** Null once the build is gone or no longer held by this owner. */
+  buildState(buildId: string, owner: Owner): Promise<BuildState | null>;
   /** Oldest first; empty unless the owner still holds the build. */
-  listMessages(buildId: string, ownerHash: string): Promise<MessageRow[]>;
+  listMessages(buildId: string, owner: Owner): Promise<MessageRow[]>;
   /** The newest message, and whether it was created less than `withinS` seconds ago by the database clock. */
   lastMessage(buildId: string, withinS: number): Promise<(MessageRow & { recent: boolean }) | null>;
   /**
@@ -102,7 +119,7 @@ export interface ChatStore {
    */
   submitUserMessage(input: {
     buildId: string;
-    ownerHash: string;
+    owner: Owner;
     text: string;
     clientMessageId: string;
     pendingWithinS: number;
@@ -112,7 +129,7 @@ export interface ChatStore {
    * Messages with created_at later than `after` minus `lookbackMs` (all when
    * `after` is absent), oldest first; empty unless the owner still holds the build.
    */
-  messagesSince(buildId: string, ownerHash: string, after: Cursor | undefined, lookbackMs: number): Promise<MessageRow[]>;
+  messagesSince(buildId: string, owner: Owner, after: Cursor | undefined, lookbackMs: number): Promise<MessageRow[]>;
 }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -142,17 +159,22 @@ const buildColumns = {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (value: string) => UUID.test(value);
 
-/** Unclaimed and still carrying this anonymous owner's hash. */
-const ownedBy = (ownerHash: string) => and(eq(builds.anonOwnerHash, ownerHash), isNull(builds.tenantId));
+/** Held by the tenant, or unclaimed and still carrying the anonymous owner's hash. Matches nothing for an empty owner. */
+function ownedBy(owner: Owner) {
+  const byTenant = owner.tenantId === null ? undefined : eq(builds.tenantId, owner.tenantId);
+  const byHash = owner.anonHash === null ? undefined : and(eq(builds.anonOwnerHash, owner.anonHash), isNull(builds.tenantId));
+  if (byTenant && byHash) return or(byTenant, byHash);
+  return byTenant ?? byHash ?? sql`false`;
+}
 
-async function findBuildByFirstMessage(db: Queryable, ownerHash: string, clientMessageId: string): Promise<BuildRow | null> {
+async function findBuildByFirstMessage(db: Queryable, owner: Owner, clientMessageId: string): Promise<BuildRow | null> {
   const [row] = await db
     .select(buildColumns)
     .from(builds)
     .innerJoin(buildMessages, eq(buildMessages.buildId, builds.id))
     .where(
       and(
-        ownedBy(ownerHash),
+        ownedBy(owner),
         eq(buildMessages.clientMessageId, clientMessageId),
         eq(buildMessages.role, "user"),
         sql`${buildMessages.text} = ${builds.askText}`,
@@ -175,17 +197,22 @@ async function lastMessageOf(db: Queryable, buildId: string, withinS: number) {
 
 export function createChatStore(db: Db): ChatStore {
   return {
-    async createBuild({ ownerHash, askText, clientMessageId, admit }) {
+    async createBuild({ owner, askText, clientMessageId, admit }) {
       return db.transaction(async (tx): Promise<CreateBuildResult> => {
         if (clientMessageId !== null) {
           // Serializes every request for this (owner, client id) across instances until commit.
-          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`create-build:${ownerHash}:${clientMessageId}`}, 0))`);
-          const replayed = await findBuildByFirstMessage(tx, ownerHash, clientMessageId);
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`create-build:${ownerKey(owner)}:${clientMessageId}`}, 0))`);
+          const replayed = await findBuildByFirstMessage(tx, owner, clientMessageId);
           if (replayed) return { kind: "replayed", build: replayed };
         }
-        const [known] = await tx.select({ id: builds.id }).from(builds).where(eq(builds.anonOwnerHash, ownerHash)).limit(1);
-        admit({ isNewOwner: known === undefined });
-        const [build] = await tx.insert(builds).values({ anonOwnerHash: ownerHash, askText, status: "asking" }).returning(buildColumns);
+        let isNewOwner = false;
+        if (owner.tenantId === null) {
+          const [known] = await tx.select({ id: builds.id }).from(builds).where(eq(builds.anonOwnerHash, owner.anonHash!)).limit(1);
+          isNewOwner = known === undefined;
+        }
+        admit({ isNewOwner });
+        const ownership = owner.tenantId !== null ? { tenantId: owner.tenantId } : { anonOwnerHash: owner.anonHash };
+        const [build] = await tx.insert(builds).values({ ...ownership, askText, status: "asking" }).returning(buildColumns);
         const [message] = await tx
           .insert(buildMessages)
           .values({ buildId: build!.id, role: "user", text: askText, clientMessageId })
@@ -194,14 +221,18 @@ export function createChatStore(db: Db): ChatStore {
       });
     },
 
-    async findOwnedBuild(id, ownerHash) {
+    async findOwnedBuild(id, owner) {
       if (!isUuid(id)) return null;
       const [row] = await db
         .select(buildColumns)
         .from(builds)
-        .where(and(eq(builds.id, id), ownedBy(ownerHash)))
+        .where(and(eq(builds.id, id), ownedBy(owner)))
         .limit(1);
       return row ?? null;
+    },
+
+    async listBuilds(tenantId) {
+      return db.select(buildColumns).from(builds).where(eq(builds.tenantId, tenantId)).orderBy(desc(builds.updatedAt), desc(builds.id));
     },
 
     async latestSpec(buildId) {
@@ -214,37 +245,37 @@ export function createChatStore(db: Db): ChatStore {
       return row ?? null;
     },
 
-    async buildState(buildId, ownerHash) {
+    async buildState(buildId, owner) {
       const [row] = await db
         .select({
           status: builds.status,
           specVersion: sql<number | null>`(select max(${specs.version}) from ${specs} where ${specs.buildId} = ${builds.id})`,
         })
         .from(builds)
-        .where(and(eq(builds.id, buildId), ownedBy(ownerHash)))
+        .where(and(eq(builds.id, buildId), ownedBy(owner)))
         .limit(1);
       return row ? { status: row.status, specVersion: row.specVersion === null ? null : Number(row.specVersion) } : null;
     },
 
-    async listMessages(buildId, ownerHash) {
+    async listMessages(buildId, owner) {
       return db
         .select(messageColumns)
         .from(buildMessages)
         .innerJoin(builds, eq(builds.id, buildMessages.buildId))
-        .where(and(eq(buildMessages.buildId, buildId), ownedBy(ownerHash)))
+        .where(and(eq(buildMessages.buildId, buildId), ownedBy(owner)))
         .orderBy(asc(buildMessages.createdAt), asc(buildMessages.id));
     },
 
     lastMessage: (buildId, withinS) => lastMessageOf(db, buildId, withinS),
 
-    async submitUserMessage({ buildId, ownerHash, text, clientMessageId, pendingWithinS, admit }) {
+    async submitUserMessage({ buildId, owner, text, clientMessageId, pendingWithinS, admit }) {
       if (!isUuid(buildId)) return { kind: "not_found" };
       return db.transaction(async (tx): Promise<SubmitMessageResult> => {
         // Every submission for this build waits here, on any instance, until the holder commits.
         const [owned] = await tx
           .select({ id: builds.id })
           .from(builds)
-          .where(and(eq(builds.id, buildId), ownedBy(ownerHash)))
+          .where(and(eq(builds.id, buildId), ownedBy(owner)))
           .for("update");
         if (!owned) return { kind: "not_found" };
 
@@ -270,7 +301,7 @@ export function createChatStore(db: Db): ChatStore {
       });
     },
 
-    async messagesSince(buildId, ownerHash, after, lookbackMs) {
+    async messagesSince(buildId, owner, after, lookbackMs) {
       const since =
         after === undefined
           ? undefined
@@ -279,7 +310,7 @@ export function createChatStore(db: Db): ChatStore {
         .select(messageColumns)
         .from(buildMessages)
         .innerJoin(builds, eq(builds.id, buildMessages.buildId))
-        .where(and(eq(buildMessages.buildId, buildId), ownedBy(ownerHash), since))
+        .where(and(eq(buildMessages.buildId, buildId), ownedBy(owner), since))
         .orderBy(asc(buildMessages.createdAt), asc(buildMessages.id));
     },
   };

@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/connector.schema.json",
+  "id": "usb-c-v1",
+  "version": "1.0.0",
+  "name": "USB Type-C receptacle",
+  "housing": "USB Type-C",
+  "pins": [
+    { "n": 1, "name": "VBUS", "role": "power" },
+    { "n": 2, "name": "GND", "role": "ground" }
+  ],
+  "interfaces": ["power", "host"],
+  "max_voltage": 5.5
+}

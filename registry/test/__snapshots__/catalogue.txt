@@ -1,0 +1,47 @@
+# Part catalogue
+
+## Capabilities (capability [unit]: parts)
+- act.position_deg [°]: M-001
+- bus.i2c: C-001
+- bus.spi: C-001
+- bus.uart: C-001
+- gpio.adc: C-001
+- gpio.digital: C-001
+- gpio.pwm: C-001
+- net.ble: C-001
+- net.wifi: C-001
+- power.3v3: C-001
+- power.5v: E-005
+- power.battery: E-001
+- power.charge: E-004
+- read.acceleration_g [g]: P-004
+- read.angular_rate_dps [°/s]: P-004
+- read.distance_cm [cm]: V-004
+- read.humidity_pct [%]: P-001
+- read.illuminance_lux [lx]: V-005
+- read.motion_bool [true/false]: L-003
+- read.pressure_hpa [hPa]: P-001
+- read.soil_moisture_pct [%]: P-005
+- read.temperature_c [°C]: P-001, P-002
+
+## Environment flags
+- li-ion, moving-parts, needs-airflow, needs-light, needs-line-of-sight, rf-radiator, temp:-15..70C, temp:-40..85C, temp:-55..100C, temp:0..50C, waterproof
+
+## Power options (id name: provides; output; max current; capacity)
+- E-001 18650 Li-ion Battery, 2200 mAh: power.battery; 2.5–4.2 V; 1000 mA; 2200 mAh
+- E-004 TP4056 Li-ion Charger Module: power.charge; 4.137–4.263 V; 1000 mA; no storage
+- E-005 USB-C 5.1 V 3 A Power Supply: power.5v; 4.845–5.355 V; 3000 mA; no storage
+
+## Parts (id@version name | category | provides | requires | supply V | idle/active mA | exposure | flags)
+- C-001@1.0.0 ESP32-S3-DevKitC-1 (N8R8) | communication | bus.i2c, bus.spi, bus.uart, gpio.adc, gpio.digital, gpio.pwm, net.ble, net.wifi, power.3v3 | none | 4.13–5.5 V | 0.007/340 mA | none | rf-radiator
+- E-001@1.0.0 18650 Li-ion Battery, 2200 mAh | energy | power.battery | none | 2.5–4.2 V | 0/0 mA | none | li-ion
+- E-004@1.0.0 TP4056 Li-ion Charger Module | energy | power.charge | power.battery | 4–8 V | 0/0 mA | none | none
+- E-005@1.0.0 USB-C 5.1 V 3 A Power Supply | energy | power.5v | none | 4.845–5.355 V | 0/0 mA | none | none
+- L-003@1.0.0 HC-SR501 PIR Motion Sensor | location | read.motion_bool | gpio.digital, power.5v | 5–20 V | 0.05/65 mA | window | needs-line-of-sight, temp:-15..70C
+- M-001@1.0.0 SG90 Micro Servo | motion | act.position_deg | gpio.pwm, power.5v | 4.8–6 V | 600/600 mA | none | moving-parts, temp:0..50C
+- P-001@1.0.0 BME280 Temperature, Humidity and Pressure Sensor | physical | read.humidity_pct, read.pressure_hpa, read.temperature_c | bus.i2c | 3–5 V | 0.0001/0.714 mA | vent | needs-airflow, temp:-40..85C
+- P-002@1.0.0 DS18B20 Waterproof Temperature Probe | physical | read.temperature_c | gpio.digital | 3–5.5 V | 0.00075/1 mA | probe-external | temp:-55..100C, waterproof
+- P-004@1.0.0 MPU-6050 6-DoF Accelerometer and Gyroscope | physical | read.acceleration_g, read.angular_rate_dps | bus.i2c | 3–5 V | 0.005/3.8 mA | none | temp:-40..85C
+- P-005@1.0.0 Capacitive Soil Moisture Probe (DFRobot SEN0193) | physical | read.soil_moisture_pct | gpio.adc | 3.3–5.5 V | 5/5 mA | probe-external | none
+- V-004@1.0.0 HC-SR04 Ultrasonic Distance Sensor | visual | read.distance_cm | gpio.digital, power.5v | 5–5 V | 15/15 mA | window | needs-line-of-sight
+- V-005@1.0.0 BH1750 Ambient Light Sensor | visual | read.illuminance_lux | bus.i2c | 3–5 V | 0.00001/0.12 mA | window | needs-light, temp:-40..85C

@@ -1,0 +1,14 @@
+{
+  "$schema": "../schemas/connector.schema.json",
+  "id": "hsx-3pin-v1",
+  "version": "1.0.0",
+  "name": "HSX 3-pin signal",
+  "housing": "JST PH 2.0 mm, 3-pin",
+  "pins": [
+    { "n": 1, "name": "VCC", "role": "power" },
+    { "n": 2, "name": "GND", "role": "ground" },
+    { "n": 3, "name": "SIG", "role": "signal" }
+  ],
+  "interfaces": ["1-wire", "adc", "gpio", "pwm"],
+  "max_voltage": 6
+}

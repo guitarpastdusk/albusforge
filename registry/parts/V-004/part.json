@@ -1,0 +1,45 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "V-004",
+  "version": "1.0.0",
+  "name": "HC-SR04 Ultrasonic Distance Sensor",
+  "category": "visual",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "gpio",
+    "connector": "hsx-4pin-gpio-v1",
+    "voltage_range": [5.0, 5.0],
+    "current_draw_ma": { "idle": 15, "active": 15 },
+    "requires": ["gpio.digital", "power.5v"],
+    "conflicts": [],
+    "i2c_address": null,
+    "logic_v": [5.0, 5.0]
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": null,
+    "mount": { "type": "unspecified" },
+    "exposure": "window",
+    "environment_flags": ["needs-line-of-sight"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-hcsr04",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/distance",
+    "capabilities": ["read.distance_cm"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "distance.v1",
+    "default_widgets": ["line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [
+      { "vendor": "adafruit", "sku": "3942", "url": "https://www.adafruit.com/product/3942" },
+      { "vendor": "sparkfun", "sku": "SEN-15569", "url": "https://www.sparkfun.com/products/15569" }
+    ],
+    "unit_cost_usd": 3.95
+  }
+}

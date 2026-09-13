@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "E-005",
+  "version": "1.0.0",
+  "name": "USB-C 5.1 V 3 A Power Supply",
+  "category": "energy",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "power",
+    "connector": "usb-c-v1",
+    "voltage_range": [4.845, 5.355],
+    "current_draw_ma": { "idle": 0, "active": 0 },
+    "requires": [],
+    "conflicts": [],
+    "i2c_address": null,
+    "logic_v": null,
+    "supply": { "output_v": [4.845, 5.355], "max_output_ma": 3000, "capacity_mah": null }
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [45, 45, 27],
+    "mount": { "type": "external" },
+    "exposure": "none",
+    "environment_flags": []
+  },
+  "software": {
+    "driver_pkg": null,
+    "driver_version": null,
+    "sdk_module": null,
+    "capabilities": ["power.5v"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": null,
+    "default_widgets": [],
+    "alert_templates": []
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "4298", "url": "https://www.adafruit.com/product/4298" }],
+    "unit_cost_usd": 8.74
+  }
+}

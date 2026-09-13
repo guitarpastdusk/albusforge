@@ -1,0 +1,43 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "E-001",
+  "version": "1.0.0",
+  "name": "18650 Li-ion Battery, 2200 mAh",
+  "category": "energy",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "power",
+    "connector": "hsx-power-2pin-v1",
+    "voltage_range": [2.5, 4.2],
+    "current_draw_ma": { "idle": 0, "active": 0 },
+    "requires": [],
+    "conflicts": [],
+    "i2c_address": null,
+    "logic_v": null,
+    "supply": { "output_v": [2.5, 4.2], "max_output_ma": 1000, "capacity_mah": 2200 }
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [69, 18, 18],
+    "mount": { "type": "cradle" },
+    "exposure": "none",
+    "environment_flags": ["li-ion"]
+  },
+  "software": {
+    "driver_pkg": null,
+    "driver_version": null,
+    "sdk_module": "power/battery",
+    "capabilities": ["power.battery"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "battery.v1",
+    "default_widgets": ["gauge"],
+    "alert_templates": ["low_battery"]
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "1781", "url": "https://www.adafruit.com/product/1781" }],
+    "unit_cost_usd": 9.95
+  }
+}

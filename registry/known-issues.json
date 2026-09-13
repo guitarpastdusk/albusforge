@@ -1,0 +1,7 @@
+[
+  {
+    "rule": "logic-level",
+    "parts": ["V-004", "C-001"],
+    "note": "The HC-SR04 echo output is 5 V; ESP32-S3 GPIO accepts at most VDD + 0.3 V. Wire the echo through a divider to 3.3 V (for example 10 kΩ over 20 kΩ). The two 10 kΩ resistors Adafruit #3942 ships make a 1:1 divider: 2.5 V against a VIH minimum of 0.75 × 3.3 = 2.475 V, which is marginal. Remove this entry when the schema can express level shifting, or when V-004 moves to a 3.3 V part."
+  }
+]

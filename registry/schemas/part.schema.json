@@ -1,0 +1,612 @@
+{
+  "title": "Albus Forge Part Definition",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[VPLCME]-\\d{3}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "visual",
+        "physical",
+        "location",
+        "communication",
+        "motion",
+        "energy"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "deprecated",
+        "retired"
+      ]
+    },
+    "successor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[VPLCME]-\\d{3}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "electrical": {
+      "type": "object",
+      "properties": {
+        "interface": {
+          "type": "string",
+          "enum": [
+            "i2c",
+            "spi",
+            "uart",
+            "1-wire",
+            "pwm",
+            "adc",
+            "gpio",
+            "power",
+            "host"
+          ]
+        },
+        "connector": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-v\\d+$"
+        },
+        "voltage_range": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "alt_inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              },
+              "voltage_range": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+              }
+            },
+            "required": [
+              "name",
+              "voltage_range"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "current_draw_ma": {
+          "type": "object",
+          "properties": {
+            "idle": {
+              "type": "number",
+              "minimum": 0
+            },
+            "active": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "idle",
+            "active"
+          ],
+          "additionalProperties": false
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9_]+)+$"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[VPLCME]-\\d{3}$"
+          }
+        },
+        "i2c_address": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^0x(0[89a-f]|[1-6][0-9a-f]|7[0-7])$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logic_v": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supply": {
+          "type": "object",
+          "properties": {
+            "output_v": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "max_output_ma": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "capacity_mah": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "output_v",
+            "max_output_ma",
+            "capacity_mah"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "interface",
+        "connector",
+        "voltage_range",
+        "current_draw_ma",
+        "requires",
+        "conflicts",
+        "i2c_address",
+        "logic_v"
+      ],
+      "additionalProperties": false
+    },
+    "mechanical": {
+      "type": "object",
+      "properties": {
+        "footprint_file": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+(\\/[A-Za-z0-9_-]+)*\\.(step|stp)$"
+        },
+        "bounding_mm": {
+          "anyOf": [
+            {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "items": false,
+              "minItems": 3,
+              "maxItems": 3
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mount": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cable-gland"
+                },
+                "d_mm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "d_mm"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "standoffs"
+                },
+                "hole_d_mm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "holes_mm": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "hole_d_mm",
+                "holes_mm"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "tabs"
+                },
+                "hole_d_mm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "hole_spacing_mm": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "required": [
+                "type",
+                "hole_d_mm",
+                "hole_spacing_mm"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cradle"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "external"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "unspecified"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "exposure": {
+          "type": "string",
+          "enum": [
+            "none",
+            "vent",
+            "window",
+            "probe-external"
+          ]
+        },
+        "environment_flags": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "waterproof",
+                  "needs-airflow",
+                  "needs-light",
+                  "needs-line-of-sight",
+                  "moving-parts",
+                  "rf-radiator",
+                  "li-ion"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^temp:(-?\\d+)\\.\\.(-?\\d+)C$"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "footprint_file",
+        "bounding_mm",
+        "mount",
+        "exposure",
+        "environment_flags"
+      ],
+      "additionalProperties": false
+    },
+    "software": {
+      "type": "object",
+      "properties": {
+        "driver_pkg": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^hsx-driver-[a-z0-9-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driver_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sdk_module": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z]+(\\/[a-z_]+)+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9_]+)+$"
+          }
+        },
+        "min_runtime": {
+          "type": "string",
+          "pattern": "^(>=|\\^|~)?(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+        }
+      },
+      "required": [
+        "driver_pkg",
+        "driver_version",
+        "sdk_module",
+        "capabilities",
+        "min_runtime"
+      ],
+      "additionalProperties": false
+    },
+    "cloud": {
+      "type": "object",
+      "properties": {
+        "telemetry_schema": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*\\.v\\d+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_widgets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "line-chart",
+              "stat",
+              "gauge",
+              "event-timeline"
+            ]
+          }
+        },
+        "alert_templates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "out_of_range",
+              "on_event",
+              "low_battery"
+            ]
+          }
+        }
+      },
+      "required": [
+        "telemetry_schema",
+        "default_widgets",
+        "alert_templates"
+      ],
+      "additionalProperties": false
+    },
+    "commerce": {
+      "type": "object",
+      "properties": {
+        "suppliers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "vendor": {
+                "type": "string",
+                "enum": [
+                  "adafruit",
+                  "sparkfun",
+                  "digikey",
+                  "mouser"
+                ]
+              },
+              "sku": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "required": [
+              "vendor",
+              "sku",
+              "url"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unit_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "suppliers",
+        "unit_cost_usd"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "name",
+    "category",
+    "status",
+    "successor",
+    "electrical",
+    "mechanical",
+    "software",
+    "cloud",
+    "commerce"
+  ],
+  "additionalProperties": false
+}

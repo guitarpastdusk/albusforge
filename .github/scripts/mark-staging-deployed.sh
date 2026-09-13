@@ -30,6 +30,9 @@ fi
 rc=0
 serving="$(serving_image "$PROJECT")" || rc=$?
 [ "$rc" = 0 ] || fail "Could not confirm which revision serves $SERVICE in $PROJECT (status $rc); not marking $digest."
+# Exact match on the full reference, never on the digest alone: a revision
+# records its image resolved to a digest, and deploy-web always deploys
+# $REPO/$SERVICE@<digest>, so a matching deploy records this exact string.
 [ "$serving" = "$REPO/$SERVICE@$digest" ] ||
   fail "$PROJECT serves $serving, not $REPO/$SERVICE@$digest. Not marking a digest staging isn't serving."
 

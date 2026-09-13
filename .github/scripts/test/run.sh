@@ -220,6 +220,12 @@ tagged "$d1" "$C"
 run mark-staging-deployed.sh "$d1"
 expect '[ "$code" = 1 ] && has "Not marking a digest staging" && ! called "tags add"'
 
+setup "mark: same digest under another repository or host -> refuse, no tag"
+serving "us-docker.pkg.dev/other-project/mirror/web@$d1"
+tagged "$d1" "$C"
+run mark-staging-deployed.sh "$d1"
+expect '[ "$code" = 1 ] && has "Not marking a digest staging" && ! called "tags add"'
+
 setup "mark: traffic split across revisions -> refuse, no tag"
 printf '%s\n' '{"status":{"traffic":[{"revisionName":"web-00001","percent":90},{"revisionName":"web-00002","percent":10}]}}' >"$STUB/service.json"
 printf '%s\n' "$image1" >"$STUB/revisions/web-00001"

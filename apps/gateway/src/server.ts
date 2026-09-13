@@ -29,8 +29,17 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // A small pool: Cloud SQL's connection limit is per instance, shared by every Cloud Run instance.
-  const { db, pool } = createDb(config.db, { max: 5 });
+  // A small pool: Cloud SQL's connection limit is per instance, shared by every
+  // Cloud Run instance. Every wait is bounded, so a stalled database fails
+  // requests with a 503 and frees their clients instead of exhausting the pool.
+  const { connectMs, queryMs, readMs, idleMs } = config.dbTimeouts;
+  const { db, pool } = createDb(config.db, {
+    max: 5,
+    connectTimeoutMs: connectMs,
+    statementTimeoutMs: queryMs,
+    queryTimeoutMs: readMs,
+    idleTimeoutMs: idleMs,
+  });
   // An idle client losing its connection emits on the pool; unhandled, that crashes the process.
   pool.on("error", (error) => log("ERROR", "idle database client error", { error }));
 
@@ -66,7 +75,13 @@ async function main(): Promise<void> {
   await app.listen({ port: config.port, host: "0.0.0.0" });
   // Where it listens and as whom it connects; never the password.
   log("INFO", "gateway listening", {
-    fields: { port: config.port, dbHost: config.db.host, dbName: config.db.database, dbUser: config.db.user },
+    fields: {
+      port: config.port,
+      dbHost: config.db.host,
+      dbName: config.db.database,
+      dbUser: config.db.user,
+      dbTimeoutsMs: config.dbTimeouts,
+    },
   });
 }
 

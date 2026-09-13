@@ -44,6 +44,19 @@ DB_HOST=localhost DB_NAME=albus DB_USER=albus_app DB_PASSWORD=albus_app DB_SSL=d
 | `PORT` | `8080` | Cloud Run sets it |
 | `DB_*` | see [packages/db](../../packages/db/README.md#environment) | required at startup, even though `/healthz` doesn't use them, so a misconfigured revision fails to start |
 | `GOOGLE_CLOUD_PROJECT` | unset | enables the `logging.googleapis.com/trace` field |
+| `DB_CONNECT_TIMEOUT_MS` | `5000` | connecting a database client, or waiting for a free one when the pool (5) is full |
+| `DB_QUERY_TIMEOUT_MS` | `10000` | server-side `statement_timeout`. The client also gives up on a response that hasn't arrived 1 s after this |
+| `DB_IDLE_TIMEOUT_MS` | `30000` | an idle pooled client is closed |
+
+### Database timeouts
+
+Every database wait is bounded, so a stalled database can't hold the pool:
+
+- A handshake that never completes, or a full pool, fails after `DB_CONNECT_TIMEOUT_MS`.
+- A statement that runs too long, including one blocked by a lock, is cancelled by Postgres after `DB_QUERY_TIMEOUT_MS` (SQLSTATE 57014).
+- A response that never arrives, such as over a connection that died silently, fails on the client 1 s later.
+
+pg-pool destroys any client whose query failed rather than returning it to the pool, so a timed-out connection is never reused. Each of these failures, and a refused or dropped connection, answers `503 {"error":{"code":"UNAVAILABLE",…}}` and logs one `database unavailable` WARNING with the pg error. The log leaves out Drizzle's wrapper, which carries the SQL and its parameters. `timeouts.db.test.ts` checks all three cases, and that the pool serves requests again afterwards.
 
 Terraform also sets `PUBLIC_DOMAIN` and `SSR_SERVICE_ACCOUNT`, for the SSR contract; nothing reads them yet.
 
@@ -93,5 +106,7 @@ On `SIGTERM` or `SIGINT` the server stops accepting connections, finishes in-fli
 [`promote-gateway.yml`](../../.github/workflows/promote-gateway.yml) promotes both digests to prod in the same order. Both digests must carry the marker from the same staging commit.
 
 The db-jobs entrypoint picks its task from its first argument (`migrate`, `registry-load`) or, with none, from `CLOUD_RUN_JOB`, the name Cloud Run gives every job task. Terraform owns the jobs' command and args and sets neither, so CI can deploy the image without setting anything else (ADR 0005).
+
+**A failed or cancelled run may already have changed the database.** Each job commits as it goes: migrations apply one by one before the app role is provisioned, and the loader commits its transaction before the job reports success. A later step failing, a cancelled workflow, or a job execution that outlives its cancelled run doesn't undo any of it. Nothing rolls back, and freshness only compares commits; it's not a database rollback. So every migration must be forward-compatible: the gateway revision still serving has to keep working against the new schema until the new revision replaces it, and recovering from a bad migration means another migration that fixes forward.
 
 ADR 0005's rule applies to gateway and both jobs: don't apply their Terraform while `deploy-gateway` (staging) or `promote-gateway` (prod) might run. Disable that workflow first.

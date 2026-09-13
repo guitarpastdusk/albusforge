@@ -12,6 +12,7 @@ import {
 } from "@albusforge/schema";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { z } from "zod";
+import { isDatabaseUnavailable } from "./db-errors";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
 
@@ -57,6 +58,13 @@ function parse<T extends z.ZodType>(schema: T, value: unknown, what: string): z.
     throw new HttpError(400, "BAD_REQUEST", `Invalid ${what}`, details);
   }
   return result.data;
+}
+
+/** The innermost `cause`. */
+function rootCause(error: unknown): unknown {
+  let current = error;
+  for (let depth = 0; current instanceof Error && current.cause !== undefined && depth < 5; depth++) current = current.cause;
+  return current;
 }
 
 /** The path without its query string, so logs never carry query values. */
@@ -111,6 +119,18 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     const status = (error as { statusCode?: number }).statusCode;
     if (status !== undefined && status >= 400 && status < 500) {
       return sendError(reply, status, "BAD_REQUEST", (error as Error).message);
+    }
+
+    // A stalled or unreachable database: the pool's timeouts fired and the
+    // client was discarded. Logged without Drizzle's wrapper, which carries the
+    // SQL and its parameters.
+    if (isDatabaseUnavailable(error)) {
+      log("WARNING", "database unavailable", {
+        error: rootCause(error),
+        trace: request.trace,
+        fields: { requestId: request.id, method: request.method, route: request.routeOptions.url ?? null, path: pathOf(request.url) },
+      });
+      return sendError(reply, 503, "UNAVAILABLE", "Database unavailable", { request_id: request.id });
     }
 
     log("ERROR", "request failed", {

@@ -194,6 +194,19 @@ describe("errors and logs", () => {
     }
   });
 
+  it("answers a database timeout with a JSON 503, logging the pg error without Drizzle's SQL", async () => {
+    const pgError = new Error("Query read timeout");
+    const wrapped = new Error("Failed query: select \"id\" from \"registry\".\"parts\"\nparams: draft", { cause: pgError });
+    const { app, logs, lines } = setUp({ parts: { latest: async () => Promise.reject(wrapped) } });
+
+    const response = await app.inject({ method: "GET", url: "/v1/parts" });
+
+    const body = expectJsonError(response, 503, "UNAVAILABLE");
+    expect(body.error.details).toEqual({ request_id: response.headers["x-request-id"] });
+    expect(logs()[0]).toMatchObject({ severity: "WARNING", message: "database unavailable", error: { message: "Query read timeout" } });
+    expect(lines.join("")).not.toContain("Failed query");
+  });
+
   it("doesn't log successful health checks", async () => {
     const { app, lines } = setUp();
     await app.inject({ method: "GET", url: "/healthz" });

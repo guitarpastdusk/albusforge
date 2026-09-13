@@ -19,6 +19,7 @@ import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./l
 import type { PartsStore } from "./parts";
 import type { Pool } from "pg";
 import { registerTelemetryReads } from "./telemetry-read";
+import { registerUsageRoutes } from "./usage-routes";
 
 import { registerSensorAsk, type SensorAskClient } from "./sensor-ask";
 
@@ -189,6 +190,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   if (auth) registerAuthRoutes(app, { log, auth });
   if (telemetryPool) {
     registerTelemetryReads(app, telemetryPool);
+    registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
   }
 

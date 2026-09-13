@@ -24,3 +24,26 @@ export const Usage = z.object({
   bytes_stored: Count.optional(),
 });
 export type Usage = z.infer<typeof Usage>;
+
+/** Live /v1/usage: recorded consumption, not invoices or inferred plan entitlements. */
+const ExactCount = z.string().regex(/^\d+$/);
+export const ModelConsumption = z.strictObject({
+  calls: ExactCount,
+  input_tokens: ExactCount,
+  output_tokens: ExactCount,
+  cache_read_tokens: ExactCount,
+  cache_creation_tokens: ExactCount,
+  cost_usd: z.string().regex(/^\d+\.\d{6}$/),
+});
+export const UsageStage = z.enum(["intake", "codegen", "bodygen", "narration", "ask", "explain", "other"]);
+export const UsageSummary = z.object({
+  period: z.strictObject({ start: Timestamp, end: Timestamp }),
+  as_of: Timestamp,
+  model: z.strictObject({
+    total: ModelConsumption,
+    stages: z.array(ModelConsumption.extend({ stage: UsageStage })).max(7),
+  }),
+  telemetry: z.strictObject({ readings_in: ExactCount, payload_bytes: ExactCount }),
+});
+export type UsageSummary = z.infer<typeof UsageSummary>;
+export type ModelConsumption = z.infer<typeof ModelConsumption>;

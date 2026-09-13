@@ -105,6 +105,7 @@ export function Header({ user, pending = false }: { user: HeaderUser | null; pen
           <div className="flex items-center gap-2.5">
             <Avatar user={user} size="desktop" />
             <span className="text-[15px] text-muted">{user.email}</span>
+            <Link href="/usage" aria-current={pathname === "/usage" ? "page" : undefined} className="text-[14px] text-muted hover:text-coral-deep">Usage</Link>
             <form action={signOut} className="ml-1.5">
               <button type="submit" className="whitespace-nowrap text-[14px] text-faint hover:text-coral-deep">
                 Sign out
@@ -206,6 +207,7 @@ export function HeaderMenu({
                 <span className="min-w-0 break-all text-[15px] text-muted">{user.email}</span>
               </div>
               <form action={signOut}>
+                <Link href="/usage" onClick={onNavigate} aria-current={pathname === "/usage" ? "page" : undefined} className="mt-4 block rounded-[14px] border border-hairline bg-white px-4 py-3 text-center text-[16px] text-ink hover:border-ink">Usage</Link>
                 <button
                   type="submit"
                   className="mt-4 w-full rounded-[14px] border border-hairline bg-white py-3 text-[16px] text-ink hover:border-ink"

@@ -176,6 +176,7 @@ jobs:
           check /healthz 200
           check /readyz 503
           check /v1/telemetry/devices 401
+          check /v1/usage 401
           check /v1/builds 401
           check /nope 404
           [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8081/ingest/v1)" = 404 ]
@@ -216,6 +217,8 @@ jobs:
           curl -fsS -H 'Cookie: __Host-albus_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
             http://localhost:8080/v1/telemetry/devices | \
             jq -e '.devices | length == 1 and .[0].id == "00000000-0000-4000-8000-000000000003" and .[0].status == "never_seen"'
+          curl -fsS -H 'Cookie: __Host-albus_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+            http://localhost:8080/v1/usage | jq -e '.model.total.calls == "0" and .telemetry.readings_in == "0"'
 
       - name: Container logs
         if: failure()

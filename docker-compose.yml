@@ -1,0 +1,23 @@
+# Local dependencies. Apps join as they land (ARCHITECTURE.md §12.6).
+#   docker compose up -d postgres
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # The superuser doubles as the migrate role locally; packages/db/README.md
+      # has the role model the cloud uses.
+      POSTGRES_USER: albus_migrate
+      POSTGRES_PASSWORD: albus_migrate
+      POSTGRES_DB: albus
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U albus_migrate -d albus"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:

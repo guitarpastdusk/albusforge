@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // NodeNext, not Bundler: the migration runner is compiled to dist/ and run
+    // by plain node in the migrate Job, so imports carry their .js extension.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
+  },
+  "include": ["src", "*.ts"]
+}

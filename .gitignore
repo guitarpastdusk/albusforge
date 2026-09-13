@@ -19,3 +19,6 @@ pnpm-debug.log*
 # Agent instruction files that `next dev` writes into apps/web on every run.
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
+
+# Scratch copies from packages/db/scripts/check-migrations.mjs, if a run is interrupted.
+.migrations-check-*/

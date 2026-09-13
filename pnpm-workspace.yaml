@@ -4,5 +4,13 @@ packages:
 
 # Install scripts are denied unless listed. unrs-resolver's only fetches a
 # fallback binary; the prebuilt optional dependency already covers our platforms.
+# esbuild (via drizzle-kit and vite) likewise ships its binary as an optional
+# dependency. ssh2 and cpu-features (via testcontainers) only build optional
+# native speedups for SSH, which Docker over a local socket doesn't use.
+# protobufjs's script is a post-install version notice.
 allowBuilds:
   unrs-resolver: false
+  esbuild: false
+  ssh2: false
+  cpu-features: false
+  protobufjs: false

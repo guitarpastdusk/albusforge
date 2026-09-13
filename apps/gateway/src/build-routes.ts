@@ -1,14 +1,18 @@
 /*
- * The anonymous chat routes (M2): create a build from an ask, read it, read
- * and post messages, and stream events. Every build route is authorized by the
- * `__Host-albus_anon` cookie's hash; a build the caller doesn't own is a 404,
- * never a 403, so ids can't be probed. Claimed (tenant) builds and sessions
- * arrive with sign-in.
+ * The chat routes (M2): create a build from an ask, list and read builds, read
+ * and post messages, and stream events. A build is readable by its owner: the
+ * tenant of a live `__Host-albus_session`, or, while unclaimed, the
+ * `__Host-albus_anon` cookie's hash (PORTAL.md §5). A build the caller doesn't
+ * own is a 404, never a 403, so ids can't be probed. Without a session, a new
+ * build is anonymous; with one, it belongs to the session's tenant.
  */
 import {
   type BuildDetail,
+  BuildList,
+  type BuildSummary,
   CreateBuildRequest,
   CreatedBuild,
+  DisplayStatus,
   MessageList,
   type PartStatus,
   PostMessageRequest,
@@ -18,18 +22,26 @@ import {
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { matchCandidates, specCapabilities } from "./candidates";
-import type { BuildRow, ChatStore } from "./chat-store";
+import { type BuildRow, type ChatStore, type Owner, ownerKey } from "./chat-store";
 import { HttpError, parse } from "./http";
 import type { TurnScheduler } from "./intake";
 import type { Log } from "./log";
 import { anonOwnerSetCookie, anonTokenFromCookieHeader, hashAnonToken, newAnonToken } from "./owner";
 import type { PartsStore } from "./parts";
 import { RateLimiter } from "./rate-limit";
+import { sessionTokenFromCookieHeader } from "./session";
 import { createStreamRegistry, DEFAULT_SSE, DEFAULT_STREAM_LIMITS, type SseOptions, type StreamLimits, streamBuildEvents, toChatMessage } from "./sse";
+
+/** Resolves a session cookie's token to its active tenant (auth-store's sessionTenant). */
+export interface SessionResolver {
+  tenantOf(sessionToken: string): Promise<string | null>;
+}
 
 export interface ChatOptions {
   store: ChatStore;
   turns: TurnScheduler;
+  /** Left out (tests without sign-in), every request is anonymous and GET /v1/builds is a 401. */
+  sessions?: SessionResolver;
   /** REGISTRY_INCLUDE_DRAFTS: candidate parts come from active and draft parts, not only active. */
   includeDrafts: boolean;
   /**
@@ -57,6 +69,8 @@ const STREAM_RETRY_S = 5;
 const ANON_OWNERS_KEY = "instance";
 
 const BuildParams = z.object({ id: z.string().min(1).max(100) });
+
+const BuildsQuery = z.object({ status: DisplayStatus.optional() });
 
 /** `client_message_id` is required here; the shared schema relaxes it only until the portal sends it. */
 const PostMessageBody = PostMessageRequest.extend({ client_message_id: z.uuid() });
@@ -87,19 +101,37 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
 
   app.addHook("preClose", async () => streams.closeAll());
 
-  const ownerHash = (request: FastifyRequest): string | undefined => {
-    const token = anonTokenFromCookieHeader(request.headers.cookie);
-    return token === undefined ? undefined : hashAnonToken(token);
+  /**
+   * Who is asking: the session's tenant when the cookie names a live session
+   * (and a resolver is wired), plus the anonymous hash when that cookie is
+   * present too. Undefined when the request carries neither credential.
+   */
+  const ownerOf = async (request: FastifyRequest): Promise<Owner | undefined> => {
+    const anonToken = anonTokenFromCookieHeader(request.headers.cookie);
+    const sessionToken = chat.sessions === undefined ? undefined : sessionTokenFromCookieHeader(request.headers.cookie);
+    const tenantId = sessionToken === undefined ? null : await chat.sessions!.tenantOf(sessionToken);
+    const anonHash = anonToken === undefined ? null : hashAnonToken(anonToken);
+    return tenantId === null && anonHash === null ? undefined : { tenantId, anonHash };
   };
 
-  /** The caller's build, or a 404 for a missing, malformed, claimed or someone else's id. */
-  const ownedBuild = async (request: FastifyRequest): Promise<{ build: BuildRow; hash: string }> => {
+  /** The caller's build, or a 404 for a missing, malformed or someone else's id. */
+  const ownedBuild = async (request: FastifyRequest): Promise<{ build: BuildRow; owner: Owner }> => {
     const { id } = parse(BuildParams, request.params, "build id");
-    const hash = ownerHash(request);
-    const build = hash === undefined ? null : await store.findOwnedBuild(id, hash);
-    if (!build || hash === undefined) throw notFound(id);
-    return { build, hash };
+    const owner = await ownerOf(request);
+    const build = owner === undefined ? null : await store.findOwnedBuild(id, owner);
+    if (!build || owner === undefined) throw notFound(id);
+    return { build, owner };
   };
+
+  const summary = (build: BuildRow): BuildSummary => ({
+    id: build.id,
+    name: nameFromAsk(build.askText),
+    description: build.askText,
+    // PORTAL.md §4: parts_picked needs a plan for the current spec, which M3 adds.
+    display_status: "designing",
+    device_count: 0,
+    updated_at: build.updatedAt.toISOString(),
+  });
 
   const detail = async (build: BuildRow): Promise<BuildDetail> => {
     const spec = await store.latestSpec(build.id);
@@ -107,13 +139,7 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
     const capabilities = specCapabilities(data);
     const candidates = capabilities.length === 0 ? [] : matchCandidates(await parts.latest({ statuses: candidateStatuses }), capabilities);
     return {
-      id: build.id,
-      name: nameFromAsk(build.askText),
-      description: build.askText,
-      // PORTAL.md §4: parts_picked needs a plan for the current spec, which M3 adds.
-      display_status: "designing",
-      device_count: 0,
-      updated_at: build.updatedAt.toISOString(),
+      ...summary(build),
       ready: null,
       status: build.status,
       spec_version: spec?.version ?? null,
@@ -157,12 +183,16 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
 
   app.post(routes.builds.create.pattern, async (request, reply) => {
     const body = parse(CreateBuildRequest, request.body, "request body");
+    // Signed in: the build belongs to the tenant and no anonymous cookie is issued.
+    // Otherwise the existing anonymous cookie, or a new one, owns it.
+    const tenantId = (await ownerOf(request))?.tenantId ?? null;
     const existingToken = anonTokenFromCookieHeader(request.headers.cookie);
-    const token = existingToken ?? newAnonToken();
-    const hash = hashAnonToken(token);
+    const token = tenantId !== null ? undefined : (existingToken ?? newAnonToken());
+    const owner: Owner = token === undefined ? { tenantId, anonHash: null } : { tenantId: null, anonHash: hashAnonToken(token) };
+    const limitKey = ownerKey(owner);
 
     const result = await store.createBuild({
-      ownerHash: hash,
+      owner,
       askText: body.ask_text,
       clientMessageId: body.client_message_id ?? null,
       // Runs inside the create transaction, after the replay check: a replay is never limited.
@@ -181,7 +211,7 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
             throw rateLimited(capRetryMs, "new builds");
           }
         }
-        const retryMs = buildLimiter.take(hash);
+        const retryMs = buildLimiter.take(limitKey);
         if (retryMs > 0) throw rateLimited(retryMs, "new builds");
       },
     });
@@ -192,11 +222,20 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
     }
 
     const { build } = result;
-    if (existingToken === undefined) reply.header("set-cookie", anonOwnerSetCookie(token));
+    if (token !== undefined && existingToken === undefined) reply.header("set-cookie", anonOwnerSetCookie(token));
     turns.trigger(build.id, turnContext(request));
 
     const built = await detail(build);
     return reply.code(201).send(CreatedBuild.parse({ ...built, build_id: build.id, status: build.status }));
+  });
+
+  // The session tenant's builds (PORTAL.md: Projects). Anonymous builds are never listed: they are reached by id.
+  app.get(routes.builds.list.pattern, async (request) => {
+    const query = parse(BuildsQuery, request.query, "query");
+    const owner = await ownerOf(request);
+    if (owner?.tenantId === undefined || owner.tenantId === null) throw new HttpError(401, "UNAUTHENTICATED", "Not signed in");
+    const rows = (await store.listBuilds(owner.tenantId)).map(summary);
+    return BuildList.parse({ builds: query.status === undefined ? rows : rows.filter((row) => row.display_status === query.status) });
   });
 
   app.get(routes.builds.get.pattern, async (request) => {
@@ -206,25 +245,25 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
   });
 
   app.get(routes.builds.messages.pattern, async (request) => {
-    const { build, hash } = await ownedBuild(request);
+    const { build, owner } = await ownedBuild(request);
     await recoverLostTurn(request, build.id);
-    const rows = await store.listMessages(build.id, hash);
+    const rows = await store.listMessages(build.id, owner);
     return MessageList.parse({ messages: rows.map(toChatMessage) });
   });
 
   app.post(routes.builds.postMessage.pattern, async (request, reply) => {
-    const { build, hash } = await ownedBuild(request);
+    const { build, owner } = await ownedBuild(request);
     const body = parse(PostMessageBody, request.body, "request body");
 
     const result = await store.submitUserMessage({
       buildId: build.id,
-      ownerHash: hash,
+      owner,
       text: body.text,
       clientMessageId: body.client_message_id,
       pendingWithinS: TURN_IN_PROGRESS_S,
       // Inside the transaction, after the replay and pending checks: neither counts.
       admit: () => {
-        const retryMs = messageLimiter.take(hash);
+        const retryMs = messageLimiter.take(ownerKey(owner));
         if (retryMs > 0) throw rateLimited(retryMs, "messages");
       },
     });
@@ -246,15 +285,15 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
   });
 
   app.get(routes.builds.events.pattern, async (request, reply) => {
-    const { build, hash } = await ownedBuild(request);
-    const lease = streams.reserve(hash);
+    const { build, owner } = await ownedBuild(request);
+    const lease = streams.reserve(ownerKey(owner));
     if (!lease) {
       throw new HttpError(429, "RATE_LIMITED", "Too many open event streams; close one or try again later", { retry_after_s: STREAM_RETRY_S }, {
         "retry-after": String(STREAM_RETRY_S),
       });
     }
     try {
-      streamBuildEvents({ request, reply, buildId: build.id, ownerHash: hash, store, log, options: sse, lease });
+      streamBuildEvents({ request, reply, buildId: build.id, owner, store, log, options: sse, lease });
     } catch (error) {
       lease.release();
       throw error;

@@ -3,12 +3,13 @@
  * read the session, sign out, and claim anonymous builds on the way. Codes
  * are captured from a recording email adapter; nothing leaves localhost.
  */
-import { builds, createDb, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, users } from "@albusforge/db";
+import { buildMessages, builds, createDb, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, users } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
-import { ApiError, CreatedBuild, Me } from "@albusforge/schema";
+import { ApiError, BuildList, CreatedBuild, Me, MessageList, PostMessageResponse } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
@@ -266,7 +267,7 @@ describe("POST /v1/auth/verify", () => {
     expect(untouched!.tenantId).toBeNull();
     expect(lines.find((l) => l.message === "signed in")).toMatchObject({ claimedBuilds: 1, claimedLlmCalls: 1 });
 
-    // The anonymous routes no longer see the claimed build: it needs a tenant session now.
+    // The anonymous cookie alone no longer reads the claimed build: it belongs to the tenant now.
     expect((await app.inject({ method: "GET", url: `/v1/builds/${build.id}`, headers: { cookie: anonCookie } })).statusCode).toBe(404);
   });
 
@@ -321,6 +322,76 @@ describe("POST /v1/auth/verify", () => {
     expectError(await verify(app, address, "000000"), 400, "INVALID_CODE");
     expectError(await verify(app, address, "000001"), 400, "INVALID_CODE");
     expectError(await verify(app, address, code), 429, "RATE_LIMITED");
+  });
+});
+
+describe("build routes under a session", () => {
+  const cookies = (...parts: string[]) => parts.join("; ");
+
+  it("lists the tenant's builds, claimed ones included, newest first, and filters by status", async () => {
+    const app = makeApp();
+    const created = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Claimed at sign-in" } });
+    const claimedId = CreatedBuild.parse(created.json()).id;
+    const anonCookie = setCookies(created)[0]!.split(";")[0]!;
+    const { me: signedIn, cookie } = await signIn(app, freshEmail(), anonCookie);
+
+    // A build made while signed in belongs to the tenant directly, and no anonymous cookie is issued.
+    const own = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Made while signed in" }, headers: { cookie } });
+    expect(own.statusCode).toBe(201);
+    expect(own.headers["set-cookie"]).toBeUndefined();
+    const ownBody = CreatedBuild.parse(own.json());
+    expect(ownBody.build_id).toBe(ownBody.id);
+    const [ownRow] = await handle.db.select().from(builds).where(eq(builds.id, ownBody.id));
+    expect(ownRow).toMatchObject({ tenantId: signedIn.tenant.id, anonOwnerHash: null });
+
+    const list = await app.inject({ method: "GET", url: "/v1/builds", headers: { cookie } });
+    expect(list.statusCode).toBe(200);
+    const { builds: listed } = BuildList.parse(list.json());
+    expect(listed.map((b) => b.id)).toEqual([ownBody.id, claimedId]);
+    expect(listed[1]).toMatchObject({ name: "Claimed at sign-in", display_status: "designing", device_count: 0 });
+
+    expect(BuildList.parse((await app.inject({ method: "GET", url: "/v1/builds?status=designing", headers: { cookie } })).json()).builds).toHaveLength(2);
+    expect(BuildList.parse((await app.inject({ method: "GET", url: "/v1/builds?status=live", headers: { cookie } })).json()).builds).toHaveLength(0);
+    expectError(await app.inject({ method: "GET", url: "/v1/builds?status=nope", headers: { cookie } }), 400, "BAD_REQUEST");
+
+    // Another user's list is empty; no session is a 401.
+    const other = await signIn(app, freshEmail());
+    expect(BuildList.parse((await app.inject({ method: "GET", url: "/v1/builds", headers: { cookie: other.cookie } })).json()).builds).toEqual([]);
+    expectError(await app.inject({ method: "GET", url: "/v1/builds" }), 401, "UNAUTHENTICATED");
+    expectError(await app.inject({ method: "GET", url: "/v1/builds", headers: { cookie: anonCookie } }), 401, "UNAUTHENTICATED");
+  });
+
+  it("reads, continues and streams a claimed build by session, with or without the stale anonymous cookie", async () => {
+    const app = makeApp();
+    const created = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "Keep talking after sign-in" } });
+    const buildId = CreatedBuild.parse(created.json()).id;
+    const anonCookie = setCookies(created)[0]!.split(";")[0]!;
+    const { cookie } = await signIn(app, freshEmail(), anonCookie);
+    const other = await signIn(app, freshEmail());
+
+    for (const header of [cookie, cookies(anonCookie, cookie)]) {
+      expect((await app.inject({ method: "GET", url: `/v1/builds/${buildId}`, headers: { cookie: header } })).statusCode).toBe(200);
+      const messages = await app.inject({ method: "GET", url: `/v1/builds/${buildId}/messages`, headers: { cookie: header } });
+      expect(messages.statusCode).toBe(200);
+      expect(MessageList.parse(messages.json()).messages.map((m) => m.text)).toContain("Keep talking after sign-in");
+    }
+
+    // The previous turn must be answered before a new message is accepted.
+    await handle.db.insert(buildMessages).values({ buildId, role: "assistant", text: "What should it measure?" });
+    const posted = await app.inject({
+      method: "POST",
+      url: `/v1/builds/${buildId}/messages`,
+      payload: { text: "Soil moisture", client_message_id: randomUUID() },
+      headers: { cookie },
+    });
+    expect(posted.statusCode).toBe(202);
+    expect(PostMessageResponse.parse(posted.json()).message.text).toBe("Soil moisture");
+
+    // Someone else's session, or no credential at all, is a 404.
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/messages`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}` }), 404, "NOT_FOUND");
+    expectError(await app.inject({ method: "GET", url: `/v1/builds/${buildId}/events`, headers: { cookie: other.cookie } }), 404, "NOT_FOUND");
   });
 });
 

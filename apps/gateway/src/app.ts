@@ -174,7 +174,11 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     return PartDetail.parse({ part });
   });
 
-  if (chat) registerBuildRoutes(app, { parts, log, chat });
+  if (chat) {
+    // With sign-in wired, a session cookie makes the build routes tenant-scoped.
+    const sessions = chat.sessions ?? (auth ? { tenantOf: (token: string) => auth.store.sessionTenant(token) } : undefined);
+    registerBuildRoutes(app, { parts, log, chat: { ...chat, sessions } });
+  }
   if (auth) registerAuthRoutes(app, { log, auth });
 
   return app;

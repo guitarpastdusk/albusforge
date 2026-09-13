@@ -49,6 +49,8 @@ export interface AuthStore {
   }): Promise<VerifyResult>;
   /** The live session's Me, or null when the token is unknown, revoked or expired. */
   me(sessionToken: string): Promise<Me | null>;
+  /** The live session's active tenant, or null: one indexed lookup for the tenant-scoped routes. */
+  sessionTenant(sessionToken: string): Promise<string | null>;
   /**
    * Revokes the token's session together with its whole family: the root of
    * its parent chain and everything descended from it (ADR 0009). Returns how
@@ -210,6 +212,15 @@ export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: 
       const session = await liveSession(db, token);
       if (!session) return null;
       return meOf(db, { id: session.userId, email: session.email }, session.activeTenantId);
+    },
+
+    async sessionTenant(token) {
+      const [row] = await db
+        .select({ activeTenantId: sessions.activeTenantId })
+        .from(sessions)
+        .where(and(eq(sessions.tokenHash, hashSessionToken(token)), isNull(sessions.revokedAt), gt(sessions.expiresAt, sql`now()`)))
+        .limit(1);
+      return row?.activeTenantId ?? null;
     },
 
     async revokeSessionFamily(token) {

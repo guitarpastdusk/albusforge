@@ -1,29 +1,39 @@
 import { ANON_OWNER_COOKIE, SESSION_COOKIE } from "@albusforge/schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clientIp, forwardedCookies, gatewayHeaders } from "./gateway-headers.server";
+import { clientIpFromXff, forwardedCookies, gatewayHeaders } from "./gateway-headers.server";
 import { clearIdTokenCache, idToken } from "./id-token.server";
+
+const CLIENT = "203.0.113.9";
+const LB = "34.120.0.1";
+const CLOUD_RUN = "169.254.1.1";
 
 describe("gatewayHeaders", () => {
   it("assembles token, original host, client IP and the allowlisted cookies", () => {
     const headers = gatewayHeaders(
       {
         host: "acme-plant.albusforge.ai",
-        forwardedFor: "203.0.113.9, 34.120.0.1",
+        forwardedFor: `${CLIENT}, ${LB}`,
         cookie: `theme=dark; ${SESSION_COOKIE}=sess.sig; _ga=GA1.2; ${ANON_OWNER_COOKIE}=anon.sig`,
       },
       "id-token",
+      1,
     );
 
     expect(headers).toEqual({
       "x-albus-internal-auth": "Bearer id-token",
       "x-albus-original-host": "acme-plant.albusforge.ai",
-      "x-albus-client-ip": "203.0.113.9",
+      "x-albus-client-ip": CLIENT,
       cookie: `${SESSION_COOKIE}=sess.sig; ${ANON_OWNER_COOKIE}=anon.sig`,
     });
   });
 
+  it("sends no client IP header when X-Forwarded-For has too few entries", () => {
+    const headers = gatewayHeaders({ host: "albusforge.ai", forwardedFor: CLIENT, cookie: null }, null, 1);
+    expect(headers).not.toHaveProperty("x-albus-client-ip");
+  });
+
   it("omits what it doesn't have — mock mode and cookie-less visitors", () => {
-    expect(gatewayHeaders({ host: null, forwardedFor: null, cookie: "theme=dark" }, null)).toEqual({});
+    expect(gatewayHeaders({ host: null, forwardedFor: null, cookie: "theme=dark" }, null, 1)).toEqual({});
   });
 });
 
@@ -53,17 +63,38 @@ describe("forwardedCookies", () => {
   });
 });
 
-describe("clientIp", () => {
-  it("ignores a client-supplied X-Forwarded-For prefix", () => {
-    expect(clientIp("6.6.6.6, 203.0.113.9, 34.120.0.1")).toBe("203.0.113.9");
+describe("clientIpFromXff", () => {
+  it("ignores a spoofed client-supplied prefix (hops=1)", () => {
+    expect(clientIpFromXff(`1.2.3.4, ${CLIENT}, ${LB}`, 1)).toBe(CLIENT);
   });
 
-  it("takes a lone entry as-is (no load balancer, local dev)", () => {
-    expect(clientIp("127.0.0.1")).toBe("127.0.0.1");
+  it("returns the client from '<client>, <lb>' (hops=1)", () => {
+    expect(clientIpFromXff(`${CLIENT}, ${LB}`, 1)).toBe(CLIENT);
   });
 
-  it("returns null for an empty header", () => {
-    expect(clientIp(" , ")).toBeNull();
+  it("returns undefined for a single entry with hops=1 — never entry 0", () => {
+    expect(clientIpFromXff(CLIENT, 1)).toBeUndefined();
+  });
+
+  it.each([null, undefined, "", " , "])("returns undefined for %j", (header) => {
+    expect(clientIpFromXff(header, 1)).toBeUndefined();
+  });
+
+  it("skips a Cloud Run hop appended after the LB (hops=2)", () => {
+    expect(clientIpFromXff(`1.2.3.4, ${CLIENT}, ${LB}, ${CLOUD_RUN}`, 2)).toBe(CLIENT);
+  });
+
+  it("trims whitespace around entries", () => {
+    expect(clientIpFromXff(`  1.2.3.4 ,${CLIENT}   ,\t${LB}  `, 1)).toBe(CLIENT);
+  });
+
+  it("returns the last entry with hops=0", () => {
+    expect(clientIpFromXff(`1.2.3.4, ${CLIENT}, ${LB}`, 0)).toBe(LB);
+  });
+
+  it("rejects a negative or fractional hop count", () => {
+    expect(() => clientIpFromXff(CLIENT, -1)).toThrow(RangeError);
+    expect(() => clientIpFromXff(CLIENT, 1.5)).toThrow(RangeError);
   });
 });
 

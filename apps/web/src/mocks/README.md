@@ -1,6 +1,6 @@
 # src/mocks/
 
-Mock API responses, used when `API_MODE=mock` (the default under `next dev`).
+Mock API responses, used when `API_MODE=mock` — set for `next dev` by `apps/web/.env.development`. The server refuses mock mode on Cloud Run.
 
 - `data.ts` — the design prototype's data shaped to `@albusforge/schema`, with timestamps relative to the call.
 - `index.ts` — `mockTransport`: matches a request against the route patterns in `@albusforge/schema` and answers from `data.ts`; unknown ids get the real 404 error shape, unmocked routes get 501.

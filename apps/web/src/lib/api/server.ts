@@ -3,18 +3,10 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import type { z } from "zod";
+import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { ApiRequestError, fetchTransport, request, type Transport } from "./core";
 import { gatewayHeaders } from "./gateway-headers.server";
 import { idToken } from "./id-token.server";
-
-export type ApiMode = "mock" | "live";
-
-export function apiMode(): ApiMode {
-  const mode = process.env.API_MODE;
-  if (mode === "mock" || mode === "live") return mode;
-  if (mode) throw new Error(`API_MODE must be "mock" or "live", got "${mode}"`);
-  return process.env.NODE_ENV === "production" ? "live" : "mock";
-}
 
 /** `none` skips the ID token — for a gateway running locally without auth. */
 function internalAuth(): "metadata" | "none" {
@@ -25,10 +17,15 @@ function internalAuth(): "metadata" | "none" {
 
 async function transport(): Promise<Transport> {
   // Render per request. Nothing environment-specific may be baked in at build
-  // time: the image promoted to prod is the one staging ran (ADR 0001).
+  // time: the image promoted to prod is the one staging ran (ADR 0001). This
+  // also means `next build` never fetches, so CI needs no gateway.
   await connection();
 
-  if (apiMode() === "mock") {
+  // Validated at startup by instrumentation.ts; re-checked here so no request
+  // can take the mock path on Cloud Run even if startup validation is bypassed.
+  const { apiMode, trustedProxyHops } = loadRuntimeConfig(process.env);
+
+  if (apiMode === "mock") {
     const { mockTransport } = await import("@/mocks");
     return mockTransport;
   }
@@ -49,6 +46,7 @@ async function transport(): Promise<Transport> {
         cookie: incoming.get("cookie"),
       },
       token,
+      trustedProxyHops,
     ),
   );
 }

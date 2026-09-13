@@ -43,30 +43,39 @@ export function forwardedCookies(cookieHeader: string | null): string | null {
 }
 
 /**
- * The visitor's IP as the Google load balancer saw it.
+ * The visitor's IP from X-Forwarded-For.
  *
- * The external Application LB *appends* `<client-ip>, <lb-ip>` to whatever
- * X-Forwarded-For the client sent, so the first entry is client-controlled
- * and spoofable. The LB-observed client is the second-to-last entry.
+ * Proxies append, so only the right-hand end is trustworthy: the external
+ * Application LB appends `<client-ip>, <lb-ip>` after whatever the client sent.
+ * Skip `trustedHops` entries from the right (TRUSTED_PROXY_HOPS, default 1 —
+ * the LB's own IP) and return the next one. With too few entries there is no
+ * trustworthy client IP, so the result is undefined — never entry 0.
  */
-export function clientIp(forwardedFor: string | null): string | null {
-  if (!forwardedFor) return null;
-  const hops = forwardedFor
+export function clientIpFromXff(header: string | null | undefined, trustedHops: number): string | undefined {
+  if (!Number.isInteger(trustedHops) || trustedHops < 0) {
+    throw new RangeError(`trustedHops must be a non-negative integer, got ${trustedHops}`);
+  }
+  if (!header) return undefined;
+
+  const entries = header
     .split(",")
-    .map((hop) => hop.trim())
+    .map((entry) => entry.trim())
     .filter(Boolean);
-  if (hops.length === 0) return null;
-  // One entry means no LB appended anything (local dev); take it as-is.
-  return hops.length === 1 ? (hops[0] ?? null) : (hops[hops.length - 2] ?? null);
+  const index = entries.length - 1 - trustedHops;
+  return index >= 0 ? entries[index] : undefined;
 }
 
-export function gatewayHeaders(incoming: IncomingRequest, idToken: string | null): Record<string, string> {
+export function gatewayHeaders(
+  incoming: IncomingRequest,
+  idToken: string | null,
+  trustedProxyHops: number,
+): Record<string, string> {
   const headers: Record<string, string> = {};
 
   if (idToken) headers[INTERNAL_AUTH_HEADER] = `Bearer ${idToken}`;
   if (incoming.host) headers[ORIGINAL_HOST_HEADER] = incoming.host;
 
-  const ip = clientIp(incoming.forwardedFor);
+  const ip = clientIpFromXff(incoming.forwardedFor, trustedProxyHops);
   if (ip) headers[CLIENT_IP_HEADER] = ip;
 
   const cookies = forwardedCookies(incoming.cookie);

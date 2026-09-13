@@ -8,14 +8,14 @@ The design reference is the Albusforge.ai website handoff (high fidelity); its t
 
 ```sh
 pnpm install
-pnpm dev            # http://localhost:3000, API_MODE=mock by default
+pnpm dev            # http://localhost:3000 — mock data via the committed .env.development
 ```
 
 `pnpm --filter web test | lint | typecheck | build` run one check; the root scripts run all of them through turbo.
 
 ## Data
 
-All data goes through [`src/lib/api`](src/lib/api/) and is validated against [`@albusforge/schema`](../../packages/schema/). With `API_MODE=mock` the client answers from [`src/mocks`](src/mocks/); with `live` it calls gateway. Pages that fetch are rendered per request — nothing environment-specific is baked into the image, so the digest promoted from staging to prod is the one that was tested ([ADR 0001](../../docs/adr/0001-shared-ci-project.md)).
+All data goes through [`src/lib/api`](src/lib/api/) and is validated against [`@albusforge/schema`](../../packages/schema/). With `API_MODE=live` (the default) it calls gateway; with `mock` it answers from [`src/mocks`](src/mocks/). Only `next dev` gets mock by default, through `.env.development`, and the server refuses to start in mock mode on Cloud Run ([`src/instrumentation.ts`](src/instrumentation.ts)). Pages that fetch are rendered per request — nothing environment-specific is baked into the image, so the digest promoted from staging to prod is the one that was tested ([ADR 0001](../../docs/adr/0001-shared-ci-project.md)).
 
 ## Layout
 

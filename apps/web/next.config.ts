@@ -8,6 +8,8 @@ const config: NextConfig = {
   // bundle; server.js then sits at apps/web/server.js inside it.
   outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
   transpilePackages: ["@albusforge/schema"],
+  // Type-check shipped code only: see tsconfig.build.json.
+  typescript: { tsconfigPath: "tsconfig.build.json" },
   poweredByHeader: false,
 };
 

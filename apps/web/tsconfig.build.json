@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  // next build type-checks with this (next.config.ts). Tests aren't shipped, and some import registry/ scripts
+  // whose dependencies the image's `pnpm install --filter web...` doesn't install. `pnpm typecheck` still runs
+  // tsc on tsconfig.json, tests included, with the full workspace install.
+  "exclude": ["node_modules", "src/**/*.test.ts", "src/**/*.test.tsx"]
+}

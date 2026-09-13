@@ -44,6 +44,8 @@ Source material: the **Albusforge.ai website design handoff** (high-fidelity HTM
 
 The UI says **Clone**; the API says **remix**. They are the same action. The marketplace filter pills (Garden, Home, Workshop, Industrial) are `tags`.
 
+**Example builds.** While gateway answers `501` for `GET /v1/showcase` or `GET /v1/listings(/:id)`, the landing carousel and the Marketplace show example builds (`apps/web/src/lib/example-builds.ts`), labelled as examples. Their designs are real: each pins registry parts, bundled from `registry/` at build time, and a test holds every build to the registry's checks (requirements met, distinct I2C addresses, a voltage-compatible power path). Their readings, authors and clone counts are sample data, and a build's page says so. Any other failure still shows the unavailable state, and gateway's real data replaces the examples as soon as those routes return 200.
+
 ---
 
 ## 3. API additions

@@ -7,7 +7,7 @@ import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { loadShowcaseCards } from "@/lib/showcase";
 
 export default async function LandingPage() {
-  const cards = await loadShowcaseCards();
+  const { cards, examples } = await loadShowcaseCards();
 
   return (
     <BuildConversation enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>
@@ -25,7 +25,7 @@ export default async function LandingPage() {
               firmware, and ship the kit ready to deploy, sense and act.
             </p>
             <ChatStart />
-            <DeviceCarousel cards={cards} />
+            <DeviceCarousel cards={cards} examples={examples} />
           </div>
         </WhenConversationEmpty>
         <ConversationView />

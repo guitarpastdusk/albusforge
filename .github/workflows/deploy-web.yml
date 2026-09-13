@@ -10,6 +10,8 @@ on:
     paths:
       - apps/web/**
       - packages/**
+      # The landing carousel and Marketplace examples bundle registry part data at build time.
+      - registry/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml

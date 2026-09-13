@@ -6,12 +6,9 @@ import {
   DeviceDashboard,
   DeviceTile,
   Fleet,
-  Listing,
-  ListingList,
   Me,
   MessageList,
   routes,
-  Showcase,
   Usage,
   VerifyCodeResponse,
 } from "@albusforge/schema";
@@ -35,11 +32,6 @@ describe("every mock parses against the schema", () => {
   it("usage", async () => {
     const usage = await get(routes.usage.path(), Usage);
     expect(Date.parse(usage.period.end)).toBeGreaterThan(Date.parse(usage.period.start));
-  });
-
-  it("showcase", async () => {
-    const { cards } = await get(routes.showcase.path(), Showcase);
-    expect(cards.length).toBeGreaterThanOrEqual(6);
   });
 
   it("builds, their detail and their messages", async () => {
@@ -81,15 +73,6 @@ describe("every mock parses against the schema", () => {
     expect(DeviceTile.safeParse({ ...withoutStatus, online: true }).success).toBe(false);
   });
 
-  it("listings, filtered and single", async () => {
-    const all = await get(routes.listings.list.path(), ListingList);
-    const garden = await get(`${routes.listings.list.path()}?tags=garden`, ListingList);
-    expect(garden.listings.length).toBeLessThan(all.listings.length);
-    expect(garden.listings.every((l) => l.category === "garden")).toBe(true);
-    for (const { id } of all.listings) {
-      await expect(get(routes.listings.get.path(id), Listing)).resolves.toMatchObject({ id });
-    }
-  });
 });
 
 describe("mock transport errors", () => {
@@ -97,6 +80,12 @@ describe("mock transport errors", () => {
     const call = get(routes.devices.dashboard.path("nope"), DeviceDashboard);
     await expect(call).rejects.toBeInstanceOf(ApiRequestError);
     await expect(call).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("answers 501 for the showcase and listings, like gateway until they're built, so local dev shows the example builds", async () => {
+    for (const path of [routes.showcase.path(), routes.listings.list.path(), routes.listings.get.path("fridge-monitor")]) {
+      await expect(get(path, z.unknown())).rejects.toMatchObject({ status: 501 });
+    }
   });
 
   it("returns 501 for a route with no mock", async () => {
@@ -171,31 +160,9 @@ describe("mock conversation, device chat and sign-in", () => {
     expect(bedC.actions).toBeUndefined();
   });
 
-  it("the marketplace has twelve builds, seven of them industrial", async () => {
-    const { listings } = await get(routes.listings.list.path(), ListingList);
-    expect(listings).toHaveLength(12);
-    expect(listings.filter((l) => l.category === "industrial")).toHaveLength(7);
-    expect(listings.map((l) => l.name)).toEqual(expect.arrayContaining(["The Vibration Prophet", "The Air Marshal"]));
-  });
 });
 
-describe("mock pagination and cookies", () => {
-  it("filters before paging: a category's matches beyond the first unfiltered page are returned", async () => {
-    const firstUnfiltered = await get(`${routes.listings.list.path()}?limit=6`, ListingList);
-    expect(firstUnfiltered.next_cursor).toBe("6");
-    expect(firstUnfiltered.listings.map((l) => l.name)).not.toContain("The Vibration Prophet");
-
-    const industrial = await get(`${routes.listings.list.path()}?tags=industrial&limit=6`, ListingList);
-    expect(industrial.listings).toHaveLength(6);
-    expect(industrial.listings.every((l) => l.category === "industrial")).toBe(true);
-    expect(industrial.listings.map((l) => l.name)).toContain("The Vibration Prophet");
-    expect(industrial.next_cursor).toBe("6");
-
-    const rest = await get(`${routes.listings.list.path()}?tags=industrial&limit=6&cursor=6`, ListingList);
-    expect(rest.listings.map((l) => l.name)).toEqual(["The Air Marshal"]);
-    expect(rest.next_cursor).toBeNull();
-  });
-
+describe("mock cookies", () => {
   it("creating a build sets the anonymous owner cookie; verifying sets the session and clears it", async () => {
     const created = await mockTransport("POST", routes.builds.create.path(), { ask_text: "A sensor" });
     expect(created.setCookies).toEqual([expect.stringMatching(/^__Host-albus_anon=mock-anon-bld_\w+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/)]);

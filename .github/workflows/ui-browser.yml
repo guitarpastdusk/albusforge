@@ -1,0 +1,70 @@
+name: ui-browser
+
+on:
+  pull_request:
+    paths:
+      - 'apps/web/**'
+      - 'apps/gateway/**'
+      - 'packages/db/**'
+      - 'packages/schema/**'
+      - 'registry/**'
+      - 'package.json'
+      - '.nvmrc'
+      - 'tsconfig.base.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ui-browser.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'apps/gateway/**'
+      - 'packages/db/**'
+      - 'packages/schema/**'
+      - 'registry/**'
+      - 'package.json'
+      - '.nvmrc'
+      - 'tsconfig.base.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ui-browser.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-browser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-journey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - name: Build actual application processes and check the harness
+        run: |
+          pnpm --filter @albusforge/db build
+          pnpm --filter gateway build
+          pnpm --filter web build
+          pnpm --filter web typecheck:browser
+      - name: Browser journey against disposable PostgreSQL and local provider fixtures
+        run: pnpm --filter web test:browser
+      - name: Browser evidence (synthetic test accounts only)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ui-browser-evidence
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

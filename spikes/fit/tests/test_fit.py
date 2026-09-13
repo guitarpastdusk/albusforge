@@ -1,11 +1,16 @@
+import io
+import json
+import re
+import struct
 from pathlib import Path
 
 import cadquery as cq
 import pytest
+import trimesh
 
 from fit.coupons import build_coupons, export_coupons
 from fit.enclosure import build
-from fit.export import _mesh, export
+from fit.export import _mesh, export, viewer_glb
 from fit.lint import lint_mesh, lint_params, passed
 from fit.model import (
     DEFAULT_PRINTER,
@@ -216,6 +221,40 @@ def test_export_lint_passes(built, tmp_path):
     assert len(solids) == len(bodies) == len(report["bodies"])
     expected = sum(b.val().Volume() for b in bodies)
     assert sum(s.Volume() for s in solids) == pytest.approx(expected, rel=1e-3)
+
+
+def test_viewer_glb_matches_the_portal_viewer_contract(built):
+    """apps/web/src/components/enclosure/scene.ts: nodes base, lid, parts; Y up, metres, lid at rest."""
+    layout, enc = built
+    glb = viewer_glb(enc)
+
+    # The raw glTF JSON chunk, independent of any loader.
+    length = struct.unpack_from("<I", glb, 12)[0]
+    doc = json.loads(glb[20 : 20 + length])
+    nodes = doc["nodes"]
+    names = {i: n["name"] for i, n in enumerate(nodes)}
+    by_name = {n["name"]: n for n in nodes}
+    assert [names[i] for i in doc["scenes"][0]["nodes"]] == ["base", "lid", "parts"]
+    assert [names[c] for c in by_name["lid"].get("children", [])] == [f"hatch-{p}" for p, _ in enc.hatches]
+    assert [names[c] for c in by_name["parts"]["children"]] == [p.part.id for p in layout.placements]
+    assert "mesh" not in by_name["parts"]
+    assert all("mesh" in by_name[n] for n in ("base", "lid"))
+    # GLTFLoader's sanitizeNodeName strips these, which would break lookups by name.
+    assert not [n for n in names.values() if re.search(r"[\[\].:/]", n)]
+
+    W, D, H = enc.outer
+    f = layout.profile["floor_mm"]
+    scene = trimesh.load(io.BytesIO(glb), file_type="glb")
+    (x0, y0, z0), (x1, y1, z1) = scene.bounds
+    mm = 1000
+    assert y0 * mm == pytest.approx(0, abs=1e-3)  # floor at y = 0: Y is up
+    assert (x1 - x0) * mm == pytest.approx(W, abs=1e-3)
+    assert (z1 - z0) * mm == pytest.approx(D, abs=1e-3)
+    assert (x0 + x1) / 2 * mm == pytest.approx(0, abs=1e-3)
+    assert (z0 + z1) / 2 * mm == pytest.approx(0, abs=1e-3)
+    # Lid at rest: nothing above the lid plate, or the hatch flange on it.
+    top = H + (2 * f if enc.hatches else f)
+    assert y1 * mm == pytest.approx(top, abs=1e-3)
 
 
 def test_rotation_maps_ports_and_holes():

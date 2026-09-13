@@ -61,7 +61,7 @@ every layout; a test checks every layout against every printer.
 | `fit/model.py` | Loading, printer profiles, rotation, cavity size, layout validation (keepouts, ports flush with their wall, glands fit, gland cable paths clear) |
 | `fit/enclosure.py` | CadQuery base and lid: cradle posts, standoffs with pilot holes, port and gland cuts, friction-lip lid, vent slots, battery hatches, QR serial |
 | `fit/lint.py` | Printability gate: watertight, one body, on the bed, fits the bed, overhangs ≤ 55°, parametric minimum wall |
-| `fit/export.py` | Print-oriented STLs, STEP assembly, GLB with translucent part ghosts for the viewer (M5.5) |
+| `fit/export.py` | Print-oriented STLs, STEP assembly (every body), and the viewer GLB (below) |
 | `fit/coupons.py` | Tolerance coupons, one dimension over six steps each |
 | [`PROTOCOL.md`](PROTOCOL.md) | How to print, what counts as a fit, how to record it |
 | `fit-results.csv` | Results log; also the first draft of the fit-feedback data model |
@@ -80,6 +80,24 @@ every layout; a test checks every layout against every printer.
   separate hatch with a friction plug, a flange on the outer face and a finger notch.
 - **QR serial** (ARCHITECTURE.md §7.4) raised 0.6 mm on the inner lid face, 1 mm modules, in a corner clear
   of vents and hatches. It's mirrored so it reads rotated, not mirrored, with the lid turned over.
+
+## Viewer GLB contract
+
+`enclosure.glb` is built for the portal's 360° viewer (M5.5), and follows what
+[`apps/web/src/components/enclosure/scene.ts`](../../apps/web/src/components/enclosure/scene.ts) reads. The
+exporter adapts to the viewer, not the other way round:
+
+| Rule | Why |
+| --- | --- |
+| Metres, **Y up**, centred in plan, floor at y = 0 | glTF conventions; the viewer's lights and camera assume them, and the checked-in fixture (`apps/web/scripts/make-enclosure-fixture.mjs`) uses them |
+| Root nodes `base`, `lid`, `parts` | The viewer finds them by name; Base view shows `base` and `parts`, Lid view shows `lid` only |
+| Lid at rest | The viewer lifts `lid` itself for Exploded view |
+| Each hatch is a child of `lid`, named `hatch-<part-id>` | It hides and lifts with the lid |
+| `parts` is a group with one ghost per part, named by part id | The Parts toggle hides the group |
+| No `[ ] . : /` in node names | GLTFLoader strips them, which would break lookups by name |
+
+`test_viewer_glb_matches_the_portal_viewer_contract` checks the node tree in the raw glTF JSON, and units, axis
+and centring from the bounds, for every layout.
 
 ## Known limits of v0
 

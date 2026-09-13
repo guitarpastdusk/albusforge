@@ -4,12 +4,17 @@ import * as data from "./data";
 
 type Handler = (params: string[], query: URLSearchParams, body: unknown) => TransportResponse;
 
-const ok = (json: unknown): TransportResponse => ({ status: 200, json });
-
-const notFound = (what: string): TransportResponse => ({
-  status: 404,
-  json: { error: { code: "not_found", message: `${what} not found` } },
+const jsonResponse = (status: number, json: unknown): TransportResponse => ({
+  status,
+  contentType: "application/json",
+  isJson: true,
+  json,
 });
+
+const ok = (json: unknown): TransportResponse => jsonResponse(200, json);
+
+const notFound = (what: string): TransportResponse =>
+  jsonResponse(404, { error: { code: "not_found", message: `${what} not found` } });
 
 const orNotFound = (what: string, json: unknown) => (json === null ? notFound(what) : ok(json));
 
@@ -51,8 +56,5 @@ export const mockTransport: Transport = async (method, path, body) => {
     if (params) return handler(params, url.searchParams, body);
   }
 
-  return {
-    status: 501,
-    json: { error: { code: "no_mock", message: `No mock for ${method} ${url.pathname}` } },
-  };
+  return jsonResponse(501, { error: { code: "no_mock", message: `No mock for ${method} ${url.pathname}` } });
 };

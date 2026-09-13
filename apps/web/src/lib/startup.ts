@@ -1,3 +1,4 @@
+import { log as writeLog } from "./log";
 import { loadRuntimeConfig, type RuntimeConfig } from "./runtime-config";
 
 type Env = Record<string, string | undefined>;
@@ -15,7 +16,7 @@ type Env = Record<string, string | undefined>;
 export function validateRuntimeConfigOrExit(
   env: Env,
   exit: (code: number) => never = (code) => process.exit(code),
-  log: (message: string) => void = (message) => console.error(message),
+  log: (message: string) => void = (message) => writeLog("CRITICAL", message),
 ): RuntimeConfig {
   try {
     return loadRuntimeConfig(env);

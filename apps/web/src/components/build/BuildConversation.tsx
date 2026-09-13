@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useReducer, type ReactNode } from "react";
 import { checkForReply, sendBuildMessage, startBuild } from "@/actions/builds";
+import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
 import { assistantCount } from "@/lib/build-transcript";
 import {
   conversationReducer,
@@ -17,6 +18,8 @@ const ACTIONS: ConversationActions = { startBuild, sendBuildMessage, checkForRep
 
 interface ConversationApi {
   state: ConversationState;
+  /** The device-ready card's 3D enclosure preview: the fixture in mock mode, null in live mode. */
+  enclosurePreview: EnclosurePreviewData | null;
   /** Send a message; the first one creates the build. False if nothing was sent. */
   send: (text: string) => boolean;
   setDraft: (text: string) => void;
@@ -38,7 +41,15 @@ export function useConversation(): ConversationApi {
  * transcript. Once a landing conversation has a build, the URL becomes
  * /build/<id> so a refresh or a shared link reopens it.
  */
-export function BuildConversation({ initial, children }: { initial?: BuildTranscript; children: ReactNode }) {
+export function BuildConversation({
+  initial,
+  enclosurePreview = null,
+  children,
+}: {
+  initial?: BuildTranscript;
+  enclosurePreview?: EnclosurePreviewData | null;
+  children: ReactNode;
+}) {
   const [state, dispatch] = useReducer(conversationReducer, initial, initConversation);
 
   const send = (text: string): boolean => {
@@ -60,7 +71,7 @@ export function BuildConversation({ initial, children }: { initial?: BuildTransc
 
   const setDraft = (text: string) => dispatch({ type: "draft", text });
 
-  return <ConversationContext value={{ state, send, setDraft, checkAgain }}>{children}</ConversationContext>;
+  return <ConversationContext value={{ state, send, setDraft, checkAgain, enclosurePreview }}>{children}</ConversationContext>;
 }
 
 /** Renders its children only while the conversation hasn't started — the landing hero. */

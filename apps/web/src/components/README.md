@@ -10,4 +10,5 @@
 | [`marketplace/`](marketplace/) | category pills (server-side filtering, cursor pages) and build cards |
 | [`carousel/`](carousel/) | the "live right now" device carousel and its schematic chain |
 | [`errors/`](errors/) | `ServiceUnavailable`, rendered by the error boundaries |
+| [`enclosure/`](enclosure/) | the 360° enclosure viewer (M5.5): lazy three.js stage, views, parts ghosts, static fallback, dialog |
 | [`devices/`](devices/) | fleet tiles and the device dashboard: status header, widgets, closed-loop actions, device chat |

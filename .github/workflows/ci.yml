@@ -76,6 +76,12 @@ jobs:
             echo "${path} ${code}"
             [ "$code" = 200 ] || { docker logs web; exit 1; }
           done
+          # Public assets ship in the image (standalone output leaves out public/).
+          for path in /enclosure/fixture.glb /enclosure/fixture.png; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080${path}")
+            echo "${path} ${code}"
+            [ "$code" = 200 ] || { docker logs web; exit 1; }
+          done
           # Signed-in pages redirect a signed-out visitor to sign-in, keeping the destination.
           for path in /projects /live /live/bed-c; do
             read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "http://localhost:8080${path}")

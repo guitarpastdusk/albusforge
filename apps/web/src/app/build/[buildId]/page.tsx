@@ -2,7 +2,9 @@ import { BuildDetail, MessageList, routes } from "@albusforge/schema";
 import type { Metadata } from "next";
 import { BuildConversation } from "@/components/build/BuildConversation";
 import { ConversationView } from "@/components/build/ConversationView";
+import { enclosurePreviewFor } from "@/components/enclosure/fixture";
 import { apiGet, orNotFound } from "@/lib/api/server";
+import { loadRuntimeConfig } from "@/lib/runtime-config";
 
 export const metadata: Metadata = { title: "Build" };
 
@@ -15,7 +17,10 @@ export default async function BuildPage({ params }: { params: Promise<{ buildId:
   ]);
 
   return (
-    <BuildConversation initial={{ buildId: build.id, messages, ready: build.ready }}>
+    <BuildConversation
+      initial={{ buildId: build.id, messages, ready: build.ready }}
+      enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}
+    >
       <main className="flex flex-1 flex-col">
         <ConversationView active />
       </main>

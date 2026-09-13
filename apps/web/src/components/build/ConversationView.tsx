@@ -11,7 +11,7 @@ import { DesignReadyCard } from "./DesignReadyCard";
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, send, setDraft, checkAgain } = useConversation();
+  const { state, send, setDraft, checkAgain, enclosurePreview } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -32,7 +32,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
             ) : null}
           </div>
         ) : null}
-        {state.ready ? <DesignReadyCard card={state.ready} /> : null}
+        {state.ready ? <DesignReadyCard card={state.ready} enclosure={enclosurePreview} /> : null}
       </div>
 
       <form

@@ -22,8 +22,12 @@ locals {
       # Every MVP part is still a draft; staging shows them so chat can be tested.
       registry_include_drafts = true
       llm_build_token_ceiling = 200000
-      llm_hourly_budget_usd   = 5
-      llm_daily_budget_usd    = 20
+
+      # Staging and prod share one Anthropic key with a $10/day hard limit set in
+      # the Anthropic console, so the two daily budgets must sum below it. The
+      # alert has to fire with room to act, well before the key stops working.
+      llm_hourly_budget_usd = 1
+      llm_daily_budget_usd  = 3
     }
     prod = {
       subnet_cidr           = "10.20.0.0/24"
@@ -35,8 +39,8 @@ locals {
 
       registry_include_drafts = false
       llm_build_token_ceiling = 200000
-      llm_hourly_budget_usd   = 10
-      llm_daily_budget_usd    = 50
+      llm_hourly_budget_usd   = 2
+      llm_daily_budget_usd    = 5
     }
   }
 

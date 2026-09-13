@@ -620,7 +620,9 @@ Per Sukrit’s confirmed decision and [ADR 0003](adr/0003-edge-lb-only-ingress-a
 
 M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued minute/hour rollups and guarded retention; see [`TELEMETRY-STORAGE.md`](TELEMETRY-STORAGE.md) for the job/rollout contract. Production BuildPlan provisioning, event delivery, dashboards and alerts remain pending. [`TELEMETRY-INGEST.md`](TELEMETRY-INGEST.md) records the service/env contract, scaling budget, verification and remaining work.
 
-M6c read API on `m6/telemetry-read-api` adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. The richer provisioned dashboard contract, sign-in issuance and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
+M6c read API (merged PR #44) adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. Sign-in issuance is merged; the richer provisioned dashboard contract and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
+
+The portal now uses those read endpoints for a minimal stored-telemetry monitor at `/live` and `/live/:deviceId`: session-bound fleet pagination, latest provisioned channels/health and selectable bounded UTC history. Timestamp-positioned dots and sample tables preserve gaps, zero values and exact sequence identity; expiry, excessive point counts and pending rollups are explicit. This is refresh-based UI, without fabricated build metadata, Ask/rules or production SSE. See [`TELEMETRY-UI.md`](TELEMETRY-UI.md).
 
 ### 7.7 Marketplace
 

@@ -13,3 +13,4 @@ export * from "./parts";
 export * from "./connector";
 
 export * from "./telemetry";
+export * from "./telemetry-read";

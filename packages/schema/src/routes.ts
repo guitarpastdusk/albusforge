@@ -26,6 +26,13 @@ function byIdAndChild(method: Method, pattern: string, child: string): Route<[id
 }
 
 export const routes = {
+  /** Stored telemetry only; richer provisioned dashboard routes remain under devices/tenants. */
+  telemetry: {
+    devices: fixed("GET", "/v1/telemetry/devices"),
+    device: byId("GET", "/v1/telemetry/devices/:id"),
+    latest: byId("GET", "/v1/telemetry/devices/:id/latest"),
+    series: byId("GET", "/v1/telemetry/devices/:id/series"),
+  },
   auth: {
     requestCode: fixed("POST", "/v1/auth/code"),
     /** Body VerifyCodeRequest → VerifyCodeResponse (= Me) + Set-Cookie. */

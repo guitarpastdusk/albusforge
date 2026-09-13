@@ -14,6 +14,11 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** Gateway's 501: the route exists in the contract but isn't built yet. */
+export function isNotImplemented(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && error.status === 501;
+}
+
 export type GatewayErrorReason = "not_json" | "schema_mismatch" | "unexpected_status";
 
 export interface GatewayErrorDetails {

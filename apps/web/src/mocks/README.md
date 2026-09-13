@@ -8,6 +8,6 @@ Mock API responses, used when `API_MODE=mock` — set for `next dev` by `apps/we
 
 Connecting a screen to gateway means nothing here changes — set `API_MODE=live`.
 
-Mock responses carry the same cookies gateway sets — `__Host-albus_anon` on build creation, `__Host-albus_session` (and the anonymous cookie cleared) on verify — so mock mode exercises the Server Functions' cookie relay. Listings are filtered by `tags` before paging with `cursor` / `limit` (12 per page).
+Mock responses carry the same cookies gateway sets — `__Host-albus_anon` on build creation, `__Host-albus_session` (and the anonymous cookie cleared) on verify — so mock mode exercises the Server Functions' cookie relay. The showcase and listings have no mock: they answer 501 like gateway does until those routes are built, so local dev shows the same example builds as staging and prod (`src/lib/example-builds.ts`).
 
 Sessions: mock verify issues `__Host-albus_session=mock-session.<base64url email>`; `mockSession(value)` is mock mode's GET /v1/me for it (anything else is logged out). Sign out clears it.

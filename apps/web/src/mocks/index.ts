@@ -105,7 +105,6 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       return data.postBuildMessage(id, text) ? empty(202) : notFound(`build ${id}`);
     },
   ],
-  [routes.showcase, () => ok(data.showcase())],
   [routes.tenants.devices, () => ok(data.fleet())],
   [routes.devices.dashboard, ([id = ""]) => orNotFound(`device ${id}`, data.dashboard(id))],
   [
@@ -116,8 +115,6 @@ const handlers: Array<[{ method: Method; pattern: string }, Handler]> = [
       return orNotFound(`device ${id}`, data.askDevice(id));
     },
   ],
-  [routes.listings.list, (_, query) => ok(data.listingList(query.get("tags"), query.get("cursor"), query.get("limit")))],
-  [routes.listings.get, ([id = ""]) => orNotFound(`listing ${id}`, data.listing(id))],
   [routes.usage, () => ok(data.usage())],
 ];
 

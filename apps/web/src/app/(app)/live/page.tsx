@@ -41,7 +41,7 @@ export default async function LiveSystemsPage() {
         }
       />
 
-      {/* Stub: proves the data path. Live values arrive over SSE (/v1/tenants/:id/stream) later. */}
+      {/* TODO: live values arrive over SSE (/v1/tenants/:id/stream); today they refresh per request. */}
       <div className="mt-9 flex flex-col gap-7">
         {fleet.systems.map((system) => (
           <section key={system.build_id} className="rounded-[26px] border border-hairline bg-white px-[34px] py-[30px]">

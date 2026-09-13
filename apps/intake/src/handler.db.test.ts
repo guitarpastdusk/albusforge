@@ -14,8 +14,10 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { asc, eq } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createTurnScheduler, IntakeError, type TurnResult } from "../../gateway/src/intake";
 import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
 import { type CatalogueCache, createCatalogueCache, dbPartsSource } from "./catalogue";
+import { isDatabaseUnavailable } from "./db-errors";
 import { emptySpec } from "./decide";
 import { handleTurn, type HandlerDeps } from "./handler";
 import { createLogger } from "./log";
@@ -65,7 +67,8 @@ interface Setup {
 
 type Response = LlmResponse | ((request: never, signal?: AbortSignal) => Promise<LlmResponse>);
 
-function setup(responses: Response[], overrides: { deadlineMs?: number; tokenCeiling?: number } = {}): Setup {
+function setup(responses: Response[], overrides: { deadlineMs?: number; budgetMs?: number; tokenCeiling?: number } = {}): Setup {
+  const deadlineMs = overrides.deadlineMs ?? 45_000;
   const provider = replayProvider(responses as Parameters<typeof replayProvider>[0]);
   const catalogue = createCatalogueCache({ source: dbPartsSource(), includeDrafts: true });
   const lines: string[] = [];
@@ -73,7 +76,10 @@ function setup(responses: Response[], overrides: { deadlineMs?: number; tokenCei
   const deps: HandlerDeps = {
     pool: handle.pool,
     log,
-    deadlineMs: overrides.deadlineMs ?? 45_000,
+    deadlineMs,
+    // Unset means the handler's default: the turn plus a fifteenth of it for
+    // cleanup and the write, which is the service's 45 s / 3 s shape.
+    budgetMs: overrides.budgetMs,
     // As the service wires it: metering and the ceiling read run on the turn's own connection.
     bindDb: (turnDb) => ({
       catalogue: { get: () => catalogue.get(turnDb) },
@@ -212,7 +218,7 @@ describe("handleTurn against Postgres", () => {
   });
 
   it("deadline: a model call that never returns still gets exactly one fallback message", async () => {
-    const { deps } = setup([hangingResponse() as Response], { deadlineMs: 200 });
+    const { deps } = setup([hangingResponse() as Response], { deadlineMs: 200, budgetMs: 2000 });
     const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
     const result = await handleTurn(deps, buildId);
     expect(result).toMatchObject({ spec_version: null, status: "asking" });
@@ -225,7 +231,7 @@ describe("handleTurn against Postgres", () => {
   });
 
   it("deadline: work that ignores the abort signal is cut off too", async () => {
-    const { deps } = setup([(() => new Promise<LlmResponse>(() => {})) as Response], { deadlineMs: 200 });
+    const { deps } = setup([(() => new Promise<LlmResponse>(() => {})) as Response], { deadlineMs: 200, budgetMs: 2000 });
     const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
     await handleTurn(deps, buildId);
     expect((await messagesOf(buildId)).filter((m) => m.role === "assistant")).toEqual([{ role: "assistant", text: FALLBACK_REPLY }]);
@@ -358,7 +364,9 @@ describe("one connection per turn", () => {
           return goldenTurn("fridge-monitor", 1);
         },
       ],
-      { deadlineMs: 250 },
+      // A budget with room for the wait: the blocker does let go, so the turn
+      // should ride it out and answer rather than give the work to a retry.
+      { deadlineMs: 250, budgetMs: 3000 },
     );
     deps.pool = short.pool;
     // Warm the catalogue first: only the model call and metering should race the deadline.
@@ -380,6 +388,106 @@ describe("one connection per turn", () => {
       await blocker.query("ROLLBACK").catch(() => {});
       blocker.release();
       await short.pool.end();
+    }
+  });
+
+  /*
+   * The other side of that deadline: the connection stops answering instead of
+   * coming back, so cleanup can't finish at all. The turn's promise — that
+   * gateway's retry answers the message — is only worth anything if the 503
+   * arrives while gateway is still listening: it doesn't retry its own
+   * timeout, because a turn it stopped waiting for may still be running.
+   *
+   * The real scheduler, with the production order of deadlines scaled down:
+   * turn deadline < response budget < gateway's attempt deadline. The
+   * connection goes quiet rather than failing, which is the worst case — there
+   * is no timeout of its own to rescue the response.
+   */
+  it("a connection lost after the model answers: gateway gets a retryable 503 inside its attempt deadline, and retries", async () => {
+    // Wider than the 48 s / 50 s the service runs with, so the assertion is
+    // about the order of the deadlines, not about scheduler jitter on a busy
+    // machine: the budget still has to end first.
+    const GATEWAY_TIMEOUT_MS = 1500;
+    const buildId = await newBuild("A fridge temperature sensor");
+    let lost = false;
+    const lateQueries: string[] = [];
+
+    const { deps, catalogue } = setup(
+      [
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return goldenTurn("fridge-monitor", 1);
+        },
+      ],
+      { deadlineMs: 300, budgetMs: 380 },
+    );
+    await catalogue.get(handle.db);
+
+    const client = await handle.pool.connect();
+    const faulty = new Proxy(client, {
+      get(target, property) {
+        if (property === "query") {
+          return (...args: unknown[]) => {
+            const text = typeof args[0] === "string" ? args[0] : (args[0] as { text: string }).text;
+            // The connection goes quiet as metering opens its transaction —
+            // after the model answered, and while the turn holds the lock.
+            if (!lost && !/^\s*begin/i.test(text)) return (target.query as (...a: unknown[]) => unknown).apply(target, args);
+            lost = true;
+            lateQueries.push(text);
+            // No answer and no error: only destroying the connection ends this.
+            return new Promise(() => {});
+          };
+        }
+        const value = Reflect.get(target, property) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    deps.pool = { connect: async () => faulty } as unknown as pg.Pool;
+
+    let attempts = 0;
+    let handlerMs = 0;
+    let handled: ReturnType<typeof handleTurn> | undefined;
+    const started = Date.now();
+    const scheduler = createTurnScheduler({
+      timeoutMs: GATEWAY_TIMEOUT_MS,
+      retryDelayMs: 5,
+      log: () => {},
+      intake: {
+        turn: async (): Promise<TurnResult> => {
+          attempts++;
+          if (attempts > 1) return { noop: true };
+          handled = handleTurn(deps, buildId);
+          try {
+            return (await handled) as TurnResult;
+          } catch (error) {
+            handlerMs = Date.now() - started;
+            // What app.ts answers: an unavailable database is a 503, a bug is a 500.
+            throw new IntakeError("intake answered", isDatabaseUnavailable(error) ? 503 : 500);
+          }
+        },
+      },
+    });
+
+    try {
+      scheduler.trigger(buildId);
+      await scheduler.idle();
+
+      // The 503 has to arrive while gateway is still waiting, or the retry it
+      // promises never runs and the message is left unanswered.
+      expect(attempts).toBe(2);
+      expect(handlerMs).toBeGreaterThan(0);
+      expect(handlerMs).toBeLessThan(GATEWAY_TIMEOUT_MS);
+      // No cleanup statement sent to a connection that stopped answering: it
+      // would only add another wait to a response that is already late.
+      expect(lateQueries.filter((q) => /ROLLBACK|advisory_unlock/i.test(q))).toEqual([]);
+      // And the usage row from the lost transaction is not there.
+      expect(await callsOf(buildId)).toEqual([]);
+      // The connection was destroyed, so the advisory lock went with it: a
+      // later call takes the lock rather than reading a noop off a stale one.
+      const { deps: next } = setup([goldenTurn("fridge-monitor", 1)]);
+      expect(await handleTurn(next, buildId)).toMatchObject({ status: "asking" });
+    } finally {
+      await handled?.catch(() => undefined);
     }
   });
 });

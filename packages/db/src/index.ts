@@ -1,9 +1,11 @@
 export * from "./schema/index.js";
 export {
   CLIENT_DB_CLOSED,
+  ClientDbCleanupError,
   createClientDb,
   createDb,
   type ClientDb,
+  type ClientDbCloseOptions,
   type ClientDbOptions,
   type CreateDbOptions,
   type Db,

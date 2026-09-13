@@ -55,6 +55,7 @@ async function main() {
     pool,
     log,
     deadlineMs: 45_000,
+    budgetMs: 48_000,
     bindDb: (turnDb) => ({
       catalogue: { get: () => catalogue.get(turnDb) },
       meter: createMeter({ insert: llmCallsInserter(turnDb) }),

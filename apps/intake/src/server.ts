@@ -71,6 +71,7 @@ async function main(): Promise<void> {
     log,
     bindDb,
     deadlineMs: config.turnDeadlineMs,
+    budgetMs: config.turnBudgetMs,
     turn: {
       provider,
       model: config.llm.model,
@@ -124,6 +125,7 @@ async function main(): Promise<void> {
       registryIncludeDrafts: config.registryIncludeDrafts,
       buildTokenCeiling: config.buildTokenCeiling,
       turnDeadlineMs: config.turnDeadlineMs,
+      turnBudgetMs: config.turnBudgetMs,
     },
   });
 }

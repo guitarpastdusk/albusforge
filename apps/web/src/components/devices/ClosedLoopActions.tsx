@@ -96,7 +96,7 @@ export function ClosedLoopActions({
   };
 
   return (
-    <section className="rounded-[24px] border border-hairline bg-white px-8 py-[26px]" aria-labelledby={`${noteId}-title`}>
+    <section className="rounded-[24px] border border-hairline bg-white px-4 py-[26px] sm:px-8" aria-labelledby={`${noteId}-title`}>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <span id={`${noteId}-title`}>
@@ -118,9 +118,9 @@ export function ClosedLoopActions({
             const { bg, fg } = accentClasses[KIND_ACCENT[action.kind]];
             const locked = !canEdit || status === "writing" || status === "unknown";
             return (
-              <li key={action.id} className="flex items-center gap-4 rounded-2xl border border-hairline px-5 py-4" data-status={status ?? undefined}>
+              <li key={action.id} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl sm:flex-nowrap border border-hairline px-5 py-4" data-status={status ?? undefined}>
                 <span className={cx("flex-none whitespace-nowrap rounded-full px-3.5 py-1.5 font-mono text-[12px]", bg, fg)}>{action.kind}</span>
-                <div className="min-w-0 flex-1">
+                <div className="order-last min-w-0 flex-1 basis-full sm:order-none sm:basis-auto">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[15px] font-medium text-ink">{action.rule}</span>
                     {status === "unknown" ? (

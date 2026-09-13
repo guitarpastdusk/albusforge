@@ -14,8 +14,8 @@ export function ExampleBuildDetails({ detail }: { detail: ExampleBuildDetail }) 
       <aside aria-label="About this example build" className="mt-8 rounded-2xl border border-hairline bg-porcelain px-6 py-5">
         <p className="font-mono text-[13px] uppercase tracking-[0.18em] text-coral-deep">Example build</p>
         <p className="mt-2 max-w-[640px] text-[16px] font-light leading-[1.5] text-ink">
-          This build is real: every part comes from our parts registry and passes its power and compatibility checks. The
-          readings, author and clone count are sample data.
+          This build is real: every part comes from our parts registry, and the parts pass its voltage checks. Wiring,
+          connectors and fit haven&apos;t been tested on a bench yet. The readings, author and clone count are sample data.
         </p>
       </aside>
 

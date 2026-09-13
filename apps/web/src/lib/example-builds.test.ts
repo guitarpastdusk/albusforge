@@ -128,4 +128,12 @@ describe("example data", () => {
     expect(detail.supply.id).toBe("E-001");
     expect(exampleBuildDetail("nope")).toBeNull();
   });
+
+  it("a USB-C supply into the brain's Micro-USB port says an adapter is needed; a cell on the 5V pin doesn't", () => {
+    for (const build of EXAMPLE_BUILDS) {
+      const { notes } = exampleBuildDetail(build.id)!;
+      const adapter = notes.some((note) => /usb-c-v1.*usb-micro-b-v1.*adapter cable/.test(note));
+      expect(adapter, build.id).toBe(build.power.supply === "E-005");
+    }
+  });
 });

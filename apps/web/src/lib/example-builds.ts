@@ -226,13 +226,22 @@ function detailOf(build: ExampleBuild): ExampleBuildDetail {
     return { part: found, qty, lineCostUsd: unit === null ? null : Math.round(unit * qty * 100) / 100 };
   });
   const ids = new Set(build.parts.map((p) => p.id));
+  const supply = part(build.power.supply);
+  const brain = build.parts.map((p) => part(p.id)).find((p) => p.electrical.interface === "host");
+  const notes = KNOWN_ISSUES.filter((issue) => issue.parts.every((id) => ids.has(id))).map((issue) => issue.note);
+  // The registry checks voltage only; connector fit is still open (golden-builds.ts, ARCHITECTURE.md §18.1).
+  if (brain && build.power.brainInput === "primary" && supply.electrical.connector !== brain.electrical.connector) {
+    notes.push(
+      `The ${supply.name}'s plug (${supply.electrical.connector}) doesn't fit the ${brain.name}'s port (${brain.electrical.connector}). You'll need an adapter cable, which isn't in the parts list.`,
+    );
+  }
   return {
     build,
     lines,
     partsCostUsd: Math.round(lines.reduce((sum, line) => sum + (line.lineCostUsd ?? 0), 0) * 100) / 100,
     unpricedLines: lines.filter((line) => line.lineCostUsd === null).length,
-    supply: part(build.power.supply),
-    notes: KNOWN_ISSUES.filter((issue) => issue.parts.every((id) => ids.has(id))).map((issue) => issue.note),
+    supply,
+    notes,
   };
 }
 

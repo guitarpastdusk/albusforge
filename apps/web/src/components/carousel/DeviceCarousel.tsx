@@ -77,13 +77,21 @@ export function DeviceCarousel({ cards, examples = false }: { cards: CarouselCar
         </div>
       </div>
 
-      <div className="mt-[18px] overflow-hidden">
+      {/* clip, not hidden: a focused card must not scroll the track, only move it (onFocus below). */}
+      <div className="mt-[18px] overflow-clip">
         <div
           className="flex gap-5 transition-transform duration-600 ease-carousel motion-reduce:transition-none"
           style={{ transform: `translateX(-${index * STEP_PX}px)` }}
         >
           {track.map((card, i) => (
-            <DeviceCard key={`${card.id}-${i}`} card={card} duplicate={i >= positions} example={examples} />
+            <DeviceCard
+              key={`${card.id}-${i}`}
+              card={card}
+              duplicate={i >= positions}
+              example={examples}
+              // Tabbing to a card that is off to the side brings it into view.
+              onFocus={i < positions ? () => go(i) : undefined}
+            />
           ))}
         </div>
       </div>
@@ -120,7 +128,17 @@ function ArrowButton({ label, onClick, children }: { label: string; onClick: () 
   );
 }
 
-function DeviceCard({ card, duplicate, example }: { card: CarouselCard; duplicate: boolean; example: boolean }) {
+function DeviceCard({
+  card,
+  duplicate,
+  example,
+  onFocus,
+}: {
+  card: CarouselCard;
+  duplicate: boolean;
+  example: boolean;
+  onFocus?: () => void;
+}) {
   const { bg, fg } = accentClasses[card.accent];
 
   const body = (
@@ -155,6 +173,7 @@ function DeviceCard({ card, duplicate, example }: { card: CarouselCard; duplicat
       aria-label={duplicate ? undefined : `${card.name}: see the build`}
       aria-hidden={duplicate || undefined}
       tabIndex={duplicate ? -1 : undefined}
+      onFocus={onFocus}
       className="flex-none rounded-[22px]"
     >
       {body}

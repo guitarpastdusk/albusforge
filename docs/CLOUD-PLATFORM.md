@@ -433,7 +433,7 @@ Fleet, Signals, Ask, Inbox and Usage are all tenant-scoped and all absent from t
 
 ### 6.4 Per-tenant hosting
 
-`acme-plant.albusforge.app` is a wildcard certificate and host-header routing to the same gateway — **not** a per-tenant deployment. The subdomain resolves to a `tenant_id` at the edge, and every downstream query is scoped by it server-side. Custom domains are a CNAME plus a managed cert, later.
+`acme-plant.albusforge.ai` is a wildcard certificate and host-header routing to the same gateway — **not** a per-tenant deployment. The subdomain resolves to a `tenant_id` at the edge, and every downstream query is scoped by it server-side. Custom domains are a CNAME plus a managed cert, later.
 
 ---
 

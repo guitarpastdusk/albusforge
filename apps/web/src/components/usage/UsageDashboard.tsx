@@ -34,7 +34,7 @@ export function UsageDashboard({ usage, workspace }: { usage: UsageSummary; work
     <dl className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {cards.map((card) => <div key={card.label} className="min-w-0 rounded-[22px] border border-hairline bg-white p-6">
         <dt className="text-[14px] text-muted">{card.label}</dt>
-        <dd className="mt-3 break-words font-mono text-[28px] leading-tight tracking-tight text-ink tabular-nums">{card.value}{card.suffix ? <span className="ml-2 text-[14px] text-muted">{card.suffix}</span> : null}</dd>
+        <dd className="mt-3 break-words font-mono text-[28px] leading-tight tracking-tight text-ink tabular-nums">{card.value}{card.suffix ? <span className="ml-2 whitespace-nowrap text-[14px] text-muted">{card.suffix}</span> : null}</dd>
         <dd className="mt-3 text-[13px] leading-relaxed text-muted">{card.note}</dd>
       </div>)}
     </dl>

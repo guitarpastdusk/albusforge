@@ -9,6 +9,6 @@ The build conversation — the landing chat and `/build/[buildId]`.
 
 Failure handling:
 - A call that **rejects** (lost connection, aborted dispatch) or returns **`{ ok: false }`**: typing stops, the optimistic bubble is removed, the text goes back into the input, and a retryable message shows.
-- A message that was **accepted but whose reply didn't arrive** before the action's timeout: the transcript stays, and "Check for a reply" reads it again — the message is never resent.
+- A message that was **accepted but whose reply didn't arrive** before the action's 20 s deadline (including a gateway read that hangs): the transcript stays — or, if no read finished, the sent message — and "Check for a reply" reads it again — the message is never resent.
 
 In mock mode the replies are the prototype's script with its 900 ms typing delay (see `src/mocks`); the card appears after the third exchange. Tests in `build.test.tsx`.

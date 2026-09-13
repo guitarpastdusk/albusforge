@@ -7,7 +7,7 @@ Code with no markup.
 | [`api/`](api/) | the typed gateway client — server and browser variants, mock mode |
 | [`format/`](format/) | relative time, plurals, compact numbers |
 | [`sse/`](sse/) | `useEventStream`, the one EventSource hook for builds and telemetry |
-| `build-transcript.ts` | build transcript and result types, and `waitForReply` — polls the transcript with backoff until the assistant replies, or times out |
+| `build-transcript.ts` | build transcript and result types, and `waitForReply` — polls the transcript with backoff until the assistant replies; one total deadline bounds every read, aborting an in-flight one through its `AbortSignal` |
 | `safe-action.ts` | `settle()` — a Server Function call that rejects (network failure, aborted dispatch) becomes a retryable `{ ok: false }` |
 | `action-result.ts` | `ActionResult<T>` — what every Server Function in `src/actions` returns |
 | `action-errors.ts` | a Server Function failure as a value, logged once with the request's trace |

@@ -8,7 +8,7 @@ Server Functions (`"use server"`) that Client Components call for interactive AP
 
 | File | Routes |
 | --- | --- |
-| `builds.ts` | `POST /v1/builds`, `POST /v1/builds/:id/messages`, then polling `GET` the build and its messages until the assistant replies (`waitForReply`, 20 s with backoff); `checkForReply` reads again after a timeout |
+| `builds.ts` | `POST /v1/builds`, `POST /v1/builds/:id/messages`, then polling `GET` the build and its messages until the assistant replies (`waitForReply`, a total 20 s deadline with backoff that aborts a hung read); after acceptance, a timeout or failed read returns the check-again state, never a failed send; `checkForReply` reads again |
 | `devices.ts` | `POST /v1/devices/:id/ask` |
 | `auth.ts` | `POST /v1/auth/code`, `POST /v1/auth/verify` — success only once the session cookie is set |
 

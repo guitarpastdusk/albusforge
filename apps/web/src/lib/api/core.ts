@@ -78,8 +78,11 @@ export interface TransportResponse {
   setCookies?: readonly string[];
 }
 
-/** How a request reaches an answer: over HTTP, or from the mocks. */
-export type Transport = (method: Method, path: string, body: unknown) => Promise<TransportResponse>;
+/**
+ * How a request reaches an answer: over HTTP, or from the mocks. Aborting
+ * `signal` cancels the request, including reading its body.
+ */
+export type Transport = (method: Method, path: string, body: unknown, signal?: AbortSignal) => Promise<TransportResponse>;
 
 /**
  * Send one request and validate the answer. A 2xx must be JSON that matches
@@ -92,8 +95,9 @@ export async function request<S extends z.ZodType>(
   path: string,
   schema: S,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<z.infer<S>> {
-  return (await requestWithCookies(transport, method, path, schema, body)).data;
+  return (await requestWithCookies(transport, method, path, schema, body, signal)).data;
 }
 
 /** `request`, also returning the response's Set-Cookie lines (for Server Functions to relay). */
@@ -103,8 +107,9 @@ export async function requestWithCookies<S extends z.ZodType>(
   path: string,
   schema: S,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<{ data: z.infer<S>; setCookies: readonly string[] }> {
-  const { status, contentType, isJson, json, setCookies = [] } = await transport(method, path, body);
+  const { status, contentType, isJson, json, setCookies = [] } = await transport(method, path, body, signal);
   const route = `${method} ${path.split("?")[0]}`;
 
   if (status < 200 || status >= 300) {
@@ -136,10 +141,11 @@ export function fetchTransport(
   headers: Record<string, string> = {},
   credentials?: RequestCredentials,
 ): Transport {
-  return async (method, path, body) => {
+  return async (method, path, body, signal) => {
     const res = await fetch(base + path, {
       method,
       credentials,
+      signal,
       cache: "no-store",
       headers: {
         accept: "application/json",

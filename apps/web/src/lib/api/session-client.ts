@@ -9,7 +9,8 @@ import { request, requestWithCookies, type Transport } from "./core";
  * follow-up calls. No Next.js imports: `server.ts` wires it to `cookies()`.
  */
 export interface SessionClient {
-  get<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>>;
+  /** `signal` aborts the read, headers and body alike. */
+  get<S extends z.ZodType>(path: string, schema: S, options?: { signal?: AbortSignal }): Promise<z.infer<S>>;
   mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown): Promise<z.infer<S>>;
   /** Whether a mutation set or deleted this credential cookie. Never exposes its value. */
   credentialChange(name: string): "set" | "deleted" | undefined;
@@ -31,8 +32,8 @@ export function createSessionClient({
   const changes = new Map<string, "set" | "deleted">();
 
   return {
-    async get<S extends z.ZodType>(path: string, schema: S) {
-      return request(await transportFor(cookies), "GET", path, schema);
+    async get<S extends z.ZodType>(path: string, schema: S, options?: { signal?: AbortSignal }) {
+      return request(await transportFor(cookies), "GET", path, schema, undefined, options?.signal);
     },
 
     async mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown) {

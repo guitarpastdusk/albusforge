@@ -29,6 +29,18 @@ const READY: DeviceReadyCard = {
 };
 
 describe("conversationReducer", () => {
+  it("a timeout before any transcript read keeps the sent message, ends typing and offers check-again", () => {
+    const sent = conversationReducer(initConversation(), { type: "sent", text: "A soil sensor", at: AT });
+    const pending = { buildId: "bld_1", ready: null, messages: [{ id: "pending-1", role: "user" as const, text: "A soil sensor", created_at: AT }] };
+    const stalled = conversationReducer(sent, { type: "stalled", message: "Taking longer than usual.", transcript: pending });
+    expect(stalled).toMatchObject({ buildId: "bld_1", typing: false, awaitingReply: true, draft: "" });
+    expect(stalled.messages.map((m) => m.text)).toEqual(["A soil sensor"]);
+    // A rejected check afterwards keeps the message and the check-again state.
+    const failedCheck = conversationReducer(stalled, { type: "failed", message: "offline", text: "" });
+    expect(failedCheck).toMatchObject({ awaitingReply: true, typing: false });
+    expect(failedCheck.messages).toHaveLength(1);
+  });
+
   it("adds the sent message optimistically, clears the draft and starts typing", () => {
     const drafted = conversationReducer(initConversation(), { type: "draft", text: "A soil sensor" });
     const state = conversationReducer(drafted, { type: "sent", text: "A soil sensor", at: AT });

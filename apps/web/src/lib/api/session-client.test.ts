@@ -20,6 +20,8 @@ const ME = {
 };
 
 const seen: Array<{ method: string; path: string; cookie: string | undefined }> = [];
+/** Resolves when the server sees a held-open request's connection close (the client aborted). */
+const closed = new Map<string, Promise<void>>();
 let base = "";
 let server: http.Server;
 
@@ -33,6 +35,15 @@ beforeAll(async () => {
     const path = (req.url ?? "").split("?")[0]!;
     const cookie = req.headers.cookie;
     seen.push({ method: req.method ?? "", path, cookie });
+    if (path === "/v1/hang/headers" || path === "/v1/hang/body") {
+      closed.set(path, new Promise((resolve) => res.on("close", () => resolve())));
+      // Never finish: no headers at all, or headers and half a body.
+      if (path === "/v1/hang/body") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"messages":[');
+      }
+      return;
+    }
     const owner = cookie?.includes(`${ANON_OWNER_COOKIE}=anon-1`) || cookie?.includes(`${SESSION_COOKIE}=sess-1`);
 
     if (req.method === "POST" && path === "/v1/builds") {
@@ -61,7 +72,13 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(
+  () =>
+    new Promise<void>((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve());
+    }),
+);
 beforeEach(() => {
   seen.length = 0;
 });
@@ -121,5 +138,24 @@ describe("createSessionClient against a gateway stub", () => {
     await expect(client.mutate("POST", "/v1/nowhere", z.unknown(), {})).rejects.toBeInstanceOf(ApiRequestError);
     expect(client.credentialChange(SESSION_COOKIE)).toBeUndefined();
     expect(writer.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("aborting a read", () => {
+  it.each(["/v1/hang/headers", "/v1/hang/body"])("the signal reaches fetch and cancels %s, closing the connection", async (path) => {
+    const client = createSessionClient({ transportFor, cookieHeader: null, writer: { set: vi.fn(), delete: vi.fn() } });
+    const controller = new AbortController();
+    const read = client.get(path, MessageList, { signal: controller.signal });
+    const outcome = read.then(
+      () => "resolved",
+      (error: unknown) => error,
+    );
+
+    await vi.waitFor(() => expect(closed.has(path)).toBe(true));
+    const reason = new Error("deadline");
+    controller.abort(reason);
+
+    expect(await outcome).toBe(reason);
+    await closed.get(path);
   });
 });

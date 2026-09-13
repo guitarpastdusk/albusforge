@@ -1,6 +1,6 @@
 import type { ChatMessage } from "@albusforge/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assistantCount, ReplyDeadlineError, waitForReply, type BuildTranscript, type ReplyWait } from "./build-transcript";
+import { assistantCount, ReplyDeadlineError, ReplyDoneError, waitForReply, type BuildTranscript, type ReplyWait } from "./build-transcript";
 
 const AT = "2026-09-13T12:00:00Z";
 const msg = (id: string, role: ChatMessage["role"], text: string): ChatMessage => ({ id, role, text, created_at: AT });
@@ -50,7 +50,8 @@ describe("waitForReply", () => {
     await expect(waitForReply(read, 0)).resolves.toEqual({ status: "replied", transcript: REPLIED, reads: 1 });
     expect(Date.now()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
-    expect(read.mock.calls[0]![0].aborted).toBe(false);
+    // Aborted only after the reply was fully read: nothing is left in flight.
+    expect(read.mock.calls[0]![0].reason).toBeInstanceOf(ReplyDoneError);
   });
 
   it("keeps reading, with backoff, until the reply shows up on a later read", async () => {
@@ -138,17 +139,55 @@ describe("waitForReply", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a read that fails before the deadline rethrows, without aborting, and clears its timers", async () => {
-    let signal: AbortSignal | undefined;
-    const failure = new Error("gateway 500");
+  it("a read that fails before the deadline aborts its sibling work with the original error, rethrows it, and clears its timers", async () => {
+    const failure = new Error("gateway 503");
+    const sibling = slowRead(60_000, PENDING);
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      // Like readTranscript: two requests under one Promise.all, one fails fast while the other hangs.
+      const outcome = waitForReply((signal) => Promise.all([Promise.reject(failure), sibling.read(signal)]).then(([t]) => t), 0).catch(
+        (error: unknown) => error,
+      );
+      expect(await outcome).toBe(failure);
+      expect(sibling.seen.signal!.aborted).toBe(true);
+      expect(sibling.seen.signal!.reason).toBe(failure);
+      expect(sibling.seen.rejectedWith).toBe(failure);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Real timers for the flush: Node reports unhandled rejections after the microtask queue drains.
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("aborts its signal once done after a reply and after a timeout, never classifying either as a failure", async () => {
+    let replySignal: AbortSignal | undefined;
     await expect(
       waitForReply(async (s) => {
-        signal = s;
-        throw failure;
+        replySignal = s;
+        return REPLIED;
       }, 0),
-    ).rejects.toBe(failure);
-    expect(signal!.aborted).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
+    ).resolves.toMatchObject({ status: "replied" });
+    expect(replySignal!.reason).toBeInstanceOf(ReplyDoneError);
+
+    let timeoutSignal: AbortSignal | undefined;
+    const result = track(
+      waitForReply(
+        async (s) => {
+          timeoutSignal = s;
+          return PENDING;
+        },
+        0,
+        { timeoutMs: 500 },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(result.value).toMatchObject({ status: "timeout", transcript: PENDING });
+    expect(timeoutSignal!.reason).toBeInstanceOf(ReplyDeadlineError);
   });
 
   it("a read that rejects synchronously on abort still reads as a timeout, not a failure", async () => {

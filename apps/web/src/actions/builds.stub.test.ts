@@ -25,6 +25,8 @@ vi.mock("@/lib/build-transcript", async (importOriginal) => {
   };
 });
 
+const { ApiRequestError } = await import("@/lib/api/core");
+const { ReplyDeadlineError } = await import("@/lib/build-transcript");
 const { sessionClient } = await import("@/lib/api/server");
 const { actionFailure } = await import("@/lib/action-errors");
 const { checkForReply, sendBuildMessage, startBuild } = await import("./builds");
@@ -37,6 +39,8 @@ const EARLIER = [
 
 type Hold = "none" | "headers" | "body" | "error";
 let hold: Hold = "none";
+/** When true, GET /v1/builds/b1 (the sibling of the messages read) answers 503. */
+let detailFails = false;
 /** Reads of /messages answered normally before holding (sendBuildMessage's read before sending). */
 let freeReads = 0;
 let messages = [...EARLIER];
@@ -63,6 +67,10 @@ beforeAll(async () => {
       }
       if (req.method === "POST" && path === "/v1/builds/b1/messages") return json(res, 202);
       if (req.method === "GET" && path === "/v1/builds/b1") {
+        if (detailFails) {
+          // Answer after the sibling messages request is already held open.
+          return void setTimeout(() => json(res, 503, { error: { code: "unavailable", message: "detail down" } }), 30);
+        }
         return json(res, 200, { id: "b1", name: "Build", description: "", display_status: "designing", device_count: 0, updated_at: AT, ready: null });
       }
       if (req.method === "GET" && path === "/v1/builds/b1/messages") {
@@ -95,6 +103,7 @@ afterAll(
 
 beforeEach(() => {
   hold = "none";
+  detailFails = false;
   freeReads = 0;
   messages = [...EARLIER];
   log.length = 0;
@@ -181,5 +190,51 @@ describe("build actions when gateway holds the transcript read open", () => {
     expect(actionFailure).toHaveBeenCalledTimes(1);
     expect(vi.mocked(actionFailure).mock.calls[0]![0]).toBe("sendBuildMessage");
     expect(result).toMatchObject({ ok: false, message: "Your message was sent, but we couldn’t load the reply.", awaitingReply: { buildId: "b1" } });
+  });
+});
+
+describe("one transcript GET fails while its sibling is held open", () => {
+  it.each(["headers", "body"] as const)("the 503 is the error logged once, and the sibling held at %s is cancelled promptly", async (held) => {
+    hold = held;
+    detailFails = true;
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const { result, ms } = await timed(() => checkForReply("b1", 0));
+
+      // Well before the deadline: this is a real failure, not a timeout.
+      expect(ms).toBeLessThan(BUDGET_MS - 100);
+      expect(result).toEqual({ ok: false, message: "Your message was sent, but we couldn’t load the reply." });
+      expect(actionFailure).toHaveBeenCalledTimes(1);
+      const [action, error] = vi.mocked(actionFailure).mock.calls[0]!;
+      expect(action).toBe("checkForReply");
+      expect(error).toBeInstanceOf(ApiRequestError);
+      expect(error).toMatchObject({ status: 503 });
+      expect(error).not.toBeInstanceOf(ReplyDeadlineError);
+
+      // The held messages request was seen by the server and its connection closed, well within the budget.
+      expect(closes).toHaveLength(1);
+      const started = performance.now();
+      await closes[0];
+      expect(performance.now() - started).toBeLessThan(BUDGET_MS);
+
+      await new Promise((resolve) => setTimeout(resolve, BUDGET_MS + 50));
+      expect(actionFailure).toHaveBeenCalledTimes(1);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("sendBuildMessage after acceptance: same single 503 log, check-again kept, sibling cancelled", async () => {
+    hold = "body";
+    detailFails = true;
+    freeReads = 1;
+    const result = await sendBuildMessage("b1", "One bed");
+    expect(result).toMatchObject({ ok: false, awaitingReply: { buildId: "b1" } });
+    expect(actionFailure).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(actionFailure).mock.calls[0]![1]).toMatchObject({ status: 503 });
+    expect(posts()).toBe(1);
+    await closes[0];
   });
 });

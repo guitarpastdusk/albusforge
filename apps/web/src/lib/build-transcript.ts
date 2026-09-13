@@ -38,6 +38,14 @@ export class ReplyDeadlineError extends Error {
   }
 }
 
+/** The abort reason once the wait is over: anything still in flight is no longer needed. */
+export class ReplyDoneError extends Error {
+  constructor() {
+    super("reply wait finished");
+    this.name = "ReplyDoneError";
+  }
+}
+
 const DEADLINE = Symbol("deadline");
 
 /**
@@ -47,8 +55,9 @@ const DEADLINE = Symbol("deadline");
  * The deadline is total: a read still in flight when it passes (waiting for
  * headers or for the body) is aborted through `signal` and the wait returns
  * `timeout` at the deadline, not when the read ends. Nothing outlives the
- * call: its timers are cleared on every outcome, and it adds no listeners.
- * A read that fails before the deadline rethrows (a real failure).
+ * call: its timers are cleared and its signal aborted on every outcome, and
+ * it adds no listeners. A read that fails before the deadline aborts the
+ * rest of that read (with the failure as the reason) and rethrows it.
  *
  * Gateway accepts a message with 202 and delivers the reply later (over
  * GET /v1/builds/:id/events). Polling from the Server Function works in both
@@ -88,6 +97,11 @@ export async function waitForReply(
         outcome = await Promise.race([read(controller.signal), deadline]);
       } catch (error) {
         if (controller.signal.aborted) return timedOut();
+        // A real failure: cancel whatever else the read still has in flight
+        // (e.g. the sibling GET of a Promise.all), then rethrow the original.
+        // Promise.all has already settled, so the sibling's abort rejection
+        // is absorbed there: it can't replace this error or go unhandled.
+        controller.abort(error);
         throw error;
       }
       if (outcome === DEADLINE) return timedOut();
@@ -104,5 +118,8 @@ export async function waitForReply(
   } finally {
     clearTimeout(deadlineTimer);
     clearTimeout(pauseTimer);
+    // Every exit leaves no request behind. On a reply the read has fully
+    // resolved (bodies consumed), so this cancels nothing that is needed.
+    if (!controller.signal.aborted) controller.abort(new ReplyDoneError());
   }
 }

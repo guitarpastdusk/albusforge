@@ -40,3 +40,28 @@ describe("polylinePoints", () => {
     expect(valueToY(22, { lo: 20, hi: 50 })).toBe(140);
   });
 });
+
+describe("thresholds outside the readings", () => {
+  const inside = (y: number) => y >= 0 && y <= 150;
+
+  it("keeps a threshold above every sample inside the viewBox, with room for its label", () => {
+    const domain = chartDomain([10, 12], 30)!;
+    const y = valueToY(30, domain);
+    expect(inside(y)).toBe(true);
+    expect(y - 8 - 12).toBeGreaterThanOrEqual(0);
+    for (const v of [10, 12]) expect(inside(valueToY(v, domain))).toBe(true);
+  });
+
+  it("keeps a threshold below every sample inside the viewBox", () => {
+    const domain = chartDomain([40, 42], 5)!;
+    expect(inside(valueToY(5, domain))).toBe(true);
+    expect(valueToY(5, domain) - 20).toBeGreaterThanOrEqual(0);
+    for (const v of [40, 42]) expect(inside(valueToY(v, domain))).toBe(true);
+  });
+
+  it("stays on the true scale: a higher value is always drawn higher", () => {
+    const domain = chartDomain([10, 12], 30)!;
+    expect(valueToY(30, domain)).toBeLessThan(valueToY(12, domain));
+    expect(valueToY(12, domain)).toBeLessThan(valueToY(10, domain));
+  });
+});

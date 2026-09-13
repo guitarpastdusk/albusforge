@@ -7,6 +7,7 @@ import { DeviceWidgets } from "@/components/devices/DeviceWidgets";
 import { PageContainer, Pill } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { formatWhen } from "@/lib/format";
+import { loadRuntimeConfig } from "@/lib/runtime-config";
 
 export default async function DevicePage({ params }: { params: Promise<{ deviceId: string }> }) {
   const { deviceId } = await params;
@@ -38,7 +39,11 @@ export default async function DevicePage({ params }: { params: Promise<{ deviceI
         <div className="flex min-w-0 flex-col gap-6">
           <DeviceWidgets dashboard={dashboard} />
           {dashboard.actions && dashboard.actions.length > 0 ? (
-            <ClosedLoopActions actions={dashboard.actions} lastAction={lastAction} />
+            <ClosedLoopActions
+              actions={dashboard.actions}
+              lastAction={lastAction}
+              interactive={loadRuntimeConfig(process.env).apiMode === "mock"}
+            />
           ) : null}
         </div>
         <DeviceChat

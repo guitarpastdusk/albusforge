@@ -12,7 +12,7 @@ Routes (Next.js App Router). Route-segment folders don't carry their own README 
 | `(app)/live` | Live systems — fleet | session | built to design |
 | `(app)/live/[deviceId]` | Device dashboard: widgets from config, closed-loop actions, device chat | session | built to design |
 | `(app)/usage` | Usage for the current period (not in the header nav) | session | stub |
-| `/marketplace` | Community builds with client-side category filter | public | built to design |
+| `/marketplace` | Community builds; `?category=` filters in gateway, `?cursor=` pages | public | built to design |
 | `/marketplace/[listingId]` | A listing (not designed yet) | public | stub |
 | `(static)/docs`, `pricing`, `security` | Footer pages | public | placeholder |
 

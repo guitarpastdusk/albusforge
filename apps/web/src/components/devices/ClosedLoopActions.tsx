@@ -1,7 +1,7 @@
 "use client";
 
 import type { Accent, DeviceAction, DeviceActionKind } from "@albusforge/schema";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button, Toggle } from "@/components/ui";
 import { accentClasses } from "@/lib/accent";
 import { cx } from "@/lib/cx";
@@ -12,25 +12,47 @@ const KIND_ACCENT: Record<DeviceActionKind, Accent> = { SERVO: "green", API: "bl
 /**
  * "Closed loop · actions": the rules this device acts on.
  *
- * TODO(api): toggles are optimistic local state only. There is no route to
- * enable or disable an action (or create one — "+ New action") yet; PORTAL.md
- * §3 needs one before these can persist.
+ * `interactive` is true only in mock mode, where toggling is a local
+ * simulation. In live mode the card is read-only and says so: a switch that
+ * changes on screen without reaching the device would misstate what an
+ * irrigation valve or an alert is doing.
+ *
+ * TODO(api): once gateway has an authenticated route to enable/disable and
+ * create actions (PORTAL.md §3), make live toggles call it through a Server
+ * Function, apply the change optimistically, and roll it back if the call
+ * fails or is refused.
  */
-export function ClosedLoopActions({ actions, lastAction }: { actions: DeviceAction[]; lastAction: string | null }) {
+export function ClosedLoopActions({
+  actions,
+  lastAction,
+  interactive,
+}: {
+  actions: DeviceAction[];
+  lastAction: string | null;
+  interactive: boolean;
+}) {
   const [enabled, setEnabled] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(actions.map((action) => [action.id, action.enabled])),
   );
+  const noteId = useId();
 
   return (
     <section className="rounded-[24px] border border-hairline bg-white px-8 py-[26px]">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <CardLabel>Closed loop · actions</CardLabel>
+        <div className="flex flex-wrap items-center gap-3">
+          <CardLabel>Closed loop · actions</CardLabel>
+          {interactive ? null : (
+            <span className="rounded-full border border-hairline px-2.5 py-0.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+              Not connected yet
+            </span>
+          )}
+        </div>
         {lastAction ? <span className="font-mono text-[12px] text-faint">last action: {lastAction}</span> : null}
       </div>
 
       <ul className="mt-[18px] flex flex-col gap-3">
         {actions.map((action) => {
-          const on = enabled[action.id] ?? action.enabled;
+          const on = interactive ? (enabled[action.id] ?? action.enabled) : action.enabled;
           const { bg, fg } = accentClasses[KIND_ACCENT[action.kind]];
           return (
             <li key={action.id} className="flex items-center gap-4 rounded-2xl border border-hairline px-5 py-4">
@@ -44,6 +66,8 @@ export function ClosedLoopActions({ actions, lastAction }: { actions: DeviceActi
               <Toggle
                 checked={on}
                 label={action.rule}
+                disabled={!interactive}
+                describedBy={interactive ? undefined : noteId}
                 onChange={() => setEnabled((current) => ({ ...current, [action.id]: !on }))}
               />
             </li>
@@ -52,11 +76,21 @@ export function ClosedLoopActions({ actions, lastAction }: { actions: DeviceActi
       </ul>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-hairline pt-4">
-        <span className="text-[14px] font-light text-muted">
-          Add a rule in plain words — &quot;water for 5 min when soil drops below 22%&quot;.
-        </span>
-        {/* TODO(api): opens the rule composer once there is a route to create an action. */}
-        <Button variant="dark" className="rounded-xl px-5 py-2.5 text-[14px] font-medium">
+        {interactive ? (
+          <span className="text-[14px] font-light text-muted">
+            Add a rule in plain words — &quot;water for 5 min when soil drops below 22%&quot;.
+          </span>
+        ) : (
+          <span id={noteId} className="text-[14px] font-light text-muted">
+            Changing rules from the portal isn’t connected yet — these are the rules the device runs now.
+          </span>
+        )}
+        <Button
+          variant="dark"
+          disabled={!interactive}
+          aria-describedby={interactive ? undefined : noteId}
+          className="rounded-xl px-5 py-2.5 text-[14px] font-medium"
+        >
           + New action
         </Button>
       </div>

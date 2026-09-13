@@ -11,17 +11,23 @@ export interface ChartDomain {
   hi: number;
 }
 
+/** The threshold label sits 8 units above its line in 12-unit type: keep ~20 of 150 units clear above it. */
+const LABEL_ROOM = 20 / (CHART_HEIGHT - 20);
+
 /**
- * Value range to draw: 2 units of room below the lowest of the data and the
- * threshold, 8 units of headroom above the data, rounded outwards. For the
- * greenhouse probe (31.2–42 % VWC, threshold 22) that is 20–50, the design's scale.
+ * Value range to draw, with the threshold counted at both ends: 2 units of room
+ * below the lowest of data and threshold, 8 units of headroom above the
+ * highest, and enough above a high threshold for its label. Rounded outwards,
+ * on the true scale. For the greenhouse probe (31.2–42 % VWC, threshold 22)
+ * that is 20–50, the design's scale.
  */
 export function chartDomain(values: readonly number[], threshold: number | null): ChartDomain | null {
   if (values.length === 0) return null;
-  const low = Math.min(...values, ...(threshold === null ? [] : [threshold]));
-  const high = Math.max(...values);
-  const lo = Math.floor(low - 2);
-  const hi = Math.max(Math.ceil(high + 8), lo + 1);
+  const points = threshold === null ? values : [...values, threshold];
+  const lo = Math.floor(Math.min(...points) - 2);
+  const high = Math.max(...points);
+  const labelHeadroom = threshold === null ? -Infinity : threshold + (threshold - lo) * LABEL_ROOM;
+  const hi = Math.max(Math.ceil(Math.max(high + 8, labelHeadroom)), lo + 1);
   return { lo, hi };
 }
 

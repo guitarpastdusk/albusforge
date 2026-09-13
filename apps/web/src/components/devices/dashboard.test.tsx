@@ -61,7 +61,7 @@ describe("StatTile", () => {
 
 describe("ClosedLoopActions", () => {
   it("renders each rule with its kind pill, and the toggles start on, on, off", () => {
-    const html = renderToStaticMarkup(<ClosedLoopActions actions={ACTIONS} lastAction="yesterday 06:12" />);
+    const html = renderToStaticMarkup(<ClosedLoopActions actions={ACTIONS} lastAction="yesterday 06:12" interactive />);
     expect(html).toContain("Closed loop · actions");
     expect(html).toContain("last action: yesterday 06:12");
     expect(html.match(/aria-checked="(true|false)"/g)).toEqual(['aria-checked="true"', 'aria-checked="true"', 'aria-checked="false"']);
@@ -72,12 +72,46 @@ describe("ClosedLoopActions", () => {
   });
 });
 
+describe("ClosedLoopActions: live read-only versus mock interactive", () => {
+  const switches = (html: string) => html.match(/<button[^>]*role="switch"[^>]*>/g) ?? [];
+
+  it("live: switches are disabled but still switches with state and a label, New action is disabled, and it says why", () => {
+    const html = renderToStaticMarkup(<ClosedLoopActions actions={ACTIONS} lastAction={null} interactive={false} />);
+    const found = switches(html);
+    expect(found).toHaveLength(3);
+    for (const tag of found) {
+      expect(tag).toMatch(/aria-checked="(true|false)"/);
+      expect(tag).toMatch(/aria-label="[^"]+"/);
+      expect(tag).toMatch(/ disabled=""/);
+      expect(tag).toMatch(/aria-describedby="[^"]+"/);
+    }
+    expect(html).toContain("Not connected yet");
+    expect(html).toContain("Changing rules from the portal isn’t connected yet");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>\+ New action<\/button>/);
+    expect(html).not.toContain("Add a rule in plain words");
+  });
+
+  it("mock: switches and New action are enabled, with the design's hint", () => {
+    const html = renderToStaticMarkup(<ClosedLoopActions actions={ACTIONS} lastAction={null} interactive />);
+    for (const tag of switches(html)) expect(tag).not.toMatch(/ disabled=""/);
+    expect(html).not.toContain("Not connected yet");
+    expect(html).toContain("Add a rule in plain words");
+    expect(html).not.toMatch(/disabled=""[^>]*>\+ New action/);
+  });
+});
+
 describe("Toggle", () => {
   const findButton = (node: ReactNode) => node as ReactElement<{ onClick: () => void; "aria-checked": boolean; className: string; children: ReactNode }>;
 
   it("is a switch: green with the knob right when on, grey with the knob left when off", () => {
     expect(renderToStaticMarkup(<Toggle checked label="x" onChange={() => {}} />)).toMatch(/role="switch" aria-checked="true".*bg-success.*left-\[21px\]/);
     expect(renderToStaticMarkup(<Toggle checked={false} label="x" onChange={() => {}} />)).toMatch(/aria-checked="false".*bg-hairline.*left-\[3px\]/);
+  });
+
+  it("a disabled switch is marked disabled and dimmed", () => {
+    expect(renderToStaticMarkup(<Toggle checked label="x" disabled describedBy="note" onChange={() => {}} />)).toMatch(
+      /aria-describedby="note" disabled="".*cursor-not-allowed opacity-50/,
+    );
   });
 
   it("calls onChange when clicked", () => {

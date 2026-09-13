@@ -19,6 +19,13 @@ const requestWithTrace = (trace: string, path = "/projects") => ({
   headers: { "x-cloud-trace-context": `${trace}/1;o=1`, cookie: "__Host-albus_session=secret" },
 });
 
+/** A request whose X-Cloud-Trace-Context is exactly `header`, e.g. `${TRACE_A}/2;o=1`. */
+const requestWithCloudTrace = (header: string, path = "/projects") => ({
+  path,
+  method: "GET",
+  headers: { "x-cloud-trace-context": header },
+});
+
 const context = {
   routerKind: "App Router",
   routePath: "/(app)/projects",
@@ -102,6 +109,31 @@ describe("reportRequestError", () => {
     const traces = Array.from({ length: 1_001 }, (_, i) => (i + 1).toString(16).padStart(32, "0"));
     for (const trace of traces) await reportRequestError(shared, requestWithTrace(trace), context);
     expect(errorLines()).toHaveLength(1_001);
+  });
+
+  it("regression: one shared object, two requests in the same trace with different spans, gives two entries with their own spans", async () => {
+    const shared = gatewayFailure();
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A}/1;o=1`), context);
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A}/2;o=1`), context);
+
+    expect(errorLines().map((entry) => entry["logging.googleapis.com/spanId"])).toEqual([
+      "0000000000000001",
+      "0000000000000002",
+    ]);
+  });
+
+  it("the same trace and span reported twice (Next's double report) still collapses to one entry", async () => {
+    const shared = gatewayFailure();
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A}/7;o=1`), context);
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A}/7;o=1`), context);
+    expect(errorLines()).toHaveLength(1);
+  });
+
+  it("a trace without a span can't identify the request, so a repeated object is logged again", async () => {
+    const shared = gatewayFailure();
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A};o=1`), context);
+    await reportRequestError(shared, requestWithCloudTrace(`${TRACE_A};o=1`), context);
+    expect(errorLines()).toHaveLength(2);
   });
 
   it("regression: two requests with the same digest and different traces give two entries, each with its own trace", async () => {

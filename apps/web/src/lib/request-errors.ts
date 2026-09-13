@@ -41,8 +41,8 @@ export interface RequestErrorLoggerOptions {
 
 type Timer = ReturnType<typeof setTimeout>;
 
-/** Trace IDs remembered per thrown object; see `reported`. */
-const MAX_TRACES_PER_ERROR = 1_000;
+/** Request identities remembered per thrown object; see `reported`. */
+const MAX_REQUESTS_PER_ERROR = 1_000;
 
 interface DigestState {
   /** Console copies waiting for an onRequestError. */
@@ -74,10 +74,12 @@ export function createRequestErrorLogger({ holdMs = 2_000, maxPerDigest = 50, ma
   let total = 0;
   // Next may report one thrown error more than once for the same request (the
   // RSC and HTML passes). Log it once per request: the object is keyed with the
-  // request's trace ID, so an object shared across requests (a memoised fetch,
-  // a cached rejected promise) still gives every request its own entry. Without
-  // a trace ID requests can't be told apart, so a repeat is logged again: a
-  // duplicate, never a loss. Cloud Run's load balancer always sends one.
+  // request's trace ID *and* span ID, so an object shared across requests (a
+  // memoised fetch, a cached rejected promise) still gives every request its
+  // own entry. A trace ID alone is not a request: many calls and retries share
+  // one trace (W3C trace-context), each with its own span. Without a span ID
+  // the request can't be identified, so a repeat is logged again: a duplicate,
+  // never a loss.
   const reported = new WeakMap<object, Set<string>>();
 
   const stateFor = (digest: string): DigestState => {
@@ -103,16 +105,17 @@ export function createRequestErrorLogger({ holdMs = 2_000, maxPerDigest = 50, ma
 
   const reportRequestError: Instrumentation.onRequestError = (error, request, context) => {
     const trace = traceFromHeaders(request.headers);
-    if (typeof error === "object" && error !== null && trace) {
-      let traces = reported.get(error);
-      if (!traces) {
-        traces = new Set();
-        reported.set(error, traces);
+    const requestKey = trace?.spanId ? `${trace.traceId}/${trace.spanId}` : undefined;
+    if (typeof error === "object" && error !== null && requestKey) {
+      let seen = reported.get(error);
+      if (!seen) {
+        seen = new Set();
+        reported.set(error, seen);
       }
-      if (traces.has(trace.traceId)) return;
+      if (seen.has(requestKey)) return;
       // Bounded for an object shared by many requests: forgetting risks a duplicate, not a loss.
-      if (traces.size >= MAX_TRACES_PER_ERROR) traces.clear();
-      traces.add(trace.traceId);
+      if (seen.size >= MAX_REQUESTS_PER_ERROR) seen.clear();
+      seen.add(requestKey);
     }
 
     const digest = digestOf(error);

@@ -1,0 +1,92 @@
+{
+  "title": "Albus Forge Connector Definition",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-v\\d+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "housing": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pins": {
+      "minItems": 2,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "power",
+              "ground",
+              "signal",
+              "sda",
+              "scl"
+            ]
+          }
+        },
+        "required": [
+          "n",
+          "name",
+          "role"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "interfaces": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "i2c",
+          "spi",
+          "uart",
+          "1-wire",
+          "pwm",
+          "adc",
+          "gpio",
+          "power",
+          "host"
+        ]
+      }
+    },
+    "max_voltage": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "name",
+    "housing",
+    "pins",
+    "interfaces",
+    "max_voltage"
+  ],
+  "additionalProperties": false
+}

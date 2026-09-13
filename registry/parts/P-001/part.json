@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "P-001",
+  "version": "1.0.0",
+  "name": "BME280 Temperature, Humidity and Pressure Sensor",
+  "category": "physical",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "i2c",
+    "connector": "hsx-i2c-4pin-v1",
+    "voltage_range": [3.0, 5.0],
+    "current_draw_ma": { "idle": 0.0001, "active": 0.714 },
+    "requires": ["bus.i2c"],
+    "conflicts": [],
+    "i2c_address": "0x77"
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [25.2, 18.0, 4.6],
+    "mount": { "type": "unspecified" },
+    "exposure": "vent",
+    "environment_flags": ["needs-airflow", "temp:-40..85C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-bme280",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/environment",
+    "capabilities": ["read.temperature_c", "read.humidity_pct", "read.pressure_hpa"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "climate.v1",
+    "default_widgets": ["line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "2652", "url": "https://www.adafruit.com/product/2652" }],
+    "unit_cost_usd": 14.95
+  }
+}

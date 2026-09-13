@@ -1,0 +1,15 @@
+{
+  "$schema": "../schemas/connector.schema.json",
+  "id": "hsx-4pin-gpio-v1",
+  "version": "1.0.0",
+  "name": "HSX 4-pin, two GPIO",
+  "housing": "JST PH 2.0 mm, 4-pin",
+  "pins": [
+    { "n": 1, "name": "VCC", "role": "power" },
+    { "n": 2, "name": "SIG1", "role": "signal" },
+    { "n": 3, "name": "SIG2", "role": "signal" },
+    { "n": 4, "name": "GND", "role": "ground" }
+  ],
+  "interfaces": ["gpio"],
+  "max_voltage": 5.5
+}

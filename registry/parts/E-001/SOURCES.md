@@ -1,0 +1,16 @@
+# E-001 18650 battery: sources
+
+Cell: Adafruit Lithium Ion Cylindrical Battery, 3.7 V 2200 mAh (#1781). Checked 2026-09-13.
+
+- Source for every number below: https://www.adafruit.com/product/1781
+  - 3.7 V nominal, 4.2 V max, 2.75 V discharge cut-off
+  - 2200 mAh
+  - 2C peak, keep sustained draw under 0.5C (1 A)
+  - Protection against over-voltage, under-voltage and over-current
+  - 2-pin JST-PH lead
+  - 69 mm × Ø18 mm
+  - $9.95
+
+`max_output_ma` is the sustained 1 A figure, not the 2C peak.
+
+A single cell is used rather than a pack: §4.1 says "18650 pack", but a one-cell pack is what fits the fridge monitor. Adafruit #354 (2 × 2200 mAh, 4400 mAh, 69 × 37 × 18 mm, $19.95, https://www.adafruit.com/product/354) could be a second version or part later.

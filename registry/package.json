@@ -1,0 +1,27 @@
+{
+  "name": "@albusforge/registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./catalogue": "./scripts/catalogue.ts",
+    "./load": "./scripts/lib/load.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "tsx scripts/validate.ts && tsx scripts/schemas.ts --check",
+    "test": "vitest run",
+    "validate": "tsx scripts/validate.ts",
+    "schemas": "tsx scripts/schemas.ts"
+  },
+  "dependencies": {
+    "@albusforge/schema": "workspace:*",
+    "zod": "~4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.0"
+  }
+}

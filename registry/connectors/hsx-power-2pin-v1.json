@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/connector.schema.json",
+  "id": "hsx-power-2pin-v1",
+  "version": "1.0.0",
+  "name": "HSX 2-pin power",
+  "housing": "JST PH 2.0 mm, 2-pin",
+  "pins": [
+    { "n": 1, "name": "+", "role": "power" },
+    { "n": 2, "name": "-", "role": "ground" }
+  ],
+  "interfaces": ["power"],
+  "max_voltage": 5.5
+}

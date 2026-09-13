@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "P-002",
+  "version": "1.0.0",
+  "name": "DS18B20 Waterproof Temperature Probe",
+  "category": "physical",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "1-wire",
+    "connector": "hsx-3pin-v1",
+    "voltage_range": [3.0, 5.5],
+    "current_draw_ma": { "idle": 0.00075, "active": 1 },
+    "requires": ["gpio.digital"],
+    "conflicts": [],
+    "i2c_address": null
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [6, 6, 30],
+    "mount": { "type": "cable-gland", "d_mm": 6 },
+    "exposure": "probe-external",
+    "environment_flags": ["waterproof", "temp:-55..100C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-ds18b20",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/temperature",
+    "capabilities": ["read.temperature_c"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "temperature.v1",
+    "default_widgets": ["line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "381", "url": "https://www.adafruit.com/product/381" }],
+    "unit_cost_usd": 9.95
+  }
+}

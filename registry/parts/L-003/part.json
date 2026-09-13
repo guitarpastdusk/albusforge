@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "L-003",
+  "version": "1.0.0",
+  "name": "HC-SR501 PIR Motion Sensor",
+  "category": "location",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "gpio",
+    "connector": "hsx-3pin-v1",
+    "voltage_range": [5.0, 20.0],
+    "current_draw_ma": { "idle": 0.05, "active": 65 },
+    "requires": ["gpio.digital", "power.5v"],
+    "conflicts": [],
+    "i2c_address": null
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": null,
+    "mount": { "type": "unspecified" },
+    "exposure": "window",
+    "environment_flags": ["needs-line-of-sight", "temp:-15..70C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-hcsr501",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/presence",
+    "capabilities": ["read.motion_bool"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "presence.v1",
+    "default_widgets": ["event-timeline"],
+    "alert_templates": ["on_event"]
+  },
+  "commerce": {
+    "suppliers": [],
+    "unit_cost_usd": null
+  }
+}

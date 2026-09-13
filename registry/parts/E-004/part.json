@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "E-004",
+  "version": "1.0.0",
+  "name": "TP4056 Li-ion Charger Module",
+  "category": "energy",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "power",
+    "connector": "hsx-power-2pin-v1",
+    "voltage_range": [4.0, 8.0],
+    "current_draw_ma": { "idle": 0, "active": 0 },
+    "requires": ["power.battery"],
+    "conflicts": [],
+    "i2c_address": null,
+    "supply": { "output_v": [4.137, 4.263], "max_output_ma": 1000, "capacity_mah": null }
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": null,
+    "mount": { "type": "unspecified" },
+    "exposure": "none",
+    "environment_flags": []
+  },
+  "software": {
+    "driver_pkg": null,
+    "driver_version": null,
+    "sdk_module": null,
+    "capabilities": ["power.charge"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": null,
+    "default_widgets": [],
+    "alert_templates": []
+  },
+  "commerce": {
+    "suppliers": [],
+    "unit_cost_usd": null
+  }
+}

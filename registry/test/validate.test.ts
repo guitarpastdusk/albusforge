@@ -1,0 +1,197 @@
+import { describe, expect, it } from "vitest";
+import { GOLDEN_BUILDS } from "../scripts/golden-builds";
+import { loadRegistry } from "../scripts/lib/load";
+import { formatIssues, type RegistryInput, validateRegistry } from "../scripts/lib/rules";
+import { goodInput, type Json, partData } from "./fixtures";
+
+const issuesOf = (input: RegistryInput) => validateRegistry(input).issues;
+const rulesOf = (input: RegistryInput) => issuesOf(input).map((i) => i.rule);
+
+/** A copy of the good fixture with one change applied. */
+function broken(change: (input: RegistryInput) => void): RegistryInput {
+  const input = goodInput();
+  change(input);
+  return input;
+}
+
+describe("validateRegistry", () => {
+  it("passes the good fixture", () => {
+    expect(issuesOf(goodInput())).toEqual([]);
+  });
+
+  it("passes the committed registry", () => {
+    const result = validateRegistry({ ...loadRegistry(), goldenBuilds: GOLDEN_BUILDS });
+    expect(formatIssues(result.issues)).toBe("");
+    expect(result.parts.map((p) => p.part.id)).toEqual([
+      "C-001", "E-001", "E-004", "E-005", "L-003", "M-001", "P-001", "P-002", "P-004", "P-005", "V-004", "V-005",
+    ]);
+    // Twelve drafts until footprints land with the fit spike.
+    expect(new Set(result.parts.map((p) => p.part.status))).toEqual(new Set(["draft"]));
+  });
+
+  describe("json and schema", () => {
+    it("reports a file that isn't JSON", () => {
+      const input = broken((i) => {
+        // P-002: nothing else depends on it, so no knock-on issues.
+        i.parts[3] = { ...i.parts[3]!, data: undefined, parseError: "Unexpected token" };
+      });
+      expect(rulesOf(input)).toEqual(["json"]);
+    });
+
+    it.each<[string, (part: Json) => void, string]>([
+      ["voltage_range min > max", (p) => (p.electrical.voltage_range = [5, 3]), "electrical.voltage_range"],
+      ["non-positive dimension", (p) => (p.mechanical.bounding_mm = [20, 0, 5]), "mechanical.bounding_mm.1"],
+      ["I2C address out of range", (p) => (p.electrical.i2c_address = "0x78"), "electrical.i2c_address"],
+      ["upper-case I2C address", (p) => (p.electrical.i2c_address = "0x7A"), "electrical.i2c_address"],
+      ["deprecated without successor", (p) => (p.status = "deprecated"), "successor"],
+      ["id letter doesn't match category", (p) => (p.category = "visual"), "id"],
+      ["active with no supplier", (p) => (p.commerce.suppliers = []), "commerce.suppliers"],
+      ["active with no bounding box", (p) => (p.mechanical.bounding_mm = null), "mechanical.bounding_mm"],
+      ["idle current above active", (p) => (p.electrical.current_draw_ma = { idle: 2, active: 1 }), "electrical.current_draw_ma"],
+      ["bad semver", (p) => (p.version = "1.0"), "version"],
+      ["unknown key", (p) => (p.electrical.voltage = 3.3), "electrical"],
+      ["unknown environment flag", (p) => (p.mechanical.environment_flags = ["fridge"]), "mechanical.environment_flags.0"],
+      ["i2c part without an address", (p) => (p.electrical.i2c_address = null), "electrical.i2c_address"],
+    ])("rejects %s", (_, change, path) => {
+      const input = broken((i) => change(partData(i, "P-001")));
+      const issues = issuesOf(input);
+      expect(issues.map((i) => i.rule)).toEqual(expect.arrayContaining(["schema"]));
+      expect(issues.some((i) => i.message.startsWith(`${path}:`))).toBe(true);
+    });
+
+    it("rejects an energy part without supply", () => {
+      const input = broken((i) => delete partData(i, "E-001").electrical.supply);
+      expect(issuesOf(input)).toContainEqual(expect.objectContaining({ rule: "schema", message: expect.stringContaining("energy parts declare supply") }));
+    });
+
+    it("rejects a connector with pins out of order", () => {
+      const input = broken((i) => {
+        (i.connectors[0]!.data as Json).pins[1].n = 3;
+      });
+      expect(rulesOf(input)).toContain("schema");
+    });
+  });
+
+  it("folder-id: folder name must equal the id", () => {
+    const input = broken((i) => {
+      i.parts[0] = { ...i.parts[0]!, name: "C-009", path: "parts/C-009/part.json" };
+    });
+    expect(rulesOf(input)).toEqual(["folder-id"]);
+  });
+
+  it("connector-name: file name must equal the id", () => {
+    const input = broken((i) => {
+      i.connectors.push({ ...i.connectors[0]!, name: "hsx-3pin-v2", path: "connectors/hsx-3pin-v2.json" });
+    });
+    expect(rulesOf(input)).toEqual(["connector-name"]);
+  });
+
+  it("duplicate-version: one (id, version) per registry", () => {
+    const input = broken((i) => {
+      i.parts.push({ ...i.parts[0]!, data: structuredClone(i.parts[0]!.data) });
+    });
+    expect(rulesOf(input)).toEqual(["duplicate-version"]);
+  });
+
+  describe("footprint", () => {
+    it("requires the footprint file for active parts, not drafts", () => {
+      const input = broken((i) => {
+        i.footprintExists = () => false;
+      });
+      const issues = issuesOf(input);
+      expect(issues.map((i) => i.rule)).toEqual(["footprint", "footprint", "footprint"]);
+      expect(issues.map((i) => i.file)).toEqual(["parts/C-001/part.json", "parts/E-001/part.json", "parts/P-001/part.json"]);
+    });
+
+    it("requires it for deprecated parts too", () => {
+      const input = broken((i) => {
+        i.footprintExists = (dir) => dir !== "P-002";
+        Object.assign(partData(i, "P-002"), { status: "deprecated", successor: "P-001" });
+        partData(i, "P-002").mechanical.bounding_mm = [6, 6, 30];
+        partData(i, "P-002").commerce = { suppliers: [{ vendor: "adafruit", sku: "381", url: "https://www.adafruit.com/product/381" }], unit_cost_usd: 9.95 };
+      });
+      expect(rulesOf(input)).toContain("footprint");
+    });
+  });
+
+  it("connector-unknown: the connector must have a file", () => {
+    const input = broken((i) => (partData(i, "P-001").electrical.connector = "grove-4pin-v1"));
+    expect(rulesOf(input)).toEqual(["connector-unknown"]);
+  });
+
+  it("connector-interface: the connector must carry the part's interface", () => {
+    const input = broken((i) => (partData(i, "P-001").electrical.connector = "hsx-3pin-v1"));
+    expect(rulesOf(input)).toEqual(["connector-interface"]);
+  });
+
+  it("successor-unknown: successor must be a known part", () => {
+    const input = broken((i) => Object.assign(partData(i, "P-001"), { status: "retired", successor: "P-099" }));
+    expect(rulesOf(input)).toEqual(["successor-unknown"]);
+  });
+
+  it("conflict-unknown: conflicts must name known parts", () => {
+    const input = broken((i) => (partData(i, "P-001").electrical.conflicts = ["P-099"]));
+    expect(rulesOf(input)).toEqual(["conflict-unknown"]);
+  });
+
+  describe("requires-unprovided", () => {
+    it("flags a requirement nothing provides", () => {
+      const input = broken((i) => (partData(i, "P-001").electrical.requires = ["bus.i2c", "bus.spi"]));
+      expect(issuesOf(input)).toEqual([expect.objectContaining({ rule: "requires-unprovided", message: expect.stringContaining("bus.spi") })]);
+    });
+
+    it("doesn't count a retired provider", () => {
+      const input = broken((i) => (partData(i, "C-001").status = "retired"));
+      expect(rulesOf(input)).toContain("requires-unprovided");
+    });
+  });
+
+  it("capability-unit: read.* capabilities need a unit suffix", () => {
+    const input = broken((i) => (partData(i, "P-001").software.capabilities = ["read.temperature_c", "read.temperature"]));
+    expect(rulesOf(input)).toEqual(["capability-unit"]);
+  });
+
+  describe("i2c-clash", () => {
+    const addClash = (i: RegistryInput) => {
+      const copy = structuredClone(i.parts.find((p) => p.name === "P-001")!);
+      copy.name = "P-003";
+      copy.path = "parts/P-003/part.json";
+      (copy.data as Json).id = "P-003";
+      i.parts.push(copy);
+    };
+
+    it("flags two parts on the same default address", () => {
+      const issues = issuesOf(broken(addClash));
+      expect(issues).toEqual([expect.objectContaining({ rule: "i2c-clash", message: expect.stringContaining("P-001, P-003") })]);
+    });
+
+    it("accepts a clash that is noted", () => {
+      const input = broken((i) => {
+        addClash(i);
+        i.i2cShared.data = [{ address: "0x77", parts: ["P-001", "P-003"], note: "P-003 ships with its jumper cut to 0x76" }];
+      });
+      expect(issuesOf(input)).toEqual([]);
+    });
+
+    it("flags a note that no longer matches", () => {
+      const input = broken((i) => {
+        i.i2cShared.data = [{ address: "0x68", parts: ["P-001", "P-003"], note: "stale" }];
+      });
+      expect(rulesOf(input)).toEqual(["i2c-clash"]);
+    });
+  });
+
+  it("golden-build: every golden-build capability must be provided", () => {
+    const input = broken((i) => {
+      i.goldenBuilds = [{ id: "x", name: "Presence alert", requires: ["read.motion_bool"], optional: [] }];
+    });
+    expect(issuesOf(input)).toEqual([expect.objectContaining({ rule: "golden-build", message: expect.stringContaining("read.motion_bool") })]);
+  });
+
+  it("formats issues with file and rule", () => {
+    const input = broken((i) => (partData(i, "P-001").electrical.connector = "grove-4pin-v1"));
+    expect(formatIssues(issuesOf(input))).toBe(
+      '  parts/P-001/part.json\n    [connector-unknown] connector "grove-4pin-v1" has no file in connectors/',
+    );
+  });
+});

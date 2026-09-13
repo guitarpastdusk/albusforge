@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - registry
 
 # Install scripts are denied unless listed. unrs-resolver's only fetches a
 # fallback binary; the prebuilt optional dependency already covers our platforms.

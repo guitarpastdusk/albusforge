@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "V-005",
+  "version": "1.0.0",
+  "name": "BH1750 Ambient Light Sensor",
+  "category": "visual",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "i2c",
+    "connector": "hsx-i2c-4pin-v1",
+    "voltage_range": [3.0, 5.0],
+    "current_draw_ma": { "idle": 0.00001, "active": 0.12 },
+    "requires": ["bus.i2c"],
+    "conflicts": [],
+    "i2c_address": "0x23"
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [25.3, 17.7, 4.5],
+    "mount": { "type": "unspecified" },
+    "exposure": "window",
+    "environment_flags": ["needs-light", "temp:-40..85C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-bh1750",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/light",
+    "capabilities": ["read.illuminance_lux"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "illuminance.v1",
+    "default_widgets": ["line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "4681", "url": "https://www.adafruit.com/product/4681" }],
+    "unit_cost_usd": 4.5
+  }
+}

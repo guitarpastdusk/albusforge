@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "P-005",
+  "version": "1.0.0",
+  "name": "Capacitive Soil Moisture Probe (DFRobot SEN0193)",
+  "category": "physical",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "adc",
+    "connector": "hsx-3pin-v1",
+    "voltage_range": [3.3, 5.5],
+    "current_draw_ma": { "idle": 5, "active": 5 },
+    "requires": ["gpio.adc"],
+    "conflicts": [],
+    "i2c_address": null
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": null,
+    "mount": { "type": "unspecified" },
+    "exposure": "probe-external",
+    "environment_flags": []
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-soil-capacitive",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/soil",
+    "capabilities": ["read.soil_moisture_pct"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "soil_moisture.v1",
+    "default_widgets": ["gauge", "line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [],
+    "unit_cost_usd": 5.9
+  }
+}

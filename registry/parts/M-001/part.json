@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "M-001",
+  "version": "1.0.0",
+  "name": "SG90 Micro Servo",
+  "category": "motion",
+  "status": "draft",
+  "successor": null,
+  "electrical": {
+    "interface": "pwm",
+    "connector": "hsx-3pin-v1",
+    "voltage_range": [4.8, 6.0],
+    "current_draw_ma": { "idle": 600, "active": 600 },
+    "requires": ["gpio.pwm", "power.5v"],
+    "conflicts": [],
+    "i2c_address": null
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [32.0, 12.2, 31.0],
+    "mount": { "type": "unspecified" },
+    "exposure": "none",
+    "environment_flags": ["moving-parts", "temp:0..50C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-servo-pwm",
+    "driver_version": "0.1.0",
+    "sdk_module": "motion/servo",
+    "capabilities": ["act.position_deg"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "position.v1",
+    "default_widgets": ["stat"],
+    "alert_templates": []
+  },
+  "commerce": {
+    "suppliers": [],
+    "unit_cost_usd": null
+  }
+}

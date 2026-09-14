@@ -23,10 +23,41 @@ each reboot waits for a new synchronization. Capture waits for writable SD.
 SDMMC uses CMD38, CLK39, D0 40 in 1-bit mode at probing speed. The runtime never
 formats the card. `/albus-observations` contains one fsync'd metadata-plus-JPEG
 record per observation, published by rename. Metadata has CRC32 integrity;
-the payload SHA256 is checked before upload. Startup removes incomplete `.part`
+the payload SHA256 is checked before upload. After card ownership validation,
+startup removes incomplete `.part`
 files and rejects corrupted record headers. The queue is bounded by 64 MiB,
 672 frames, and seven days. Oldest unsent records are evicted; the active upload
 is excluded. Queue limits include record-header bytes.
+
+The root `/albus-observation-owner` marker binds both spool and quarantine to the
+exact observation URL, device UUID, capability ID, payload schema and profile
+ID/version. It excludes bearer tokens and build identity, allowing credential
+rotation and firmware rebuilds for the same destination. One shared marker keeps
+the existing 64 MiB queue and separate 8 MiB quarantine limits; identities do not
+create additional per-device storage namespaces.
+
+First initialization is allowed only when both directories are absent or empty.
+A missing marker beside any existing entry (including legacy `.part` files), a
+foreign marker, or a corrupt/truncated marker blocks all record scanning,
+capture persistence and upload. Existing media is preserved. `/snapshot` and
+Wi-Fi setup remain available; `/health` reports `storage_ready=false` and a
+bounded `spool_owner_unbound`, `spool_owner_mismatch`, `spool_owner_corrupt` or
+`spool_owner_io` reason. Ownership is revalidated before task I/O and after HTTP
+before deletion/quarantine; it is never inferred from a cached ready flag.
+
+Marker creation is exclusive and fsync'd before any record can be stored. A
+failed/partial write is not repaired or deleted. ESP-IDF FAT uses file `f_sync`
+(including directory entry and device sync); it does not support POSIX directory
+fds. Missing/corrupt markers after actual card/controller power loss still fail
+closed, but physical durability must be measured. The writable-card probe runs
+only after ownership validation and uses an exclusive `.write-check` file; an
+existing file is preserved and blocks readiness rather than being overwritten.
+
+To recover a blocked card, preserve a private copy of its marker and both folders.
+Restore the original device/destination configuration to resume its owned queue,
+or obtain separate approval to reset the preserved spool and marker together.
+Deleting only a marker never authorizes adopting legacy media. Do not copy queued
+photos into another device's owned folders or publish private card contents.
 
 Capture and upload run in separate tasks. Each pending record keeps the same
 UUIDv4, capture time, bytes and SHA256 for every attempt. HTTPS verifies the

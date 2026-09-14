@@ -15,7 +15,7 @@ Capture interval is **900 seconds (15 minutes)**; existing numeric v1 is retaine
 | C07 ingestion | Real HTTP/PostgreSQL mock photos and numeric readings; replay, conflict, quotas, credential/capability changes, outage recovery | Repeated actual HTTPS staging posts and stored-object checks |
 | C08 maintenance | Bounded reconciliation, expiry, durable deletion, generation checks, orphan scans, health/backlog monitoring; quota/recovery tests | Deployed job execution, successful heartbeat, schedule and expiry acceptance |
 | C09 native capture | Pinned ESP-IDF camera candidate, accepted-plan resolver/dispatch and packaged native compiler CI; 900-second monotonic schedule; approval pins default empty | Board image quality and sustained timing evidence |
-| C10 queue/uploader | Bounded SD records/quarantine, clock/TLS/retry/ack policies and hotspot; portable filesystem tests | 45-minute Wi-Fi outage, reboot, physical SD/power-loss recovery |
+| C10 queue/uploader | Bounded SD records/quarantine with durable endpoint/device/capability ownership binding, clock/TLS/retry/ack policies and hotspot; portable filesystem tests | 45-minute Wi-Fi outage, reboot, physical SD/power-loss recovery |
 | C11 gateway | Session/tenant-checked private content/history and independent capability status; focused database tests | Deployed browser/session/tenant checks |
 | C12 portal | Camera-only/mixed setup, latest/history/source switching and expired-image fallback; 686 web tests pass | Desktop/mobile checks with actual staging captures |
 | C13 delivery | Disabled activation flags, schema readiness, worker packaging, observation/compiler deploy and promotion gates, private bench and remote-job staging acceptance tools | Merged source/native/browser CI and staging schema/runtime deployment passed; activation and rollback rehearsal remain |
@@ -73,10 +73,11 @@ merging these changes; the original 17-create/2-update plan is no longer current
 
 ## Ownership and activation
 
-The apply coordinator is the explicit roster in
-[ARCHITECTURE §12.3.1](ARCHITECTURE.md#1231-who-applies-terraform). PR79 does not
-transfer that role. A request to reassign this session was presented to the user;
-no reassignment or cloud apply is inferred from its pending state.
+The user explicitly retained **Claude `albusforge-44`** as the Terraform apply
+coordinator, consistent with the roster in
+[ARCHITECTURE §12.3.1](ARCHITECTURE.md#1231-who-applies-terraform). No reassignment
+is authorized. Source changes and read-only plans do not authorize another
+session to apply infrastructure.
 
 Follow [the infrastructure runbook](SENSOR-OBSERVATION-INFRA.md): apply disabled
 resources, migrate, deploy immutable runtime images, execute storage acceptance,

@@ -5,6 +5,7 @@ on:
     paths:
       - 'apps/web/**'
       - 'apps/gateway/**'
+      - 'apps/cloudlink/**'
       - 'packages/db/**'
       - 'packages/schema/**'
       - 'registry/**'
@@ -19,6 +20,7 @@ on:
     paths:
       - 'apps/web/**'
       - 'apps/gateway/**'
+      - 'apps/cloudlink/**'
       - 'packages/db/**'
       - 'packages/schema/**'
       - 'registry/**'

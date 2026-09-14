@@ -1,4 +1,5 @@
 import "server-only";
+import { assertActionOrigin } from "./action-origin";
 import { cookies, headers } from "next/headers";
 import { notFound, unstable_rethrow } from "next/navigation";
 import { connection } from "next/server";
@@ -19,7 +20,7 @@ function internalAuth(): "metadata" | "none" {
 }
 
 /** A transport whose upstream Cookie header comes from `cookieHeader` (filtered to the allowlist). */
-async function transportFor(cookieHeader: string | null): Promise<Transport> {
+async function transportFor(cookieHeader: string | null, actionOrigin = false): Promise<Transport> {
   // Render per request. Nothing environment-specific may be baked in at build
   // time: the image promoted to prod is the one staging ran (ADR 0001). This
   // also means `next build` never fetches, so CI needs no gateway.
@@ -43,7 +44,7 @@ async function transportFor(cookieHeader: string | null): Promise<Transport> {
 
   return fetchTransport(
     base,
-    gatewayHeaders(
+    { ...gatewayHeaders(
       {
         host: incoming.get("host"),
         forwardedFor: incoming.get("x-forwarded-for"),
@@ -51,7 +52,7 @@ async function transportFor(cookieHeader: string | null): Promise<Transport> {
       },
       token,
       trustedProxyHops,
-    ),
+    ), ...(actionOrigin ? { origin: new URL(base).origin } : {}) },
   );
 }
 
@@ -84,6 +85,13 @@ export async function apiPost<S extends z.ZodType>(path: string, schema: S, body
 
 export async function apiPatch<S extends z.ZodType>(path: string, schema: S, body: unknown): Promise<z.infer<S>> {
   return request(await transport(), "PATCH", path, schema, body);
+}
+
+/** Only call from a Server Action: validate its browser origin, then identify the server's configured gateway origin. */
+export async function apiMutationAction<S extends z.ZodType>(method: "POST" | "PUT" | "PATCH", path: string, schema: S, body: unknown): Promise<z.infer<S>> {
+  const incoming = await headers();
+  assertActionOrigin(incoming.get("origin"), incoming.get("host"));
+  return request(await transportFor(await credentials(), true), method, path, schema, body);
 }
 
 /**

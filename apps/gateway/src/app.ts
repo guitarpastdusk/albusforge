@@ -1,3 +1,4 @@
+import {registerFirmwareRoutes,type FirmwareOptions} from "./firmware-routes";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_PART_STATUSES,
@@ -35,6 +36,7 @@ declare module "fastify" {
 export interface AppOptions {
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
+  firmware?: FirmwareOptions;
   sensorAsk?: SensorAskClient | null;
   parts: PartsStore;
   /** Resolves when the database answers; rejects otherwise. */
@@ -68,7 +70,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, firmware = {enabled:false}, sensorAsk = null }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -192,6 +194,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   if (telemetryPool) {
     registerTelemetryReads(app, telemetryPool);
     registerDeviceSetup(app, telemetryPool);
+    registerFirmwareRoutes(app,telemetryPool,firmware);
     registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
   }

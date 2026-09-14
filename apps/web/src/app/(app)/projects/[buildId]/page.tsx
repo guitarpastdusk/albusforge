@@ -19,6 +19,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ buildI
       <div className="mt-[18px]">
         <PageTitle kicker={buildStatus[build.display_status].label} title={build.name} description={build.description} />
       </div>
+      <Link href={`/projects/${buildId}/firmware`} className="mt-5 inline-block text-coral-deep underline">Firmware versions and downloads</Link>
       <ProjectOverview build={build} />
     </PageContainer>
   );

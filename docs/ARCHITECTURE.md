@@ -159,7 +159,6 @@ flowchart TB
         direction LR
         IN["intake"]
         MA["matcher"]
-        CG["codegen<br/><i>min 1, BullMQ consumer</i>"]
         FU["fulfillment"]
         CL["cloudlink"]
         MK["marketplace"]
@@ -167,11 +166,11 @@ flowchart TB
 
     subgraph JOBS["Cloud Run Jobs"]
         BG["workers/bodygen<br/>Python + CadQuery"]
-        FW["workers/fwbuild<br/>PlatformIO"]
+        FW["apps/codegen / fwbuild<br/>ESP-IDF"]
     end
 
-    GW --> IN & MA & CG & FU & CL & MK
-    CG -->|"run.jobs.run()"| FW
+    GW --> IN & MA & FU & CL & MK
+    GW -->|"durable PG queue + run.jobs.run()"| FW
     GW -->|"job plugin"| BG
 
     PKG["<b>packages</b> — shared<br/>schema · db · llm · queue · storage · events"]
@@ -188,7 +187,7 @@ flowchart TB
     classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
     classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
     class GW loc
-    class IN,MA,CG,FU,CL,MK gen
+    class IN,MA,FU,CL,MK gen
     class BG,FW phys
     class PKG comm
     class REG mot
@@ -549,51 +548,11 @@ A **sixth constraint is implied by the compliance block** (§9): generation rest
 
 ### 7.3 Codegen and the compile gate
 
-B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations; trusted plan acceptance, firmware generation and production credential handoff are assigned work, not completed capabilities. That ledger separates software verification from the required registry and physical hardware evidence.
+B6 now implements a credential-free firmware pipeline in `apps/codegen`: accepted persisted plan → bounded SDK-only application → isolated pinned ESP-IDF 5.5.3 compile → immutable verified artifacts. PostgreSQL queues and fences jobs; a dedicated `fwbuild` Cloud Run Job executes compilation, outside the gateway and Cloudlink failure domains. This replaces the earlier proposed PlatformIO/BullMQ/LLM execution shape for the first candidate. API admission, current-plan publication checks, bounded retries and artifact downloads are implemented; infrastructure deployment is separate.
 
-Invariants:
+The first software candidate is ESP32-S3 N8R8 with USB power and BH1750 on GPIO8/GPIO9. All production registry/profile eligibility remains gated by reviewed evidence; real compilation does not establish physical compatibility. The runtime uses a separate B8 configuration partition and durable one-packet sequence/retry state. Compiled artifacts contain no credentials. Instruction edits currently support increasing the sampling interval within the accepted plan's bounds, with versioned source comparison; arbitrary source or LLM regeneration is future work.
 
-- Generated app code may import **only `hsx-sdk` headers**. A lint step fails the bundle if raw driver headers appear.
-- **Compile gate:** enqueue `fwbuild`; on failure, regenerate with the error text in context, max three attempts, then fall back to the per-capability template in `sdk/templates`.
-- Output bundle is a PlatformIO project — template + generated `src/app.cpp` + pinned lib deps — in object storage, referenced by `code_bundles`.
-
-Execution shape on Cloud Run (Jobs are pull-free and must be triggered):
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant GW as gateway
-    participant CG as codegen<br/>(min 1)
-    participant LLM as packages/llm
-    participant FW as fwbuild Job
-    participant GCS as Cloud Storage
-
-    GW->>CG: enqueue build job (BullMQ)
-    CG->>LLM: generate app layer from BuildPlan
-    LLM-->>CG: src/app.cpp
-    CG->>CG: lint — only hsx-sdk headers allowed
-    CG->>GCS: put bundle
-    CG->>FW: run.jobs.run() with env overrides
-    FW->>GCS: pull bundle + warm PlatformIO cache
-
-    alt compile succeeds
-        FW->>GCS: put artifact
-        FW-->>CG: PATCH compile_status = ok
-        CG-->>GW: build.code.compiled
-    else compile fails (max 3 attempts)
-        FW-->>CG: PATCH errors
-        CG->>LLM: regenerate with error text in context
-        Note over CG,LLM: per-build token ceiling enforced here —<br/>3 retries x large context is the main cost risk
-    else still failing after 3
-        CG->>CG: fall back to sdk/templates per-capability
-    end
-```
-
-`codegen` is the only `min-instances=1` worker. `bodygen` is triggered the same way from a small consumer inside the gateway's job plugin — one always-warm worker, not one per queue.
-
-**Cost risk:** three compile-gate retries × a large context per build is the dominant LLM spend. Mitigated by a per-build token ceiling in `packages/llm`, with budget alerts live from M2 rather than after the first spike.
-
-**Missing:** self-test is a third generated block (§10) and nothing in codegen produces it today.
+The project firmware page shows accepted-plan eligibility, compile status, retry, previous/current source and verified downloads; viewers cannot mutate. It links passed current versions to the separate setup/configuration flow. See [Firmware pipeline](FIRMWARE-PIPELINE.md) for the exact API, toolchain, installer, security, deployment contract and verification limits, and [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md) for cross-track acceptance.
 
 ### 7.4 Bodygen — enclosure generation
 
@@ -764,11 +723,11 @@ This is simultaneously the strongest differentiator — it answers the complianc
 | API services | TypeScript, Node 20, Fastify, zod — one style everywhere |
 | Monorepo | pnpm workspaces + turborepo |
 | Database | PostgreSQL 16 via Drizzle, single cluster, schema per domain |
-| Cache and queues | Redis 7, BullMQ — CAD and codegen run as queued jobs |
+| Cache and queues | Firmware uses a durable PostgreSQL queue (§7.3); Redis/BullMQ remain proposed for CAD |
 | Object storage | S3-compatible; MinIO in dev |
 | LLM | Anthropic API behind a thin `packages/llm` wrapper; model name from env, never hard-coded |
 | CAD | Python 3.12 + CadQuery, containerized, queue-invoked |
-| Firmware | PlatformIO, ESP32-S3 only for MVP; compile gate in `workers/fwbuild` |
+| Firmware | Pinned ESP-IDF 5.5.3, explicit ESP32-S3/BH1750 software candidate; dedicated `apps/codegen` compile job (§7.3) |
 | Device ingest | MQTT (EMQX) → ingest → partitioned Postgres |
 | Auth | ~~Lucia session cookies + magic link~~ — 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
 | Web portal | Next.js App Router in `apps/web`, a client of the gateway only ([`PORTAL.md`](PORTAL.md)) |
@@ -783,11 +742,10 @@ Runtime is **Cloud Run services and jobs, no GKE**. Managed GCP wherever it exis
 | --- | --- |
 | `apps/gateway` | Cloud Run, public, min instances 1 — SSE and cold-start UX |
 | `intake`, `matcher`, `marketplace` | Cloud Run, internal ingress, scale to zero |
-| `codegen` | Cloud Run worker, min 1, CPU always allocated — the always-on BullMQ consumer |
 | `fulfillment` | Cloud Run internal; mock adapters for MVP |
 | `cloudlink` | Standalone HTTPS ingest Cloud Run service (ADR 0003); small direct PostgreSQL pool, separate NEG/Armor, prod warm floor and connection-budgeted instance cap (§7.6). Terraform owned by infra; MQTT deferred |
 | `workers/bodygen` | Cloud Run Job, 2 vCPU / 4 GiB, Python + CadQuery |
-| `workers/fwbuild` | Cloud Run Job, 4 vCPU / 8 GiB, PlatformIO, cache warmed from GCS |
+| `apps/codegen` / `fwbuild` | Dedicated Cloud Run Job contract: 2 vCPU / 4 GiB, pinned ESP-IDF, PostgreSQL queue/pool 2, immutable GCS artifacts; deployment owned by infra |
 | Postgres 16 | Cloud SQL, private IP, direct VPC egress, no proxy sidecar |
 | Redis 7 | Memorystore Basic 1 GB — **`maxmemory-policy=noeviction` or BullMQ corrupts** |
 | S3 / MinIO | Cloud Storage with V4 signed URLs; MinIO stays for dev |
@@ -976,7 +934,7 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M1 — Spine** | `packages/schema`, `packages/db` + migrations, registry with 12 parts + validator and loader, gateway skeleton with `/v1/parts` | Cloud SQL; migration Job wired into the deploy workflow; `registry/scripts/load.ts` as a Cloud Run Job on deploy |
 | **M2 — Understand** | intake (extract, clarify, scope filter) with fixture tests; `POST /v1/builds` produces a spec | `packages/llm` with provider abstraction; key in Secret Manager; **cost logging and budget alerts live before the first real prompt runs** |
 | **M3 — Solve** | solver, power math, rank stub, plan endpoint, infeasibility explanations | none — pure deterministic code, fully unit-testable locally, highest-value tests in the project |
-| **M4 — Code** | `hsx-rt`, `hsx-sdk`, four drivers, codegen, compile gate, code endpoints | `fwbuild` container; Cloud Run Job + `run.jobs.run()` trigger path; Memorystore and BullMQ; GCS artifact bucket and signed URLs; PlatformIO cache |
+| **M4 — Code** | First ESP32-S3/BH1750 runtime, SDK, bounded code edits, compile gate and versioned code endpoints implemented in B6; other drivers and physical acceptance remain | Dedicated `fwbuild` Cloud Run Job and invocation/recovery scheduling; immutable GCS artifacts and authorized verified downloads (§7.3); infra deployment remains separate |
 | **M5 — Body** | bodygen for box enclosures, lint, QR, body endpoints, fridge golden build passing e2e | CadQuery image (large — budget a day), bodygen Cloud Run Job, STEP/STL to GCS |
 | **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
 | **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. The bounded single-sensor Ask slice is brought forward in the sensor cloud rollout; the broader intelligence layer remains later work. |
@@ -1027,8 +985,8 @@ flowchart LR
 | Risk | Mitigation |
 | --- | --- |
 | CadQuery image size and build time | pin a prebuilt CadQuery base; layer only project code |
-| PlatformIO cold compiles, 3–8 min | three cold retries blow the gate past 20 min — GCS-warmed `.platformio` cache + pre-warmed toolchain layer |
-| Always-on BullMQ worker | the one thing preventing full scale-to-zero; accept for MVP, revisit Cloud Tasks if $20/mo matters |
+| Firmware cold compiles | Pinned toolchain image, 600-second compile deadline and three fenced attempts; one job handles one queued request |
+| Firmware dispatch recovery | Durable PostgreSQL queue requires scheduled recovery invocations after dispatch failure; no always-on firmware consumer |
 | Single EMQX instance | SPOF for all telemetry; MIG auto-restart now, cluster at real volume |
 | Migration races on Cloud Run | migrations run **only** in the pre-deploy Job |
 | Timeseries drift | all timeseries access confined to `packages/db`, no raw SQL in services |
@@ -1057,7 +1015,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 
 | Decision | The fork |
 | --- | --- |
-| **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
+| **Firmware target** | B6 implements pinned ESP-IDF C/C++ with a bounded SDK app for the first candidate (§7.3). ESPHome remains a separate product decision; it is not an implemented alternate compiler. |
 | ~~**Tenant or build as the root**~~ | **Resolved:** tenant created at sign-up; orders and devices take it from the build. See [ADR 0009](adr/0009-tenant-created-at-sign-up.md) |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
 | ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |

@@ -2,6 +2,7 @@
  * Never log config, authentication headers, SSIDs or packet bodies. */
 #include "hsx-sdk.h"
 #include "hsx-profile.h"
+#include "hsx-build.h"
 #include "hsx-wire.h"
 #include "bh1750.h"
 #include <math.h>
@@ -36,9 +37,11 @@ static void wifi_event(void *arg,esp_event_base_t base,int32_t id,void *data) {
   if(base==WIFI_EVENT&&id==WIFI_EVENT_STA_START)esp_wifi_connect();
 }
 static char *nvs_string(nvs_handle_t store,const char *key,size_t max) {
-  size_t size=0;if(nvs_get_str(store,key,NULL,&size)!=ESP_OK||size>max)return NULL;
-  char *s=malloc(size);if(!s)return NULL;
-  if(nvs_get_str(store,key,s,&size)!=ESP_OK){free(s);return NULL;}return s;
+  size_t size=0;esp_err_t result=nvs_get_str(store,key,NULL,&size);
+  if(result==ESP_ERR_NVS_NOT_FOUND)return NULL;
+  if(result!=ESP_OK||size==0||size>max)fail_closed();
+  char *s=malloc(size);if(!s)fail_closed();
+  if(nvs_get_str(store,key,s,&size)!=ESP_OK){free(s);fail_closed();}return s;
 }
 void hsx_run(unsigned interval_s) {
   if(interval_s<10||interval_s>86400)fail_closed();
@@ -50,13 +53,19 @@ void hsx_run(unsigned interval_s) {
   const char *profile=string(cfg,"profile_id",120),*runtime=string(cfg,"runtime",30);
   const char *ssid=string(cfg,"wifi_ssid",32),*password=string(cfg,"wifi_password",63);
   cJSON *start=cJSON_GetObjectItemCaseSensitive(cfg,"seq_start");
+  const char *build=string(cfg,"build_id",36);
+  cJSON *plan_version=cJSON_GetObjectItemCaseSensitive(cfg,"plan_version"),*code_version=cJSON_GetObjectItemCaseSensitive(cfg,"code_version");
+  if(!build||strcmp(build,HSX_BUILD_ID)||!cJSON_IsNumber(plan_version)||plan_version->valuedouble!=HSX_PLAN_VERSION||!cJSON_IsNumber(code_version)||code_version->valuedouble!=HSX_CODE_VERSION)fail_closed();
   if(!dev||strlen(dev)!=36||!token||strlen(token)!=43||!url||strncmp(url,"https://",8)||!profile||strcmp(profile,HSX_PROFILE_ID)||!runtime||strcmp(runtime,HSX_RUNTIME)||!ssid||!password||!cJSON_IsNumber(start)||start->valuedouble<0||start->valuedouble>9007199254740990.0||floor(start->valuedouble)!=start->valuedouble)fail_closed();
   uint64_t seq=(uint64_t)start->valuedouble;
   char *saved=nvs_string(store,"state",4096);
+  bool had_state=saved!=NULL;
   cJSON *state=saved?cJSON_Parse(saved):cJSON_CreateObject();free(saved);
-  if(!state)fail_closed();
+  if(!cJSON_IsObject(state))fail_closed();
   cJSON *saved_seq=cJSON_GetObjectItemCaseSensitive(state,"next_seq");
-  if(saved_seq) {if(!cJSON_IsNumber(saved_seq)||saved_seq->valuedouble<seq||saved_seq->valuedouble>9007199254740991.0)fail_closed();seq=(uint64_t)saved_seq->valuedouble;}
+  if(had_state&&!saved_seq)fail_closed();
+  if(cJSON_HasObjectItem(state,"packet")&&!string(state,"packet",2048))fail_closed();
+  if(saved_seq) {if(!cJSON_IsNumber(saved_seq)||saved_seq->valuedouble<seq||saved_seq->valuedouble>9007199254740991.0||floor(saved_seq->valuedouble)!=saved_seq->valuedouble)fail_closed();seq=(uint64_t)saved_seq->valuedouble;}
   connected=xEventGroupCreate();if(!connected)fail_closed();
   ESP_ERROR_CHECK(esp_netif_init());ESP_ERROR_CHECK(esp_event_loop_create_default());esp_netif_create_default_wifi_sta();
   wifi_init_config_t wi=WIFI_INIT_CONFIG_DEFAULT();wi.nvs_enable=0;
@@ -74,6 +83,7 @@ void hsx_run(unsigned interval_s) {
     xEventGroupWaitBits(connected,BIT0,pdFALSE,pdTRUE,portMAX_DELAY);
     const char *pending=string(state,"packet",2048);
     char *packet=pending?strdup(pending):NULL;
+    if(pending&&!packet)fail_closed();
     if(!packet) {
       float lux;time_t now=time(NULL);
       if(now<1700000000||bh1750_read(&lux)!=ESP_OK||!isfinite(lux)) {vTaskDelay(pdMS_TO_TICKS(1000));continue;}
@@ -91,7 +101,7 @@ void hsx_run(unsigned interval_s) {
     if(sent==ESP_OK&&code==202) {
       cJSON_DeleteItemFromObjectCaseSensitive(state,"packet");
       char *serialized=cJSON_PrintUnformatted(state);if(!serialized||nvs_set_str(store,"state",serialized)!=ESP_OK||nvs_commit(store)!=ESP_OK)fail_closed();free(serialized);
-      vTaskDelay(pdMS_TO_TICKS(interval_s*1000));
+      vTaskDelay(pdMS_TO_TICKS(1000)*interval_s);
     } else if(sent==ESP_OK&&(code==400||code==401||code==403||code==409||code==413))fail_closed();
     else vTaskDelay(pdMS_TO_TICKS(10000));
   }

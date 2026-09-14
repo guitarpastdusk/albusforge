@@ -22,7 +22,7 @@ class InstallerIntegrity(unittest.TestCase):
             (self.root / name).write_bytes(content)
             self.manifest["files"].append({"path": name, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()})
         self.config = {key: value for key, value in self.manifest.items() if key not in ("files", "flash")}
-        self.config.update(device_id="22222222-2222-4222-8222-222222222222", token="a" * 43, ingest_url="https://ingest.example/ingest/v1", seq_start=0)
+        self.config.update(device_id="22222222-2222-4222-8222-222222222222", token="a" * 42 + "A", ingest_url="https://ingest.example/ingest/v1", seq_start=0)
         self.save()
 
     def save(self):

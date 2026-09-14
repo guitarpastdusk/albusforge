@@ -13,11 +13,7 @@ export const DeviceConfigV1 = z.strictObject({
   v: z.literal(1),
   device_id: z.uuid(),
   token: CanonicalToken,
-  ingest_url: z.url().refine(value => {
-    const url = new URL(value);
-    return !url.username && !url.password && !url.search && !url.hash && url.pathname === "/ingest/v1"
-      && (url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)));
-  }, "Expected HTTPS ingestion URL or local loopback test URL"),
+  ingest_url: z.url().regex(/^(https:\/\/[^/?#@\s]+|http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?)\/ingest\/v1$/, "Expected HTTPS ingestion URL or local loopback test URL"),
   seq_start: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   profile_id: z.string().min(1).max(100),
   runtime: Version,

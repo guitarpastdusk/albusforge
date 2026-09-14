@@ -2,7 +2,25 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active activation update — 2026-09-14, 00:28 UTC
+## Active staging closeout update — 2026-09-14, 00:36 UTC
+
+Staging active configuration produced a no-change Terraform plan after activation. Root confirmed pipeline fixture credentials revoked/deleted; the earlier quota credentials were separately removed and cleanup verified. The provider SQL/log audit remains the single request `520e1c51-286e-45b1-9173-95208454e904`, recorded cost $0.000386; no additional provider call is implied by this update.
+
+Independent read-only schedule observation from 00:27–00:31 UTC confirmed three automatically dispatched rollups completed:
+
+| Execution | Created UTC | Completed UTC | Result |
+| --- | --- | --- | --- |
+| `telemetry-rollup-l5d9n` | 00:27:00.945859 | 00:28:22.114425 | Succeeded, one task |
+| `telemetry-rollup-ctq2m` | 00:28:04.048863 | 00:30:38.164025 | Succeeded, one task |
+| `telemetry-rollup-rp9sc` | 00:29:04.885284 | 00:30:40.300378 | Succeeded, one task |
+
+Scheduler attempt logs recorded HTTP 200, while separate Cloud Run terminal conditions established completion. Correlated health logs reported `dirty_hours=0`, `oldest_dirty_seconds=0`, `default_rows=0` for each execution, using the app-role rollup service account and telemetry image `a39b4c21997137acefb31e34a7f92dd78f98977414bf2bb018f07d56d68c0d88`. Positive heartbeat points were observed after activation. Execution elapsed times of approximately 81–154 seconds demonstrate overlap; this bounded check is not a throughput certification. A SQL sample at 00:30 UTC showed two backends and CPU 12.20%; sampled metrics can miss short peaks.
+
+Both staging schedules and all 13 sensor alert policies were enabled in the 00:29:33 UTC inventory. The daily maintenance schedule is 00:05 UTC; its prior successful manual run and heartbeat do not establish an automatic daily execution in this observation window. Later minute work was still starting at the cutoff.
+
+Root completed production's initial apply (54 creates, two updates) and a follow-up normalization of two scheduler resources. Production convergence verification and runtime promotions remain pending; infrastructure provisioning is not production acceptance. The user explicitly authorized a notification test and root started it; incident delivery, recovery and recipient receipt have no completed outcome recorded here. Keep this rollout PR draft until production closeout and the remaining evidence are recorded. No physical-device or backend telemetry SSE acceptance is claimed.
+
+## Earlier activation update — 2026-09-14, 00:28 UTC
 
 Root applied staging model activation and schedule activation successfully. The current staging variable file now records `ask_model_enabled=true`, `ask_model=claude-haiku-4-5`, `telemetry_schedules_enabled=true` and SQL connection alert threshold 37, matching the applied private activation input. Both schedules and five schedule-dependent alerts are enabled. Actual automatic execution observation remains pending; enabled configuration alone does not prove scheduled processing.
 

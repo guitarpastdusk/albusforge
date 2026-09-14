@@ -14,6 +14,19 @@ export interface DeviceChatClient {
 /** A tool loop can run several model calls, so the body can be larger than the classifier's. */
 const MAX_RESPONSE_BYTES = 131072;
 
+/** The upstream's own error code, accepted only from a fixed set. Its message is never read. */
+const UpstreamCode = z.enum(["DAILY_LIMIT", "BUSY"]);
+async function upstreamCode(response: Response): Promise<"DAILY_LIMIT" | "BUSY" | undefined> {
+  try {
+    const body = await response.text();
+    if (body.length > 2048) return undefined;
+    const parsed = UpstreamCode.safeParse((JSON.parse(body) as { error?: { code?: unknown } }).error?.code);
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function httpDeviceChatClient(url: string, authHeader: AuthHeader, fetchImpl: typeof fetch = fetch): DeviceChatClient {
   const endpoint = new URL("/v1/converse", url);
   return {
@@ -28,12 +41,18 @@ export function httpDeviceChatClient(url: string, authHeader: AuthHeader, fetchI
         body: JSON.stringify(input),
       });
       if (!response.ok) {
-        await response.body?.cancel();
+        // A spent daily allowance and a momentarily busy service both answer
+        // 429, and telling someone to "try again shortly" when they cannot is
+        // worse than saying so. Read the upstream code — our own closed
+        // vocabulary, never its message — to tell them apart.
+        const upstream = response.status === 429 ? await upstreamCode(response) : (await response.body?.cancel(), undefined);
         const allowed: Record<number, [string, string]> = {
           403: ["FORBIDDEN", "Device access denied"],
           404: ["NOT_FOUND", "Device not found"],
           422: ["TOO_MANY_POINTS", "Ask about a shorter time range"],
-          429: ["BUSY", "Device chat is busy; try again shortly"],
+          429: upstream === "DAILY_LIMIT"
+            ? ["DAILY_LIMIT", "You have reached today's limit for device questions."]
+            : ["BUSY", "Device chat is busy; try again shortly"],
         };
         const error = allowed[response.status];
         if (error) throw new HttpError(response.status, error[0], error[1]);

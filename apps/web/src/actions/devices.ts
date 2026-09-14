@@ -10,6 +10,7 @@ import {
   type ChatMessage,
 } from "@albusforge/schema";
 import { actionFailure } from "@/lib/action-errors";
+import { ApiRequestError } from "@/lib/api/core";
 import type { ActionResult } from "@/lib/action-result";
 import { apiPost } from "@/lib/api/server";
 
@@ -48,6 +49,11 @@ export async function chatWithDevice(
     const answer = await apiPost(routes.devices.chat.path(id.data), DeviceConverseResponse, parsed.data);
     return { ok: true, data: answer };
   } catch (error) {
+    // A spent daily allowance is not a transient failure, and telling someone
+    // to retry in a moment when they cannot is worse than saying so.
+    if (error instanceof ApiRequestError && error.code === "DAILY_LIMIT") {
+      return { ok: false, message: "You’ve reached today’s limit for device questions. The plots below are unaffected." };
+    }
     return actionFailure("chatWithDevice", error, "I can’t reach the service right now. Try again in a moment.");
   }
 }

@@ -12,7 +12,7 @@ import {
 import { DeviceConverseResponse, type ConverseQuery, type DeviceConverseRequest } from "@albusforge/schema";
 import { z } from "zod";
 import { AskError } from "./errors";
-import { LIMITS, type ConverseStore, type DeviceContext } from "./converse-store";
+import { LIMITS, type ChatUsage, type ConverseStore, type DeviceContext } from "./converse-store";
 
 const Time = z.iso.datetime({ offset: true });
 const Channel = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
@@ -134,6 +134,8 @@ export interface ConverseOptions {
   maxTokens: number;
   maxIterations: number;
   write: (line: string) => void;
+  /** Durable per-call spend attribution (`builds.llm_calls`), which the usage dashboard reads. */
+  insert?: (record: LlmCallRecord) => Promise<void>;
 }
 
 const LIMITATIONS = [
@@ -152,7 +154,20 @@ function fallback(context: DeviceContext): string {
   ].join("\n");
 }
 
+/** A loop makes several calls; the turn's cost is their sum, not the last one's. */
+function accumulate(into: ChatUsage, record: LlmCallRecord): void {
+  into.model = record.model;
+  into.modelCalls += 1;
+  into.inputTokens += record.inputTokens;
+  into.outputTokens += record.outputTokens;
+  into.cacheReadTokens += record.cacheReadInputTokens;
+  into.cacheCreationTokens += record.cacheCreationInputTokens;
+  into.costUsd += record.costUsd;
+}
+
 export async function converse(q: DeviceConverseRequest, options: ConverseOptions, signal: AbortSignal): Promise<DeviceConverseResponse> {
+  // Admitted before any paid work: a refused turn must not have cost anything.
+  await options.store.reserve(q, signal);
   const context = await options.store.context(q, signal);
   const queries: ConverseQuery[] = [];
   const record = (query: ConverseQuery) => {
@@ -195,14 +210,23 @@ export async function converse(q: DeviceConverseRequest, options: ConverseOption
   const reply = (mode: DeviceConverseResponse["mode"], text: string) =>
     DeviceConverseResponse.parse({ request_id: q.request_id, device_id: q.device_id, reply: text.slice(0, 8000), mode, queries, limitations: LIMITATIONS });
 
-  if (!options.provider || !options.model) return reply("unavailable", fallback(context));
+  const usage: ChatUsage = { model: null, modelCalls: 0, toolCalls: 0, usageKnown: true,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0 };
+
+  if (!options.provider || !options.model) {
+    await options.store.finish(q, "unavailable", usage, signal);
+    return reply("unavailable", fallback(context));
+  }
 
   const messages: LlmMessage[] = [
     ...q.history.map((turn) => ({ role: turn.role, content: turn.text }) satisfies LlmMessage),
     { role: "user", content: q.question },
   ];
 
-  let usage: LlmCallRecord | undefined;
+  await options.store.started(q, signal);
+  // Inserts are awaited outside the loop: a slow write must not hold a model
+  // call open, and a failed one must not lose the reply that was paid for.
+  const pending: Promise<void>[] = [];
   const outcome = await runToolLoop({
     provider: options.provider,
     model: options.model,
@@ -214,14 +238,21 @@ export async function converse(q: DeviceConverseRequest, options: ConverseOption
     maxTokens: options.maxTokens,
     signal,
     onResponse: (response) => {
-      usage = toRecord({ stage: ROUTE.stage }, response, { buildId: null, tenantId: q.tenant_id, anonOwnerHash: null });
-      const line = JSON.parse(formatLlmCallLine(usage));
+      const call = toRecord({ stage: ROUTE.stage }, response, { buildId: null, tenantId: q.tenant_id, anonOwnerHash: null });
+      accumulate(usage, call);
+      const line = JSON.parse(formatLlmCallLine(call));
       options.write(
         JSON.stringify({ ...line, request_id: q.request_id, tenant_id: q.tenant_id, actor_id: q.actor_id, device_id: q.device_id }) + "\n",
       );
+      if (options.insert) pending.push(options.insert(call).catch(() => { usage.usageKnown = false; }));
     },
     onToolCall: (_name, note) => record(note as ConverseQuery),
   });
+  usage.toolCalls = outcome.toolCalls;
+  await Promise.all(pending);
+  // A loop that ended without a metered response was still charged for by the
+  // provider; recording zero would understate it, so say the usage is unknown.
+  if (outcome.iterations > usage.modelCalls) usage.usageKnown = false;
 
   if (!outcome.ok) {
     options.write(
@@ -236,10 +267,12 @@ export async function converse(q: DeviceConverseRequest, options: ConverseOption
         device_id: q.device_id,
       }) + "\n",
     );
+    await options.store.finish(q, "unavailable", usage, signal);
     return reply("unavailable", fallback(context));
   }
-  void usage;
-  return reply(outcome.toolCalls ? "model" : "no_tool", outcome.text);
+  const mode = outcome.toolCalls ? "model" : "no_tool";
+  await options.store.finish(q, mode, usage, signal);
+  return reply(mode, outcome.text);
 }
 
 export { AskError };

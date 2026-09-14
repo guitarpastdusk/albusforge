@@ -74,3 +74,32 @@ describe("internal device chat client", () => {
     expect(transport).not.toHaveBeenCalled();
   });
 });
+
+it("tells a spent daily allowance apart from a busy service, reading only the upstream code", async () => {
+  const limit = new Response(JSON.stringify({ error: { code: "DAILY_LIMIT", message: "internal wording we never show" } }), { status: 429 });
+  await expect(
+    httpDeviceChatClient("https://ask.internal", async () => undefined, vi.fn<typeof fetch>().mockResolvedValue(limit)).converse(
+      input,
+      new AbortController().signal,
+    ),
+  ).rejects.toMatchObject({ code: "DAILY_LIMIT" });
+
+  const busy = new Response(JSON.stringify({ error: { code: "BUSY", message: "x" } }), { status: 429 });
+  await expect(
+    httpDeviceChatClient("https://ask.internal", async () => undefined, vi.fn<typeof fetch>().mockResolvedValue(busy)).converse(
+      input,
+      new AbortController().signal,
+    ),
+  ).rejects.toMatchObject({ code: "BUSY" });
+});
+
+it.each([
+  ["an unknown code", JSON.stringify({ error: { code: "SOMETHING_ELSE" } })],
+  ["a non-JSON body", "upstream stack trace"],
+  ["an oversized body", JSON.stringify({ error: { code: "DAILY_LIMIT", pad: "x".repeat(4096) } })],
+])("falls back to busy on %s rather than trusting it", async (_case, body) => {
+  const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 429 }));
+  await expect(
+    httpDeviceChatClient("https://ask.internal", async () => undefined, transport).converse(input, new AbortController().signal),
+  ).rejects.toMatchObject({ code: "BUSY" });
+});

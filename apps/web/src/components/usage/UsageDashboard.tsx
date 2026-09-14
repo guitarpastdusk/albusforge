@@ -9,7 +9,7 @@ export function exactDollars(value: string) {
 }
 const STAGE_NAMES: Record<UsageSummary["model"]["stages"][number]["stage"], string> = {
   intake: "Build conversation", codegen: "Firmware generation", bodygen: "Enclosure generation",
-  narration: "Narration", ask: "Device questions", explain: "Plan explanations", other: "Other model work",
+  narration: "Narration", ask: "Device questions", device_chat: "Device chat", explain: "Plan explanations", other: "Other model work",
 };
 function ModelCells({ row }: { row: ModelConsumption }) {
   return <>

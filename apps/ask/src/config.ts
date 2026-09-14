@@ -18,6 +18,10 @@ const Env = z.object({
   CHAT_MAX_ITERATIONS: z.coerce.number().int().min(1).max(8).default(5),
   /** A tool loop makes several sequential model calls, so it cannot share the single-shot classifier's deadline. */
   CHAT_DEADLINE_MS: z.coerce.number().int().min(5000).max(55000).default(45000),
+  /** A chat turn is several frontier calls, so its allowances are lower than the classifier's. */
+  CHAT_USER_DAILY_REQUESTS: z.coerce.number().int().min(1).max(500).default(15),
+  CHAT_TENANT_DAILY_REQUESTS: z.coerce.number().int().min(1).max(5000).default(60),
+  CHAT_GLOBAL_DAILY_REQUESTS: z.coerce.number().int().min(1).max(20000).default(120),
   ASK_USER_DAILY_REQUESTS: z.coerce.number().int().min(1).max(1000).default(20),
   ASK_GLOBAL_DAILY_REQUESTS: z.coerce.number().int().min(1).max(10000).default(200),
   ASK_TENANT_DAILY_REQUESTS: z.coerce.number().int().min(1).max(10000).default(100),

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { LlmProvider, LlmResponse } from "@albusforge/llm";
+import type { LlmCallRecord, LlmProvider, LlmResponse } from "@albusforge/llm";
 import type { DeviceConverseRequest } from "@albusforge/schema";
 import { contextBlock, converse } from "./converse";
+import { AskQuotaError } from "./errors";
 import type { ConverseStore, DeviceContext } from "./converse-store";
 
 const context: DeviceContext = {
@@ -31,6 +32,9 @@ const request: DeviceConverseRequest = {
 
 function store(overrides: Partial<ConverseStore> = {}): ConverseStore {
   return {
+    reserve: async () => undefined,
+    started: async () => undefined,
+    finish: async () => undefined,
     context: async () => context,
     window: async (_q, args) => ({ channel: args.channel, unit: "C", from: args.from, to: args.to, count: 12, min: 21, max: 26.4, mean: 24.1,
       latest: { t: "2026-09-14T12:00:00.000Z", v: 25.3 } }),
@@ -67,6 +71,55 @@ describe("contextBlock", () => {
 });
 
 describe("converse", () => {
+  it("admits the turn before any paid work, and records what it cost", async () => {
+    const order: string[] = [];
+    const finished: unknown[] = [];
+    const ledger = store({
+      reserve: async () => { order.push("reserve"); },
+      context: async () => { order.push("context"); return context; },
+      finish: async (_q, outcome, usage) => { order.push("finish"); finished.push({ outcome, usage }); },
+    });
+    const toolUse = response({ stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "t1", name: "query_window",
+        input: { channel: "temperature_c", from: "2026-09-14T00:00:00.000Z", to: "2026-09-14T12:00:00.000Z" } }] as LlmResponse["content"] });
+    await converse(request, options(provider([toolUse, text("26.4 C.")]), ledger), signal());
+    expect(order).toEqual(["reserve", "context", "finish"]);
+    // Two model calls in the loop; the turn's cost is their sum, not the last one's.
+    expect(finished[0]).toMatchObject({ outcome: "model", usage: { modelCalls: 2, toolCalls: 1, usageKnown: true, model: "claude-sonnet-5" } });
+  });
+
+  it("makes no model call when the daily allowance is spent", async () => {
+    const p = provider([text("should never run")]);
+    const refused = store({ reserve: async () => { throw new AskQuotaError("actor"); } });
+    await expect(converse(request, options(p, refused), signal())).rejects.toBeInstanceOf(AskQuotaError);
+    expect(p.requests).toHaveLength(0);
+  });
+
+  it("writes one durable spend row per model call", async () => {
+    const inserted: LlmCallRecord[] = [];
+    const insert = async (record: LlmCallRecord) => { inserted.push(record); };
+    const toolUse = response({ stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "t1", name: "device_status", input: {} }] as LlmResponse["content"] });
+    await converse(request, { ...options(provider([toolUse, text("Online.")])), insert }, signal());
+    expect(inserted).toHaveLength(2);
+    expect(inserted[0]).toMatchObject({ stage: "device_chat", tenantId: request.tenant_id, buildId: null });
+  });
+
+  it("marks usage unknown when a spend row could not be written", async () => {
+    const finished: unknown[] = [];
+    const ledger = store({ finish: async (_q, _outcome, usage) => { finished.push(usage); } });
+    const insert = async () => { throw new Error("insert failed"); };
+    await converse(request, { ...options(provider([text("ok")]), ledger), insert }, signal());
+    expect(finished[0]).toMatchObject({ usageKnown: false });
+  });
+
+  it("records a failed turn rather than leaving it reserved forever", async () => {
+    const finished: unknown[] = [];
+    const ledger = store({ finish: async (_q, outcome) => { finished.push(outcome); } });
+    await converse(request, options(provider([response({ stop_reason: "refusal" })]), ledger), signal());
+    expect(finished).toEqual(["unavailable"]);
+  });
+
   it("returns a deterministic summary, not silence, when no model is configured", async () => {
     const answer = await converse(request, options(undefined), signal());
     expect(answer.mode).toBe("unavailable");

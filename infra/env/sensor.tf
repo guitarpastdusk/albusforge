@@ -47,6 +47,11 @@ locals {
     CHAT_MAX_OUTPUT_TOKENS = "1024"
     CHAT_MAX_ITERATIONS    = "5"
     CHAT_DEADLINE_MS       = "45000"
+    # Lower than the classifier's allowances: one chat turn is several frontier
+    # calls, so the same daily spend buys far fewer of them.
+    CHAT_USER_DAILY_REQUESTS   = "15"
+    CHAT_TENANT_DAILY_REQUESTS = "60"
+    CHAT_GLOBAL_DAILY_REQUESTS = "120"
     }, var.ask_model_enabled ? { LLM_MODEL = var.ask_model } : {},
   var.device_chat_enabled ? { CHAT_MODEL = var.device_chat_model } : {})
 }

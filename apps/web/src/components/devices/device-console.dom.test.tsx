@@ -118,3 +118,17 @@ it("offers a device with no channels a reason to ask anyway", async () => {
     expect(container.querySelector('input[name="question"]')).not.toBeNull();
   } finally { await cleanup(); }
 });
+
+it("says a spent daily allowance is not a retry, and keeps the plots unblamed", async () => {
+  vi.mocked(chatWithDevice).mockResolvedValue({
+    ok: false,
+    message: "You’ve reached today’s limit for device questions. The plots below are unaffected.",
+  });
+  const { container, ask, cleanup } = await mount();
+  try {
+    await ask("How warm?");
+    const alert = container.querySelector('[role="alert"]')!.textContent!;
+    expect(alert).toContain("today’s limit");
+    expect(alert).not.toContain("Try again in a moment");
+  } finally { await cleanup(); }
+});

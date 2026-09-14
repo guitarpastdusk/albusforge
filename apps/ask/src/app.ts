@@ -47,6 +47,10 @@ export function buildApp(options: AnswerOptions & { concurrency: number; deadlin
     request.raw.on("aborted",abort);
     reply.raw.on("close",responseClosed);
     try { return await converse(parsed.data,options.chat,controller.signal); }
+    catch (error) {
+      if (error instanceof AskQuotaError) options.write(JSON.stringify({event:"device_chat_quota_rejected",request_id:parsed.data.request_id,scope:error.scope})+"\n");
+      throw error;
+    }
     finally { active--; clearTimeout(timer); request.raw.off("aborted",abort); reply.raw.off("close",responseClosed); }
   });
   return app;

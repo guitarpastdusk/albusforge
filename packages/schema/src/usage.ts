@@ -35,7 +35,7 @@ export const ModelConsumption = z.strictObject({
   cache_creation_tokens: ExactCount,
   cost_usd: z.string().regex(/^\d+\.\d{6}$/),
 });
-export const UsageStage = z.enum(["intake", "codegen", "bodygen", "narration", "ask", "explain", "other"]);
+export const UsageStage = z.enum(["intake", "codegen", "bodygen", "narration", "ask", "device_chat", "explain", "other"]);
 export const UsageSummary = z.object({
   period: z.strictObject({ start: Timestamp, end: Timestamp }),
   as_of: Timestamp,

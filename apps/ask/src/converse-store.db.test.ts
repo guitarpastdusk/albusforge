@@ -48,7 +48,7 @@ async function fixture() {
       VALUES($1,'temperature',$2,$3,$4,$5,$6,$7,$7,0)`, [device_id, resolution, bucket, n, sum, min, max]);
   return { q, from, to, insert, rollup, device_id, tenant_id };
 }
-const store = () => createConverseStore(handle.pool);
+const store = (limits = { user: 100, tenant: 100, global: 1000 }) => createConverseStore(handle.pool, limits);
 
 it("describes the device from the registry-derived channels, with units and latest values", async () => {
   const { q, insert } = await fixture();
@@ -114,4 +114,57 @@ it("keeps a series result small enough to re-send on every loop iteration", asyn
   const series = await store().series(q, { channel: "temperature", from, to, resolution: "1m" });
   expect(series.points).toHaveLength(200);
   expect(series.truncated).toBe(true);
+});
+
+it("admits a turn, then refuses the next once the actor's daily allowance is spent", async () => {
+  const { q } = await fixture();
+  const limited = store({ user: 1, tenant: 100, global: 1000 });
+  await limited.reserve(q);
+  await expect(limited.reserve({ ...q, request_id: randomUUID() })).rejects.toMatchObject({ status: 429, code: "DAILY_LIMIT" });
+});
+
+it("refuses a replayed request id rather than charging for it twice", async () => {
+  const { q } = await fixture();
+  await store().reserve(q);
+  await expect(store().reserve(q)).rejects.toMatchObject({ code: "DUPLICATE_REQUEST" });
+});
+
+it("reports the widest exhausted scope first, so an operator can tell tenant from platform", async () => {
+  const { q } = await fixture();
+  await expect(store({ user: 0, tenant: 0, global: 0 }).reserve(q)).rejects.toMatchObject({ scope: "global" });
+  await expect(store({ user: 0, tenant: 0, global: 1000 }).reserve(q)).rejects.toMatchObject({ scope: "tenant" });
+  await expect(store({ user: 0, tenant: 100, global: 1000 }).reserve(q)).rejects.toMatchObject({ scope: "actor" });
+});
+
+it("records what the whole loop cost, not just its last call", async () => {
+  const { q } = await fixture();
+  await store().reserve(q);
+  await store().started(q);
+  await store().finish(q, "model", { model: "claude-sonnet-5", modelCalls: 3, toolCalls: 4, usageKnown: true,
+    inputTokens: 900, outputTokens: 120, cacheReadTokens: 800, cacheCreationTokens: 0, costUsd: 0.0042 });
+  const row = (await handle.pool.query("SELECT * FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id])).rows[0];
+  expect(row).toMatchObject({ outcome: "model", model: "claude-sonnet-5", model_calls: 3, tool_calls: 4,
+    usage_known: true, input_tokens: 900, output_tokens: 120 });
+  expect(Number(row.cost_usd)).toBeCloseTo(0.0042, 6);
+});
+
+it("nulls the token columns when a call was attempted but its usage never came back", async () => {
+  const { q } = await fixture();
+  await store().reserve(q);
+  await store().started(q);
+  await store().finish(q, "unavailable", { model: null, modelCalls: 1, toolCalls: 0, usageKnown: false,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0 });
+  const row = (await handle.pool.query("SELECT usage_known,input_tokens,cost_usd FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id])).rows[0];
+  // Recording zero would understate real spend; unknown is the honest value.
+  expect(row).toMatchObject({ usage_known: false, input_tokens: null, cost_usd: null });
+});
+
+it("keeps usage known when no model was ever attempted", async () => {
+  const { q } = await fixture();
+  await store().reserve(q);
+  await store().finish(q, "unavailable", { model: null, modelCalls: 0, toolCalls: 0, usageKnown: true,
+    inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0 });
+  const row = (await handle.pool.query("SELECT usage_known,cost_usd FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id])).rows[0];
+  expect(row.usage_known).toBe(true);
+  expect(Number(row.cost_usd)).toBe(0);
 });

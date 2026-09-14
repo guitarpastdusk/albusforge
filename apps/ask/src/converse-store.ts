@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { TelemetryChannels, type DeviceConverseRequest } from "@albusforge/schema";
-import { AskError } from "./errors";
+import { AskError, AskQuotaError } from "./errors";
 import { authorize, transaction } from "./store";
 
 /** Bounds enforced here, not in the prompt: a model asking for more gets an error result, not more data. */
@@ -50,7 +50,29 @@ export interface SeriesFacts {
   truncated: boolean;
 }
 
+/** Daily allowances, counted over a rolling 24 hours. Separate from the classifier's. */
+export interface ChatLimits { user: number; tenant: number; global: number }
+
+/** What a finished turn cost, summed across every model call the loop made. */
+export interface ChatUsage {
+  model: string | null;
+  modelCalls: number;
+  toolCalls: number;
+  /** False when a call was attempted but no usage came back: the spend is real and unknown. */
+  usageKnown: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+}
+
 export interface ConverseStore {
+  /** Admits the turn against the daily allowances, or refuses before a paid call is made. */
+  reserve(q: DeviceConverseRequest, signal?: AbortSignal): Promise<void>;
+  /** Marks that a model call is about to be attempted, so an unknown-usage turn is still visible. */
+  started(q: DeviceConverseRequest, signal?: AbortSignal): Promise<void>;
+  finish(q: DeviceConverseRequest, outcome: "model" | "no_tool" | "unavailable" | "failed", usage: ChatUsage, signal?: AbortSignal): Promise<void>;
   context(q: DeviceConverseRequest, signal?: AbortSignal): Promise<DeviceContext>;
   window(q: DeviceConverseRequest, args: { channel: string; from: string; to: string }, signal?: AbortSignal): Promise<WindowFacts>;
   series(q: DeviceConverseRequest, args: { channel: string; from: string; to: string; resolution: "1m" | "1h" }, signal?: AbortSignal): Promise<SeriesFacts>;
@@ -69,8 +91,80 @@ function checkSpan(from: string, to: string) {
   if (end - start > LIMITS.spanMs) throw new AskError(422, "WINDOW_TOO_WIDE", "Window exceeds the supported span");
 }
 
-export function createConverseStore(pool: Pool): ConverseStore {
+/** Its own lock key, so a chat reservation never serializes behind an ask one. */
+const CHAT_LOCK = 1936028276;
+
+export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseStore {
   return {
+    reserve: (q, signal) =>
+      transaction(
+        pool,
+        false,
+        async (client) => {
+          // One global lock across instances, held only for this counting read
+          // and insert. No model or network call ever runs inside it.
+          await client.query("SELECT pg_advisory_xact_lock($1,1)", [CHAT_LOCK]);
+          await authorize(client, scope(q));
+          const duplicate = await client.query("SELECT 1 FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id]);
+          if (duplicate.rowCount) throw new AskError(409, "DUPLICATE_REQUEST", "Request already accepted");
+          const counts = (
+            await client.query<{ global: number; tenant: number; actor: number }>(
+              `SELECT count(*)::int AS global,
+                 count(*) FILTER (WHERE tenant_id=$1)::int AS tenant,
+                 count(*) FILTER (WHERE actor_id=$2)::int AS actor
+               FROM telemetry.device_chat_requests WHERE created_at > statement_timestamp()-interval '24 hours'`,
+              [q.tenant_id, q.actor_id],
+            )
+          ).rows[0]!;
+          // Widest scope first, so an operator reading the diagnostic learns
+          // whether the tenant or the platform is out of headroom.
+          if (counts.global >= limits.global) throw new AskQuotaError("global");
+          if (counts.tenant >= limits.tenant) throw new AskQuotaError("tenant");
+          if (counts.actor >= limits.user) throw new AskQuotaError("actor");
+          await client.query(
+            "INSERT INTO telemetry.device_chat_requests(request_id,tenant_id,actor_id,device_id) VALUES($1,$2,$3,$4)",
+            [q.request_id, q.tenant_id, q.actor_id, q.device_id],
+          );
+        },
+        signal,
+      ),
+
+    started: (q, signal) =>
+      transaction(
+        pool,
+        false,
+        async (client) => {
+          await client.query(
+            "UPDATE telemetry.device_chat_requests SET model_attempted=true WHERE request_id=$1 AND tenant_id=$2 AND actor_id=$3 AND device_id=$4",
+            [q.request_id, q.tenant_id, q.actor_id, q.device_id],
+          );
+        },
+        signal,
+      ),
+
+    finish: (q, outcome, usage, signal) =>
+      transaction(
+        pool,
+        false,
+        async (client) => {
+          await client.query(
+            `UPDATE telemetry.device_chat_requests
+               SET outcome=$2,model=$3,model_calls=$4,tool_calls=$5,
+                   usage_known=(NOT model_attempted OR $6::boolean),
+                   input_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $7::integer END,
+                   output_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $8::integer END,
+                   cache_read_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $9::integer END,
+                   cache_creation_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $10::integer END,
+                   cost_usd=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $11::numeric END
+             WHERE request_id=$1 AND tenant_id=$12 AND actor_id=$13 AND device_id=$14`,
+            [q.request_id, outcome, usage.model, usage.modelCalls, usage.toolCalls, usage.usageKnown,
+              usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheCreationTokens, usage.costUsd,
+              q.tenant_id, q.actor_id, q.device_id],
+          );
+        },
+        signal,
+      ),
+
     context: (q, signal) =>
       transaction(
         pool,

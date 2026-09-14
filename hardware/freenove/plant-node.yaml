@@ -52,6 +52,12 @@ i2c:
     sda: GPIO4
     scl: GPIO5
     scan: true
+  # The camera SCCB bus is electrically separate from the STEMMA QT sensor
+  # chain. Its scan reports the physical modules before a driver is trusted.
+  - id: sensor_i2c
+    sda: GPIO47
+    scl: GPIO21
+    scan: true
 
 esp32_camera:
   name: Camera
@@ -80,6 +86,21 @@ esp32_camera_web_server:
     mode: snapshot
 
 sensor:
+  - platform: bh1750
+    name: Ambient Light
+    i2c_id: sensor_i2c
+    address: 0x23
+    update_interval: 30s
+  - platform: bme280_i2c
+    i2c_id: sensor_i2c
+    address: 0x77
+    temperature:
+      name: Air Temperature
+    pressure:
+      name: Air Pressure
+    humidity:
+      name: Air Humidity
+    update_interval: 30s
   - platform: uptime
     name: Uptime
   - platform: wifi_signal

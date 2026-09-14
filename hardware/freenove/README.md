@@ -109,9 +109,11 @@ may contain credentials from the previous firmware.
 3. Camera initialization errors also require checking camera pin assignments,
    ribbon seating (with power disconnected), power, and sensor compatibility.
    Flash size alone is not a diagnosis.
-4. Keep camera SCCB/I2C on GPIO4/5 separate from later sensor I2C on GPIO47/21.
-   An I2C device at 0x36 needs a sensor-specific driver or protocol code;
-   `i2c_device` alone does not produce soil-moisture values.
+4. Keep camera SCCB/I2C on GPIO4/5 separate from sensor I2C on GPIO47/21.
+   The Plant A diagnostic configuration reads BH1750 (`0x23`) and BME280
+   (`0x77`) on that bus. An I2C device at `0x36` needs a sensor-specific
+   driver and calibration before it can produce a soil-moisture value;
+   an I2C scan alone is only presence evidence.
 5. A missing sensor in an I2C scan cannot be fixed by changing its configured
    address: first check whether it is actually detected at 0x76 or 0x77.
 6. For a separately powered servo, connect grounds together, and avoid tying two

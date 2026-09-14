@@ -46,7 +46,7 @@ export const VerifyCodeResponse = Me;
 export type VerifyCodeResponse = Me;
 
 /** PUT /v1/me/active-tenant → 204. */
-export const SetActiveTenantRequest = z.object({
-  tenant_id: Id,
+export const SetActiveTenantRequest = z.strictObject({
+  tenant_id: z.uuid(),
 });
 export type SetActiveTenantRequest = z.infer<typeof SetActiveTenantRequest>;

@@ -49,8 +49,10 @@ export async function loadProvisioningAuthority(client: PoolClient, tenantId: st
   if (!provisioned) throw new HttpError(409, "PROVISIONING_UNAVAILABLE", "This plan has no approved channel and firmware provisioning profile");
   const firmware = verifyProvisioningFirmware(bundle.compile_log, { buildId, planVersion, codeVersion, runtime: plan.runtime,
     firmwareProfileId: provisioned.profile.firmware_profile_id, channels: provisioned.channels });
-  if (!firmware || (firmware.job && firmware.job.interval_s !== interval)) throw new HttpError(409, "FIRMWARE_NOT_READY", "Firmware evidence does not match this exact plan and channel profile");
-  return { channels: provisioned.channels, nextS: interval, firmware, source: {
+  // Longer compiled intervals preserve the accepted power budget; shorter ones do not.
+  const compiledInterval = firmware?.job?.interval_s ?? interval;
+  if (!firmware || compiledInterval < interval) throw new HttpError(409, "FIRMWARE_NOT_READY", "Firmware evidence does not match this exact plan and channel profile");
+  return { channels: provisioned.channels, nextS: compiledInterval, firmware, source: {
     kind: "self_flash", schema_version: 1, build_id: buildId, plan_version: planVersion, code_version: codeVersion,
     input_digest: metadata.data.input_digest, part_versions: plan.part_versions, assembly_profile: plan.profile,
     channel_profile: provisioned.profile, manifest_digest: firmware.manifest_digest,

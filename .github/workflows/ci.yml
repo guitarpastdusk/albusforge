@@ -403,3 +403,26 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs ask || true
+
+  firmware-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter gateway...
+      - name: Real accepted-plan compiler and artifact download
+        env:
+          FIRMWARE_REAL_COMPILER: "1"
+        run: pnpm --filter gateway exec vitest run src/firmware.db.test.ts -t 'real isolated worker'
+      - name: Host serializer and installer integrity tests
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Ifirmware/esp32s3/main/include firmware/tests/wire.c firmware/esp32s3/main/hsx_wire.c -o /tmp/firmware-wire
+          /tmp/firmware-wire
+          python3 -m unittest discover -s firmware/tools -p 'test_*.py'
+      - name: Build dedicated worker image
+        run: docker build -f apps/codegen/Dockerfile -t fwbuild:ci .

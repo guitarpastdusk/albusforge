@@ -17,7 +17,7 @@ import { idToken } from "./id-token.server";
  * redirect would not strip, so `path` must resolve to the configured gateway
  * and a redirect is an error rather than a second authenticated hop.
  */
-export async function proxyGatewayStream(path: string, request: Request): Promise<Response> {
+export async function proxyGatewayStream(path: string, request: Request, accept = "text/event-stream"): Promise<Response> {
   const base = process.env.GATEWAY_INTERNAL_URL?.replace(/\/+$/, "");
   if (!base) return new Response("GATEWAY_INTERNAL_URL is not set", { status: 503 });
 
@@ -42,7 +42,7 @@ export async function proxyGatewayStream(path: string, request: Request): Promis
       // A redirect would send the internal token to wherever it points.
       redirect: "error",
       headers: {
-        accept: "text/event-stream",
+        accept,
         ...gatewayHeaders(
           { host: request.headers.get("host"), forwardedFor: request.headers.get("x-forwarded-for"), cookie: request.headers.get("cookie") },
           token,

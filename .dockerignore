@@ -11,3 +11,9 @@ infra
 **/.env
 **/.env.*
 !**/.env.example
+
+# Local ESP-IDF outputs; images build from the reviewed templates.
+firmware/esp32s3/build
+firmware/esp32s3/sdkconfig
+firmware/esp32s3/sdkconfig.old
+firmware/**/__pycache__

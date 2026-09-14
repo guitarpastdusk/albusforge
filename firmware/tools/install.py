@@ -39,7 +39,7 @@ def verify(bundle, config):
         data = file.read_bytes()
         if len(data) != entry["size"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise ValueError("Artifact integrity check failed")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", config.get("token", "")):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]", config.get("token", "")):
         raise ValueError("Invalid device credential")
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", config.get("device_id", "")):
         raise ValueError("Invalid device identity")

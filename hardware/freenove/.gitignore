@@ -1,0 +1,6 @@
+.esphome/
+.platformio/
+backups/
+secrets.yaml
+*.log
+__pycache__/

@@ -1,3 +1,4 @@
+import {firmwareOptionsFromEnv} from "./firmware-config";
 /*
  * The gateway process: node apps/gateway/dist/server.js (the gateway image).
  *
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
   const app = buildApp({
     telemetryPool: pool,
     deviceProvisioning: config.deviceProvisioning,
+    firmware: firmwareOptionsFromEnv(process.env),
     sensorAsk: config.sensorAsk.url ? httpSensorAskClient(config.sensorAsk.url, config.sensorAsk.auth === "google" ? googleIdTokenAuth(config.sensorAsk.url) : async () => undefined) : null,
     parts: createPartsStore(db),
     ping: async () => {

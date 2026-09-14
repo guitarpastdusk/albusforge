@@ -2,7 +2,38 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active production activation update — 2026-09-14, 01:02 UTC
+## Final runtime acceptance record — 2026-09-14, 01:07 UTC
+
+Production active Terraform configuration converged with exit 0 and no changes. Fixture cleanup execution `registry-load-rhm2d` succeeded; the independent cleanup verification confirmed both fixture sessions and the device credential return 401. Root deleted the private production fixture manifest and retained only a sanitized closeout record. Staging fixture credential cleanup and active no-change convergence were recorded earlier. Both committed environment variable files match the applied model/schedule activation, retaining SQL alert ceilings 37/320.
+
+Independent final inventory at 01:04:37 UTC verified all five services and four jobs in each environment against the staging-certified immutable images for source `03f40c1a2cfc3304fe7637e88d37e5c4347f7a9e`. Configured images and resolved ready-revision digests match, and each listed service revision receives 100% traffic:
+
+| Service | Production ready revision | Staging ready revision |
+| --- | --- | --- |
+| web | `web-00011-tcr` | `web-00035-s68` |
+| gateway | `gateway-00006-24j` | `gateway-00021-vlv` |
+| intake | `intake-00002-cj7` | `intake-00009-klg` |
+| cloudlink | `cloudlink-00002-cxl` | `cloudlink-00002-x2v` |
+| Ask | `ask-00003-pd2` | `ask-00003-nk9` |
+
+The four jobs are `db-migrate`, `registry-load`, `telemetry-rollup` and `telemetry-maintain`; their configured immutable images match the exact digests in the 00:04 deployment snapshot below. Ask revisions changed during model activation while preserving the same application image.
+
+Production automatic processing acceptance observed two completed minute rollups:
+
+| Execution | Created UTC | Completed UTC | Result |
+| --- | --- | --- | --- |
+| `telemetry-rollup-zr2tc` | 01:01:00.875770 | 01:02:30.523868 | Succeeded, one task |
+| `telemetry-rollup-6tqzg` | 01:02:11.389108 | 01:04:25.704000 | Succeeded, one task |
+
+Scheduler logs correlate the 01:01/01:02 dispatches with HTTP 200 API acceptance; separate Cloud Run terminal state establishes completed work. Both executions used `telemetry-rollup-run@albusforge-prod.iam.gserviceaccount.com` and certified telemetry image `a39b4c21997137acefb31e34a7f92dd78f98977414bf2bb018f07d56d68c0d88`. Correlated health snapshots had zero dirty hours, oldest dirty seconds and default rows. Positive post-activation heartbeat metrics were visible. A 01:03 SQL sample showed two backends and CPU 5.409%; sampling can miss peaks, and the approximately 90/134-second overlapping executions do not establish maximum throughput.
+
+Both production schedules and all 13 sensor policies were enabled at 01:01:45 UTC. Automatic daily maintenance at 00:05 UTC was not observed in this bounded window; the successful deployment seed remains separate evidence. Later minute dispatches were still pending at the observation cutoff, so future execution success is not claimed.
+
+**Residual operator closeout:** the two inconsistent zero-job GitHub records `34793442644`/`34793442663` remain unresolved despite successful serialized replacements. Root started a watcher restricted to these superseded IDs (30-second interval, bounded to 24 hours), which requests cancellation if jobs appear; it cannot dispatch a new deployment. This is mitigation, not proof those records are cleared. Workflow restoration is planned after this documentation PR merges and remains a future operator step, with its actual result to be recorded privately. Do not treat this runtime acceptance as proof that every workflow history is drained for a later Terraform window.
+
+The bounded rollout now has recorded simulator ingestion/read/processing, browser, quota, two attributed provider calls, synthetic notification incident/recovery receipt, fixture credential cleanup and active configuration convergence. Physical-device validation, backend telemetry SSE, sustained load certification and automatic daily maintenance observation remain separate work. Earlier timestamps and pending-state statements below are preserved as historical snapshots, superseded only by the specific later evidence above.
+
+## Earlier production activation update — 2026-09-14, 01:02 UTC
 
 All six production runtime promotions succeeded at source `03f40c1a2cfc3304fe7637e88d37e5c4347f7a9e`:
 

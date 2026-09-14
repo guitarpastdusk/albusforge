@@ -17,6 +17,7 @@ const AUTH_DEFAULTS = {
 describe("configFromEnv", () => {
   it("defaults PORT to 8080, DB_SSL to require, and bounds every database wait", () => {
     expect(configFromEnv(DB)).toEqual({
+      deviceProvisioning: { keys: null, ingestUrl: null, profiles: [] },
       port: 8080,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },

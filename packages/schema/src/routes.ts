@@ -26,6 +26,13 @@ function byIdAndChild(method: Method, pattern: string, child: string): Route<[id
 }
 
 export const routes = {
+  deviceProvisioning: {
+    claim: fixed("POST", "/v1/devices/claim"),
+    get: byId("GET", "/v1/devices/:id/provisioning"),
+    download: byId("POST", "/v1/devices/:id/configuration"),
+    reissue: byId("POST", "/v1/devices/:id/configuration/replace"),
+    revoke: byId("POST", "/v1/devices/:id/credential/revoke"),
+  },
   deviceSetup: { status: byId("GET", "/v1/devices/:id/setup") },
   /** Stored telemetry only; richer provisioned dashboard routes remain under devices/tenants. */
   telemetry: {

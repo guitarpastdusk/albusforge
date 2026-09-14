@@ -18,6 +18,8 @@ import { HttpError, parse, pathOf, sendError } from "./http";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
 import type { Pool } from "pg";
+import { registerDeviceProvisioning } from "./device-provisioning-routes";
+import type { DeviceProvisioningOptions } from "./device-provisioning-store";
 import { registerDeviceSetup } from "./device-setup";
 import { registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
@@ -35,6 +37,7 @@ declare module "fastify" {
 export interface AppOptions {
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
+  deviceProvisioning?: DeviceProvisioningOptions;
   sensorAsk?: SensorAskClient | null;
   parts: PartsStore;
   /** Resolves when the database answers; rejects otherwise. */
@@ -68,7 +71,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -192,6 +195,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   if (telemetryPool) {
     registerTelemetryReads(app, telemetryPool);
     registerDeviceSetup(app, telemetryPool);
+    registerDeviceProvisioning(app, telemetryPool, deviceProvisioning);
     registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
   }

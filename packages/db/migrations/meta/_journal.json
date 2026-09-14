@@ -50,6 +50,13 @@
       "when": 1789347666660,
       "tag": "0006_build_plan_acceptance",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789348008392,
+      "tag": "0007_device_provisioning",
+      "breakpoints": true
     }
   ]
 }

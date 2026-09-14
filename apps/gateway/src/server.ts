@@ -73,6 +73,7 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     telemetryPool: pool,
+    deviceProvisioning: config.deviceProvisioning,
     sensorAsk: config.sensorAsk.url ? httpSensorAskClient(config.sensorAsk.url, config.sensorAsk.auth === "google" ? googleIdTokenAuth(config.sensorAsk.url) : async () => undefined) : null,
     parts: createPartsStore(db),
     ping: async () => {

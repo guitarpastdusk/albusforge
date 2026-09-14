@@ -15,3 +15,5 @@ export * from "./telemetry.js";
 export const APP_SCHEMAS = [usersSchema.schemaName, registrySchema.schemaName, buildsSchema.schemaName, telemetrySchema.schemaName];
 
 export * from "./sensor-ask.js";
+
+export * from "./device-provisioning.js";

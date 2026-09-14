@@ -4,8 +4,8 @@ import { SemVer } from "./part";
 
 const CanonicalToken = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
 const Digest = z.string().regex(/^[a-f0-9]{64}$/);
-export const DeviceClaimRequest = z.strictObject({ build_id: z.uuid(), plan_version: z.number().int().positive(), code_version: z.number().int().positive(), request_id: z.uuid() });
-export const DeviceHandoffRequest = z.strictObject({ expected_version: z.number().int().positive() });
+export const DeviceClaimRequest = z.strictObject({ expected_tenant_id: z.uuid(), build_id: z.uuid(), plan_version: z.number().int().positive(), code_version: z.number().int().positive(), request_id: z.uuid() });
+export const DeviceHandoffRequest = z.strictObject({ expected_tenant_id: z.uuid(), expected_version: z.number().int().positive() });
 export const DeviceReissueRequest = DeviceHandoffRequest.extend({ request_id: z.uuid() });
 
 /** Secret download only. Never return this from public status/read APIs or persist in artifacts. */

@@ -53,6 +53,16 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
         [envelope.dev, credentialHash],
       )).rows[0];
       if (!device) throw new IngestError(401, "unauthorized");
+      // Legacy devices retain their channel-only contract. Capability-aware
+      // devices also require current source authorization, including replays.
+      const capabilities = (await client.query<{ enabled: boolean; kind: string; payload_schema: string; channels: unknown }>(
+        "SELECT enabled,kind,payload_schema,channels FROM telemetry.device_capabilities WHERE device_id=$1 FOR SHARE", [envelope.dev],
+      )).rows;
+      if (capabilities.length) {
+        const authorized = new Set(capabilities.filter(cap => cap.enabled && cap.kind === "measurement" && cap.payload_schema === "readings.v1")
+          .flatMap(cap => Object.keys(TelemetryChannels.parse(cap.channels))));
+        if (envelope.r.some(reading => !authorized.has(reading.c))) throw new IngestError(403, "capability_forbidden");
+      }
       const prior = (await client.query<{ fingerprint: string; response: unknown }>(
         "SELECT fingerprint, response FROM telemetry.packets WHERE device_id=$1 AND seq=$2", [envelope.dev, envelope.seq],
       )).rows[0];
@@ -94,6 +104,13 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
         ON CONFLICT(device_id,period) DO UPDATE SET readings_in=usage.readings_in+EXCLUDED.readings_in,
         payload_bytes=usage.payload_bytes+EXCLUDED.payload_bytes`,
         [envelope.dev, received.toISOString().slice(0, 7), normalized.length, Buffer.byteLength(canonical)]);
+      await client.query(`INSERT INTO telemetry.capability_presence(device_id,capability_id,last_capture_at,last_received_at)
+        SELECT $1,c.capability_id,max(r.ts),$3 FROM telemetry.device_capabilities c
+        CROSS JOIN jsonb_to_recordset($2::jsonb) AS r(channel text,ts timestamptz)
+        WHERE c.device_id=$1 AND c.kind='measurement' AND c.enabled AND c.channels ? r.channel
+        GROUP BY c.capability_id
+        ON CONFLICT(device_id,capability_id) DO UPDATE SET last_capture_at=GREATEST(capability_presence.last_capture_at,EXCLUDED.last_capture_at),
+          last_received_at=GREATEST(capability_presence.last_received_at,EXCLUDED.last_received_at)`, [envelope.dev, data, received]);
       await client.query("COMMIT");
       return reply.code(202).send(response);
     } catch (error) {

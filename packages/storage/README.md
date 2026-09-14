@@ -33,12 +33,20 @@ and disabled automatic retries. Aborted operations are awaited to settlement;
 there is no detached `Promise.race` work. An ambiguous create must still be
 reconciled by the receipt owner.
 
-**Production readiness limitation:** the SDK performs ADC discovery and token
-refresh before dispatching the object HTTP request. Those internal credential
-operations do not consistently inherit its abort signal. The object HTTP
-deadline therefore does not yet provide a hard bound on credential refresh.
-Resolve that isolation/deadline requirement before production activation;
-local mock tests do not certify IAM, credentials, or live GCS behavior.
+ADC discovery, token refresh and object HTTP now run inside an owned worker.
+The public adapter terminates and awaits that worker on deadline or caller
+cancellation, including a synchronously stuck credential provider. Each adapter
+admits at most four workers by default and rejects excess work immediately.
+Workers exit after each operation; this trades startup cost for deterministic
+credential ownership. Build the storage package before using live storage
+locally; containers include `storage-worker.cjs` and explicitly set
+`OBSERVATION_STORAGE_WORKER_PATH=/app/storage-worker.cjs`.
+
+`list({prefix, pageToken?, limit?}, signal?)` returns a bounded page of immutable
+generation references and provider creation times. It deliberately does not
+require application metadata, so maintenance can inspect malformed orphans.
+Callers must restrict the managed prefix and verify SQL ownership before deletion.
+Local mock tests do not certify IAM, credentials, or live GCS behavior.
 
 Run `pnpm --filter @albusforge/storage test` for deterministic storage races,
 generation safety, digest/size validation, HTTP request contracts, permission

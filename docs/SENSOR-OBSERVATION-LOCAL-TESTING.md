@@ -1,6 +1,6 @@
 # Local mock observation posting
 
-The first backend slice is tested without a camera, cloud credentials, or a GCS
+The observation backend is tested without a camera, cloud credentials, or a GCS
 bucket. The HTTP integration suite starts PostgreSQL 16 in Docker, migrates it,
 uses the restricted application SQL role, listens on an ephemeral loopback port,
 and posts generated 320×240 JPEGs and existing numeric `/ingest/v1` readings.
@@ -54,37 +54,41 @@ its own image, and expects `201` then `200` with an identical acknowledgment.
 It does not provision capabilities, print the token, or accept a remote endpoint.
 The automated suite creates its own fixtures and is the self-contained option.
 
-## Implementation status and next steps
+## Runtime validation and rollout
 
-This first implementation slice provides C02 shared contracts, C04 additive
-schema, C05 object storage and C07 image ingestion foundations. The existing
-numeric endpoint shares credential parsing and the total in-flight budget with
-images; its wire format, sequence receipts and SQL-only transaction remain intact.
-Images have a separate concurrency cap within that total, and durable per-device
-minute-attempt and daily count/byte limits. The initial built-in image codec is
-`jpeg.v1`; arbitrary payload schemas are not dynamically loaded.
+The runtime implements trusted camera/mixed-device configuration handoff,
+capability-specific presence, authenticated private image reads/history, portal
+views, and bounded maintenance reconciliation/deletion. Numeric v1 retains its
+wire format and SQL-only transaction. The initial image codec is `jpeg.v1`;
+arbitrary payload schemas are not dynamically loaded.
 
-The Cloudlink production entry point intentionally does not supply observation
-storage to `buildApp`. Consequently production `/ingest/v2/...` remains disabled;
-only the explicit test/local application composition enables it. Applying the
-additive migration alone cannot enable camera uploads or approve a camera profile.
+Cloudlink enables object storage only with `OBSERVATION_UPLOADS_ENABLED=1`;
+gateway reads require `OBSERVATION_READS_ENABLED=1`. Both require a bucket and a
+readable packaged storage worker. Defaults and committed initial infrastructure
+flags remain disabled. Storage operations run in terminable isolated workers so
+credential discovery/refresh is covered by the total deadline too.
 
-Before enabling staging, complete:
+Run the focused backend suites with Docker available:
 
-1. C03 trusted camera/mixed-device provisioning and private configuration handoff.
-2. C06 private GCS bucket/IAM and explicit disabled-by-default runtime settings.
-3. C08 lease reconciliation, expiry and durable deletion processing, including
-   orphan scans. This slice preserves cleanup intents and recoverable reservations,
-   but does not run cleanup. Expired acknowledgments return 410 without promising
-   that underlying bytes have already been removed.
-4. C11 tenant/capability-authorized read APIs and C12 portal images/status.
-5. C13 schema/storage deployment gates, operational limits and real GCS IAM,
-   generation and lifecycle acceptance. The storage adapter bounds its object HTTP
-   calls; stalled ADC discovery/refresh still needs a total-deadline solution before
-   production activation (see `packages/storage/README.md`).
-6. C09–C10 native camera driver, 900-second scheduler, durable SD spool and uploader;
-   then C14 physical outage/reboot acceptance and the 24-hour soak.
+```sh
+pnpm --filter cloudlink test --fileParallelism=false
+pnpm --filter gateway test --fileParallelism=false
+pnpm --filter observation-maintain test --fileParallelism=false
+pnpm --filter @albusforge/storage test
+pnpm --filter web test
+```
 
-The mock suite exercises real HTTP and real PostgreSQL transactions. Its in-memory
-object store and adapter transport tests do not certify deployed GCS behavior,
-SD power-loss recovery, board Wi-Fi/TLS, or the 15-minute hardware capture cadence.
+The gateway suite covers image-only and mixed provisioning, rotation/revocation,
+tenant/session isolation, expired images and independent capability health.
+Maintenance tests cover leased reservations, missing objects, exact retries,
+retention, durable deletion and paginated orphan scans. Storage tests exercise
+worker admission and deadlines as well as immutable generations. The staging GCS
+acceptance command and least-privilege checks are documented in
+[`packages/storage/README.md`](../packages/storage/README.md).
+
+Deployment order and coordinator ownership are in
+[SENSOR-OBSERVATION-INFRA.md](SENSOR-OBSERVATION-INFRA.md). Migrations and source
+builds alone do not approve a hardware profile or enable uploads. Real GCS/IAM
+acceptance, native board outage/reboot tests and the 24-hour 15-minute-cadence soak
+remain release gates. Mock HTTP/PostgreSQL and object transport tests do not
+certify deployed cloud behavior or SD power-loss recovery.

@@ -20,7 +20,8 @@
     "google-auth-library": "^11.0.2",
     "zod": "~4.5.4",
     "@albusforge/matcher": "workspace:*",
-    "@albusforge/codegen": "workspace:*"
+    "@albusforge/codegen": "workspace:*",
+    "@albusforge/storage": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

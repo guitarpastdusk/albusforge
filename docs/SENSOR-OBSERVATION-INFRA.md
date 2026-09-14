@@ -1,11 +1,5 @@
 # Observation infrastructure rollout
 
-This infrastructure change is independent of the pending runtime release. It
-creates a placeholder maintenance job and keeps uploads, reads and scheduling
-disabled. The worker bundle, maintenance executable, deployment workflows and
-runtime activation logic arrive in a separate PR; do not execute the placeholder
-job or enable the flags before that release and its acceptance checks.
-
 The existing Cloudlink, gateway, SQL, load balancer and scheduler identity are
 reused. Each environment adds one private Standard GCS bucket, three narrowly
 scoped object IAM roles/bindings, one maintenance job with its runtime identity,
@@ -19,7 +13,7 @@ The camera retains its own 900-second capture timer.
 | Gateway | get | `CAMERA_IMAGES_BUCKET`, `OBSERVATION_READS_ENABLED=0` initially |
 | observation-maintain | get, list, delete | `OBSERVATION_BUCKET`, limit 100, orphan grace 120 seconds |
 
-The pending runtime release packages the isolated storage worker at `/app/storage-worker.cjs`.
+All use the isolated storage worker packaged at `/app/storage-worker.cjs`.
 Maintenance uses the existing restricted database application role and a single
 connection, never the migration owner. Terraform reserves an upper configuration
 budget of two connections for this job. Its task timeout is 300 seconds, with

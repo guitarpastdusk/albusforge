@@ -11,7 +11,7 @@ import { IngestAdmission } from "./admission.js";
 interface Metadata { deviceId: string; observationId: string; capabilityId: string; payloadSchema: "jpeg.v1"; capturedAt: number; sha256: string }
 interface Capability { tenant_id: string; max_bytes: number; max_width: number; max_height: number }
 interface Receipt {
-  fingerprint: string; state: "reserved" | "stored" | "expired"; lease_id: string | null; lease_until: Date | null;
+  fingerprint: string; state: "reserved" | "stored" | "expired" | "failed"; lease_id: string | null; lease_until: Date | null;
   received_at: Date | null; expires_at: Date; sha256: string; bytes: string; reserved_day: string;
 }
 export interface ObservationOptions {
@@ -163,13 +163,14 @@ export function registerObservations(app: FastifyInstance, pool: Pool, options: 
         [metadata.deviceId, day, metadata.observationId])).rows[0]!;
         if (Number(used.count) + 1 > maxDailyCount || Number(used.bytes) + body.length > maxDailyBytes) throw new Rejected(429, "daily_quota");
         if (!prior) {
+          if ((await client.query("SELECT 1 FROM telemetry.observation_deletion_intents WHERE object_key=$1", [key])).rowCount) throw new Rejected(410, "observation_expired");
           await client.query(`INSERT INTO telemetry.observation_receipts
-            (device_id,observation_id,capability_id,fingerprint,sha256,bytes,captured_at,expires_at,state,lease_id,lease_until,reserved_day)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11)`,
-          [metadata.deviceId, metadata.observationId, metadata.capabilityId, fingerprint, sha256, body.length, new Date(captured), new Date(captured + 30 * 86400_000), lease, new Date(admitted.getTime() + leaseMs), day]);
+            (device_id,observation_id,capability_id,fingerprint,sha256,bytes,captured_at,expires_at,state,lease_id,lease_until,reserved_day,reservation_credential_hash)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12)`,
+          [metadata.deviceId, metadata.observationId, metadata.capabilityId, fingerprint, sha256, body.length, new Date(captured), new Date(captured + 30 * 86400_000), lease, new Date(admitted.getTime() + leaseMs), day, credentialHash]);
           await client.query("INSERT INTO telemetry.observation_images(device_id,observation_id,object_key,width,height) VALUES($1,$2,$3,$4,$5)", [metadata.deviceId, metadata.observationId, key, dimensions.width, dimensions.height]);
         } else {
-          await client.query("UPDATE telemetry.observation_receipts SET lease_id=$3,lease_until=$4,reserved_day=$5 WHERE device_id=$1 AND observation_id=$2", [metadata.deviceId, metadata.observationId, lease, new Date(admitted.getTime() + leaseMs), day]);
+          await client.query("UPDATE telemetry.observation_receipts SET state='reserved',lease_id=$3,lease_until=$4,reserved_day=$5,reservation_credential_hash=$6 WHERE device_id=$1 AND observation_id=$2", [metadata.deviceId, metadata.observationId, lease, new Date(admitted.getTime() + leaseMs), day, credentialHash]);
         }
         return { prior: undefined };
       });

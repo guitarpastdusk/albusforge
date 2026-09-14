@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { DeviceConfigV1, DeviceProvisioning, type DeviceClaimRequest, type DeviceHandoffRequest, type DeviceReissueRequest } from "@albusforge/schema";
+import { DeviceConfig, DeviceProvisioning, type DeviceClaimRequest, type DeviceHandoffRequest, type DeviceReissueRequest } from "@albusforge/schema";
 import type { Pool, PoolClient } from "pg";
 import type { z } from "zod";
 import { HttpError } from "./http";
@@ -91,6 +91,11 @@ export function createDeviceProvisioningStore(pool: Pool, options: DeviceProvisi
         const sealed = sealCredential(token, { deviceId, tenantId: session.tenantId, buildId: body.build_id, planVersion: body.plan_version, handoffVersion: 1 }, config.keys);
         await session.checkExpiry();
         await client.query("INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source,next_s) VALUES($1,$2,$3,$4,$5,$6)", [deviceId, session.tenantId, hash(token), authority.channels, authority.source, authority.nextS]);
+        for (const cap of authority.capabilities) {
+          await client.query(`INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,enabled,required,interval_s,max_bytes,max_width,max_height,channels)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, [deviceId, cap.id, cap.kind, cap.schema, cap.profile_id, cap.profile_version, cap.enabled, cap.required, cap.interval_s,
+            cap.kind === "image" ? cap.max_bytes : null, cap.kind === "image" ? cap.max_width : null, cap.kind === "image" ? cap.max_height : null, cap.kind === "measurement" ? cap.channels : null]);
+        }
         await client.query(`INSERT INTO telemetry.device_provisionings(device_id,tenant_id,build_id,plan_version,code_version,claim_request_id,created_by,
           manifest_digest,ingest_url,handoff_user_id,handoff_session_root,handoff_expires_at,handoff_key_id,handoff_nonce,handoff_ciphertext,handoff_tag)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$7,$10,statement_timestamp()+interval '10 minutes',$11,$12,$13,$14)`,
@@ -113,9 +118,11 @@ export function createDeviceProvisioningStore(pool: Pool, options: DeviceProvisi
         try { token = openCredential({ keyId: row.handoff_key_id, nonce: row.handoff_nonce, ciphertext: row.handoff_ciphertext, tag: row.handoff_tag }, binding(row, session.tenantId), configured().keys); }
         catch { throw new HttpError(410, "HANDOFF_UNAVAILABLE", "Configuration is unavailable; replace it to obtain a fresh file"); }
         if (hash(token) !== row.token_hash) throw new HttpError(410, "HANDOFF_UNAVAILABLE", "Configuration is unavailable; replace it to obtain a fresh file");
-        const output = DeviceConfigV1.safeParse({ v: 1, device_id: deviceId, token, ingest_url: row.ingest_url, seq_start: Number(row.seq_start),
+        const output = DeviceConfig.safeParse({ v: authority.capabilities.length ? 2 : 1, device_id: deviceId, token, ingest_url: row.ingest_url, seq_start: Number(row.seq_start),
           profile_id: authority.firmware.manifest.profile_id, runtime: authority.firmware.manifest.runtime, channels: authority.channels,
-          build_id: row.build_id, plan_version: row.plan_version, code_version: row.code_version, manifest_digest: row.manifest_digest });
+          build_id: row.build_id, plan_version: row.plan_version, code_version: row.code_version, manifest_digest: row.manifest_digest,
+          ...(authority.capabilities.length ? { capabilities: authority.capabilities,
+            observation_url: row.ingest_url.replace(/\/ingest\/v1$/, `/ingest/v2/devices/${deviceId}/observations`) } : {}) });
         if (!output.success) throw new HttpError(410, "HANDOFF_UNAVAILABLE", "Configuration is unavailable; replace it to obtain a fresh file");
         await session.checkExpiry();
         const consumed = await client.query(`UPDATE telemetry.device_provisionings SET handoff_consumed_at=statement_timestamp(),

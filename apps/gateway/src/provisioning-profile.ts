@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TelemetryChannel, TelemetryChannels, type PartDefinition } from "@albusforge/schema";
+import { TelemetryChannel, ProvisionedChannels, DeviceCapabilities, type SensorCapability, type TelemetryChannels, type PartDefinition } from "@albusforge/schema";
 
 const Pin = z.strictObject({ id: z.string().min(1), version: z.string().min(1) });
 /** Reviewed server configuration, never request input or inferred from a part's label. */
@@ -10,13 +10,24 @@ export const ProvisioningProfile = z.strictObject({
   part_versions: z.array(Pin).min(1).max(64),
   firmware_profile_id: z.string().min(1).max(100),
   health_sources: z.array(z.strictObject({ part: Pin, telemetry_schema: z.literal("device_health.v1") })).max(1),
+  capabilities: DeviceCapabilities.optional(),
+  capability_sources: z.array(z.strictObject({ capability_id: z.string(), part: Pin, telemetry_schema: z.string().min(1) })).max(64).optional(),
   channels: z.array(z.strictObject({
     key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
     range: TelemetryChannel,
     part: Pin,
     telemetry_schema: z.string().min(1).max(100),
-  })).min(1).max(64),
+  })).max(64),
 }).superRefine((profile, ctx) => {
+  if (!profile.channels.length && !profile.capabilities?.some(c => c.kind === "image" && c.enabled)) ctx.addIssue({ code: "custom", message: "Profile requires an enabled source" });
+  if (profile.capabilities && !profile.capabilities.some(c => c.enabled)) ctx.addIssue({ code: "custom", message: "Profile requires an enabled source" });
+  if (profile.capabilities) {
+    const numeric = Object.assign({}, ...profile.capabilities.filter(c => c.kind === "measurement").map(c => c.channels));
+    if (Object.keys(numeric).length !== profile.channels.length || profile.channels.some(c => JSON.stringify(numeric[c.key]) !== JSON.stringify(c.range))) ctx.addIssue({ code: "custom", message: "Capability channels must match approved channel profile" });
+    const sources = profile.capability_sources ?? [];
+    if (sources.length !== profile.capabilities.length || new Set(sources.map(s => s.capability_id)).size !== sources.length
+      || profile.capabilities.some(c => !sources.some(s => s.capability_id === c.id))) ctx.addIssue({ code: "custom", message: "Capabilities require unique pinned source evidence" });
+  } else if (profile.capability_sources?.length) ctx.addIssue({ code: "custom", message: "Capability sources require capabilities" });
   for (const [values, field] of [[profile.part_versions.map(p => `${p.id}@${p.version}`), "part_versions"], [profile.channels.map(c => c.key), "channels"]] as const) {
     if (new Set(values).size !== values.length) ctx.addIssue({ code: "custom", path: [field], message: "Profile entries must be unique" });
   }
@@ -30,7 +41,7 @@ const pins = (parts: ReadonlyArray<{ id: string; version: string }>) => parts.ma
 /** All supplying parts and telemetry schemas must match immutable accepted evidence exactly. */
 export function resolveProvisioningProfile(profiles: readonly ProvisioningProfile[], accepted: {
   profile: { id: string; version: string }; runtime: string; part_versions: Array<{ id: string; version: string }>;
-}, parts: readonly PartDefinition[], firmwareProfileId: string): { profile: ProvisioningProfile; channels: TelemetryChannels } | null {
+}, parts: readonly PartDefinition[], firmwareProfileId: string): { profile: ProvisioningProfile; channels: TelemetryChannels; capabilities: SensorCapability[] } | null {
   if (pins(parts) !== pins(accepted.part_versions) || parts.some(part => part.status !== "active")) return null;
   const matching = profiles.filter(profile => profile.assembly_profile.id === accepted.profile.id && profile.assembly_profile.version === accepted.profile.version
     && profile.runtime === accepted.runtime && pins(profile.part_versions) === pins(accepted.part_versions) && profile.firmware_profile_id === firmwareProfileId);
@@ -43,12 +54,21 @@ export function resolveProvisioningProfile(profiles: readonly ProvisioningProfil
     if (!part || channel.telemetry_schema === "device_health.v1" || part.cloud.telemetry_schema !== channel.telemetry_schema) return null;
     covered.add(`${part.id}@${part.version}`);
   }
+  for (const source of profile.capability_sources ?? []) {
+    const part = parts.find(part => part.id === source.part.id && part.version === source.part.version);
+    if (!part || part.cloud.telemetry_schema !== source.telemetry_schema) return null;
+    const capability = profile.capabilities?.find(cap => cap.id === source.capability_id);
+    if (!capability) return null;
+    if (capability.kind === "measurement" && Object.keys(capability.channels).some(key => !profile.channels.some(channel => channel.key === key
+      && channel.part.id === source.part.id && channel.part.version === source.part.version && channel.telemetry_schema === source.telemetry_schema))) return null;
+    covered.add(`${part.id}@${part.version}`);
+  }
   for (const health of profile.health_sources) {
     const part = parts.find(part => part.id === health.part.id && part.version === health.part.version);
     if (!part || part.electrical.interface !== "host" || part.cloud.telemetry_schema !== health.telemetry_schema) return null;
     covered.add(`${part.id}@${part.version}`);
   }
   if (parts.some(part => part.cloud.telemetry_schema !== null && !covered.has(`${part.id}@${part.version}`))) return null;
-  const channels = TelemetryChannels.safeParse(Object.fromEntries(profile.channels.map(channel => [channel.key, channel.range])));
-  return channels.success ? { profile, channels: channels.data } : null;
+  const channels = ProvisionedChannels.safeParse(Object.fromEntries(profile.channels.map(channel => [channel.key, channel.range])));
+  return channels.success ? { profile, channels: channels.data, capabilities: profile.capabilities ?? [] } : null;
 }

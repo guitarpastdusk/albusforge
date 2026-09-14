@@ -8,17 +8,20 @@
     "./testing": "./src/testing.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && esbuild src/worker.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist/storage-worker.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "acceptance:staging": "node dist/acceptance-cli.js"
   },
   "dependencies": {
-    "@google-cloud/storage": "8.1.0"
+    "@google-cloud/storage": "8.1.0",
+    "google-auth-library": "11.0.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.2",
+    "esbuild": "~0.28.2",
     "eslint": "^9.39.5",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.0",

@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { SESSION_COOKIE, PersistedBuildPlan } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -13,7 +14,7 @@ let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;
 let app: ReturnType<typeof buildApp>;
 beforeAll(async()=>{
-  container=await new PostgreSqlContainer("postgres:16-alpine").start();
+  container=await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin=new pg.Client({connectionString:container.getConnectionUri()});await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migration'");await admin.query("CREATE DATABASE albus OWNER albus_migrate");await admin.end();
   const config:DbConfig={host:container.getHost(),port:container.getPort(),database:"albus",user:"albus_migrate",password:"migration",ssl:"disable"};
@@ -22,7 +23,7 @@ beforeAll(async()=>{
   app=buildApp({parts:{latest:async()=>[]},ping:async()=>{},log:()=>{},telemetryPool:handle.pool,
     planCatalogue:{schema_version:1,runtime:input.spec.runtime,profiles:input.profiles,connectors:input.connectors}});
 });
-afterAll(async()=>{await app?.close();await handle?.pool.end();await container?.stop();});
+afterAll(async()=>{await app?.close();await closeTestPool(handle?.pool);await container?.stop();});
 beforeEach(async()=>{
   await handle.pool.query("DELETE FROM registry.compat_matrix");await handle.pool.query("DELETE FROM registry.parts");
   for(const part of input.parts)await handle.pool.query("INSERT INTO registry.parts(id,version,status,definition) VALUES($1,$2,$3,$4)",[part.id,part.version,part.status,JSON.stringify(part)]);

@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { SESSION_COOKIE, UsageSummary } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -17,7 +18,7 @@ const now = new Date();
 const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -28,7 +29,7 @@ beforeAll(async () => {
   handle = createDb({ ...config, user: "albus_app", password: "app-secret" }, { max: 5, connectTimeoutMs: 1000, statementTimeoutMs: 2000, queryTimeoutMs: 3000 });
   app = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool, log: () => {} });
 });
-afterAll(async () => { await app?.close(); await handle?.pool.end(); await owner?.end(); await container?.stop(); });
+afterAll(async () => { await app?.close(); await closeTestPool(handle?.pool); await closeTestPool(owner); await container?.stop(); });
 
 async function fixture() {
   const tenant = randomUUID(), user = randomUUID(), session = randomUUID(), device = randomUUID();

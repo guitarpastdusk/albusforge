@@ -8,6 +8,7 @@ import {
 } from "@albusforge/schema";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ObservationGallery } from "@/components/telemetry/ObservationGallery";
 import { DeviceChat } from "@/components/devices/DeviceChat";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
@@ -110,20 +111,23 @@ export default async function DevicePage({
             : device.status === "online"
               ? "Online"
               : "Offline"}{" "}
-        · Last packet: {device.last_seen_at ?? "never"}
+        · Last upload: {device.last_seen_at ?? "never"}
       </p>
       <p className="text-muted mt-2">
         Snapshot on page load. Refresh to see new uploads; sample times below
         may differ from packet arrival.
       </p>
       <p className="mt-2 text-sm text-muted">
-        Expected upload interval: {device.next_s} seconds. Offline means no
-        recent packet within {Math.max(60, device.next_s * 3)} seconds.{" "}
+        {detail.capabilities?.length ? <>
+          Each sensor uses its configured interval: {detail.capabilities.map(cap => `${cap.id} every ${cap.interval_s} seconds`).join("; ")}.{" "}
+          Overall status summarizes required sources; check each sensor or camera for its reception status.{" "}
+        </> : <>Expected upload interval: {device.next_s} seconds. Offline means no
+          recent packet within {Math.max(60, device.next_s * 3)} seconds.{" "}</>}
         {device.revoked_at
           ? "The credential is revoked; new uploads are blocked, but stored readings remain available."
           : "Status is a current connectivity estimate, not a historical alert."}
       </p>
-      {!device.health && (
+      {!device.health && channels.length > 0 && (
         <p className="mt-2 text-sm text-muted">
           No device health packet has been recorded.
         </p>
@@ -137,6 +141,8 @@ export default async function DevicePage({
             ` · Signal ${device.health.rssi} dBm`}
         </p>
       )}
+      {detail.capabilities && <ObservationGallery deviceId={deviceId} capabilities={detail.capabilities} search={search} />}
+      {channels.length > 0 && <>
       <h2 className="text-xl font-semibold mt-8">Latest readings</h2>
       <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
         {channels.map((channel) => {
@@ -261,6 +267,7 @@ export default async function DevicePage({
           }))}
         />
       </section>
+      </>}
     </PageContainer>
   );
 }

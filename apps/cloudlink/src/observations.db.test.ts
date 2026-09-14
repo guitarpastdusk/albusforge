@@ -50,6 +50,7 @@ async function fixture(store = new MemoryObservationStorage(), options: Partial<
   await pool.query("INSERT INTO users.tenants(id,name) VALUES($1,'image test')", [tenant]);
   await pool.query("INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source) VALUES($1,$2,$3,$4,$5)", [dev, tenant, tokenHash(token), simulatorChannels, { kind: "test" }]);
   await pool.query("INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,interval_s,max_bytes,max_width,max_height) VALUES($1,'camera','image','jpeg.v1','test-camera',1,900,1048576,320,240)", [dev]);
+  await pool.query("INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,interval_s,channels) VALUES($1,'measurements','measurement','readings.v1','test-measurements',1,60,$2)", [dev, simulatorChannels]);
   const app = buildApp({ pool, now: () => new Date(clock * 1000), observations: { store, maxAttemptsPerMinute: 60, leaseMs: 30000, ...options }, log: () => {} });
   services.push(app);
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });

@@ -1,3 +1,5 @@
+import { registerObservationReads } from "./observation-read";
+import type { ObservationStorage } from "@albusforge/storage";
 import {registerFirmwareRoutes,type FirmwareOptions} from "./firmware-routes";
 import { randomUUID } from "node:crypto";
 import {
@@ -42,6 +44,7 @@ export interface AppOptions {
   planCatalogue?: ReviewedPlanCatalogue;
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
+  observationStorage?: ObservationStorage;
   deviceProvisioning?: DeviceProvisioningOptions;
   firmware?: FirmwareOptions;
   sensorAsk?: SensorAskClient | null;
@@ -77,7 +80,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, firmware = {enabled:false}, sensorAsk = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, observationStorage, firmware = {enabled:false}, sensorAsk = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -201,6 +204,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   if (telemetryPool) {
     registerBuildPlans(app, telemetryPool, planCatalogue);
     registerTelemetryReads(app, telemetryPool);
+    if (observationStorage) registerObservationReads(app, telemetryPool, observationStorage);
     registerDeviceSetup(app, telemetryPool);
     registerDeviceProvisioning(app, telemetryPool, deviceProvisioning);
     registerFirmwareRoutes(app,telemetryPool,firmware);

@@ -1,6 +1,7 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { syntheticPlanFixture } from "../../codegen/src/testing";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import {
   FirmwareManifest,
@@ -42,7 +43,7 @@ const artifacts = {
   },
 };
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({
     connectionString: container.getConnectionUri(),
   });
@@ -86,7 +87,7 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await app?.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 async function fixture(role = "operator") {

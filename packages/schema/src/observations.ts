@@ -96,3 +96,12 @@ export const ImageObservationPage = z.strictObject({
 /** Existing numeric codec stays authoritative; this does not introduce a v2 sequence namespace. */
 export const MeasurementPayloadV1 = TelemetryEnvelope;
 export type ImageObservationMetadata = z.infer<typeof ImageObservationMetadata>;
+
+export const CapabilityStatus = z.strictObject({
+  id: SensorCapabilityId, kind: z.enum(["image", "measurement"]), schema: z.string().min(1).max(100),
+  enabled: z.boolean(), required: z.boolean(), interval_s: z.number().int().positive(),
+  last_capture_at: z.iso.datetime().nullable(), last_received_at: z.iso.datetime().nullable(),
+  status: z.enum(["disabled", "waiting", "healthy", "stale", "credential_revoked"]),
+});
+export const DeviceCapabilityStatus = z.strictObject({ device_id: z.uuid(), capabilities: z.array(CapabilityStatus).max(64) });
+export const LatestImageObservation = z.strictObject({ image: ImageObservationMetadata.nullable() });

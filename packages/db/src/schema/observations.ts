@@ -40,16 +40,19 @@ export const observationReceipts = telemetrySchema.table("observation_receipts",
   leaseId: uuid("lease_id"),
   leaseUntil: timestamp("lease_until", { withTimezone: true }),
   reservedDay: text("reserved_day").notNull(),
+  reservationCredentialHash: text("reservation_credential_hash"),
+  maintenanceCheckedAt: timestamp("maintenance_checked_at", { withTimezone: true }),
 }, t => [
   primaryKey({ columns: [t.deviceId, t.observationId] }),
   index("observation_receipts_history_idx").on(t.deviceId, t.capabilityId, t.capturedAt, t.observationId),
   index("observation_receipts_expiry_idx").on(t.state, t.expiresAt),
   index("observation_receipts_lease_idx").on(t.state, t.leaseUntil),
   index("observation_receipts_reservations_idx").on(t.deviceId, t.reservedDay, t.state),
+  check("observation_receipts_credential_check", sql`${t.reservationCredentialHash} IS NULL OR ${t.reservationCredentialHash} ~ '^[a-f0-9]{64}$'`),
   check("observation_receipts_digest_check", sql`${t.fingerprint} ~ '^[a-f0-9]{64}$' AND ${t.sha256} ~ '^[a-f0-9]{64}$'`),
   check("observation_receipts_bytes_check", sql`${t.bytes} BETWEEN 1 AND 1048576`),
   check("observation_receipts_kind_check", sql`${t.kind}='image' AND ${t.payloadSchema}='jpeg.v1'`),
-  check("observation_receipts_state_check", sql`(${t.state}='reserved' AND ${t.receivedAt} IS NULL AND ${t.leaseId} IS NOT NULL AND ${t.leaseUntil} IS NOT NULL) OR (${t.state}='stored' AND ${t.receivedAt} IS NOT NULL AND ${t.leaseId} IS NULL AND ${t.leaseUntil} IS NULL) OR (${t.state}='expired' AND ${t.leaseId} IS NULL AND ${t.leaseUntil} IS NULL)`),
+  check("observation_receipts_state_check", sql`(${t.state}='reserved' AND ${t.receivedAt} IS NULL AND ${t.leaseId} IS NOT NULL AND ${t.leaseUntil} IS NOT NULL) OR (${t.state}='stored' AND ${t.receivedAt} IS NOT NULL AND ${t.leaseId} IS NULL AND ${t.leaseUntil} IS NULL) OR (${t.state}='expired' AND ${t.leaseId} IS NULL AND ${t.leaseUntil} IS NULL) OR (${t.state}='failed' AND ${t.receivedAt} IS NULL AND ${t.leaseId} IS NULL AND ${t.leaseUntil} IS NULL)`),
   check("observation_receipts_lease_check", sql`(${t.leaseId} IS NULL) = (${t.leaseUntil} IS NULL)`),
   check("observation_receipts_day_check", sql`${t.reservedDay} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`),
 ]);
@@ -95,3 +98,9 @@ export const observationAttempts = telemetrySchema.table("observation_attempts",
   windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
   attempts: integer("attempts").notNull(),
 }, t => [check("observation_attempts_nonnegative_check", sql`${t.attempts}>=0`)]);
+
+/** Cursor survives bounded hourly sweeps; singleton worker owns advancement. */
+export const observationMaintenanceState = telemetrySchema.table("observation_maintenance_state", {
+  id: integer("id").primaryKey(),
+  orphanPageToken: text("orphan_page_token"),
+}, t => [check("observation_maintenance_singleton_check", sql`${t.id}=1`)]);

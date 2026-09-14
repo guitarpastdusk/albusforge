@@ -13,3 +13,4 @@ export {
 } from "./client.js";
 export { appRoleFromEnv, dbConfigFromEnv, type AppRole, type DbConfig } from "./config.js";
 export { readSnapshot, writeTransaction } from "./managed-transaction.js";
+export { assertObservationSchema } from "./observation-ready.js";

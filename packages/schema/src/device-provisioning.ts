@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { TelemetryChannels } from "./telemetry";
+import { TelemetryChannels, ProvisionedChannels } from "./telemetry";
+import { DeviceCapabilities } from "./observations";
 import { SemVer } from "./part";
 
 const CanonicalToken = z.string().regex(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/);
@@ -24,6 +25,23 @@ export const DeviceConfigV1 = z.strictObject({
   manifest_digest: Digest,
 });
 export type DeviceConfigV1 = z.infer<typeof DeviceConfigV1>;
+export const DeviceConfigV2 = DeviceConfigV1.extend({
+  v: z.literal(2),
+  channels: ProvisionedChannels,
+  capabilities: DeviceCapabilities,
+  observation_url: z.url(),
+}).superRefine((config, ctx) => {
+  if (config.observation_url !== config.ingest_url.replace(/\/ingest\/v1$/, `/ingest/v2/devices/${config.device_id}/observations`)) {
+    ctx.addIssue({ code: "custom", path: ["observation_url"], message: "Observation URL must match the device and trusted ingestion origin" });
+  }
+  const numeric = Object.assign({}, ...config.capabilities.filter(c => c.kind === "measurement").map(c => c.channels));
+  const keys = Object.keys(config.channels);
+  if (keys.length !== Object.keys(numeric).length || keys.some(key => JSON.stringify(config.channels[key]) !== JSON.stringify(numeric[key]))) {
+    ctx.addIssue({ code: "custom", path: ["channels"], message: "Channels must match measurement capabilities" });
+  }
+});
+export type DeviceConfigV2 = z.infer<typeof DeviceConfigV2>;
+export const DeviceConfig = z.union([DeviceConfigV1, DeviceConfigV2]);
 
 /** Public state. A handoff is bound to its issuing user/session family, never a bearer URL. */
 export const DeviceProvisioning = z.strictObject({

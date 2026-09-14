@@ -1,9 +1,10 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * The routes against a real Postgres: migrate with @albusforge/db, load the
  * committed registry with the registry loader as the app role, then query
  * through the gateway exactly as the server wires it.
  */
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -27,7 +28,7 @@ let handle: ReturnType<typeof createDb>;
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -64,7 +65,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 

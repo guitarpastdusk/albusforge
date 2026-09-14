@@ -46,4 +46,6 @@ it("shares a delayed mock conversation across separately loaded action, stream a
     clearTimeout(timeout);
     controller.abort();
   }
-});
+// Keep the stream deadline above at four seconds; allow cold module graph
+// imports their own budget when this regression runs beside the full suite.
+}, 15_000);

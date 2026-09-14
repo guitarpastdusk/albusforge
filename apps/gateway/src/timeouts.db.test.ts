@@ -1,3 +1,4 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * A stalled database must fail requests with a JSON 503 inside the configured
  * budgets and leave the pool usable. Postgres runs in testcontainers; a TCP
@@ -5,7 +6,7 @@
  * connection whose responses stop arriving.
  */
 import net from "node:net";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -98,7 +99,7 @@ let handle: ReturnType<typeof createDb>;
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -116,7 +117,7 @@ beforeAll(async () => {
   await runMigrations(direct, { appRole: { name: "albus_app", password: "app-secret" } });
   const loader = createDb({ ...direct, user: "albus_app", password: "app-secret" }, { max: 1 });
   await loadParts(loader.db, readValidatedParts(REGISTRY_ROOT));
-  await loader.pool.end();
+  await closeTestPool(loader.pool);
 
   proxy = startProxy({ host: container.getHost(), port: container.getPort() });
   viaProxy = { ...direct, host: "127.0.0.1", port: await proxy.listen(), user: "albus_app", password: "app-secret" };
@@ -144,7 +145,7 @@ beforeEach(() => {
 afterEach(async () => {
   proxy.state.mode = "forward";
   await app.close();
-  await handle.pool.end();
+  await closeTestPool(handle.pool);
 });
 
 afterAll(async () => {

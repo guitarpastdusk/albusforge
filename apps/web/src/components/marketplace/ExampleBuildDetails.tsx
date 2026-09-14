@@ -1,14 +1,24 @@
 import type { ExampleBuildDetail } from "@/lib/example-builds";
+import { exampleReadings } from "@/lib/example-readings";
+import { exampleWiring, volts } from "@/lib/example-wiring";
+import { BuildCircuitDiagram } from "./BuildCircuitDiagram";
+import { SampleReadingsTable } from "./SampleReadingsTable";
 
 const usd = (amount: number) => `$${amount.toFixed(2)}`;
 
+const HEADING = "font-display text-[26px] font-medium";
+
 /**
  * An example build's listing page (lib/example-builds.ts): a short note that
- * the design is real but its numbers are sample data, then the parts, priced
- * from the registry.
+ * the design is real but its numbers are sample data, then the parts priced
+ * from the registry, the wiring drawn from it, and the readings the build
+ * would send.
  */
 export function ExampleBuildDetails({ detail }: { detail: ExampleBuildDetail }) {
-  const { lines, partsCostUsd, unpricedLines, supply, notes } = detail;
+  const { build, lines, partsCostUsd, unpricedLines, supply, notes } = detail;
+  const wiring = exampleWiring(build);
+  const readings = exampleReadings(build);
+  const wiringNotes = wiring.nodes.flatMap((node) => node.notes);
   return (
     <>
       <aside aria-label="About this example build" className="mt-8 rounded-2xl border border-hairline bg-porcelain px-6 py-5">
@@ -20,7 +30,7 @@ export function ExampleBuildDetails({ detail }: { detail: ExampleBuildDetail }) 
       </aside>
 
       <section aria-labelledby="example-build-parts" className="mt-9">
-        <h2 id="example-build-parts" className="font-display text-[26px] font-medium">
+        <h2 id="example-build-parts" className={HEADING}>
           Parts
         </h2>
         <ul className="mt-4 divide-y divide-hairline overflow-hidden rounded-[20px] border border-hairline bg-white">
@@ -46,6 +56,38 @@ export function ExampleBuildDetails({ detail }: { detail: ExampleBuildDetail }) 
             ))}
           </ul>
         ) : null}
+      </section>
+
+      <section aria-labelledby="example-build-wiring" className="mt-11">
+        <h2 id="example-build-wiring" className={HEADING}>
+          Wiring
+        </h2>
+        <p className="mt-2 max-w-[640px] text-[15px] font-light leading-[1.45] text-muted">
+          The volts are the parts&apos; own: the {supply.name} puts out {volts(supply.electrical.supply!.output_v)}, and the{" "}
+          {wiring.brain.name}&apos;s regulator makes the {volts(wiring.rail)} rail its GPIO and most of the sensors run from. Which header pin each lead lands
+          on is our suggestion — the registry has no pin map, and nothing here has been wired on a bench.
+        </p>
+        <div className="mt-5 rounded-[20px] border border-hairline bg-porcelain px-4 py-5 sm:px-6">
+          <BuildCircuitDiagram wiring={wiring} buildName={build.name} />
+        </div>
+        {wiringNotes.length > 0 ? (
+          <ul className="mt-4 flex flex-col gap-2 text-[15px] font-light leading-[1.45] text-muted">
+            {wiringNotes.map((note) => (
+              <li key={note}>Note: {note}</li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <section aria-labelledby="example-build-readings" className="mt-11">
+        <h2 id="example-build-readings" className={HEADING}>
+          Readings
+        </h2>
+        <p className="mt-2 max-w-[640px] text-[15px] font-light leading-[1.45] text-muted">
+          What this build sends: one column per channel its parts read or drive, with the unit the capability carries. The values and times below are sample
+          data.
+        </p>
+        <SampleReadingsTable readings={readings} />
       </section>
     </>
   );

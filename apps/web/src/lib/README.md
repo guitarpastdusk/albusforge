@@ -15,6 +15,9 @@ Code with no markup.
 | `action-result.ts` | `ActionResult<T>` — what every Server Function in `src/actions` returns |
 | `action-errors.ts` | a Server Function failure as a value, logged once with the request's trace |
 | `chart.ts` | line-chart geometry: value domain, y mapping, polyline points |
+| `example-builds.ts` | the example builds shown while gateway answers 501 for listings and the showcase: registry parts, prices and known issues, plus each build's sample readings |
+| `example-wiring.ts` | an example build's wiring, from the registry: which rail feeds each peripheral and over what window (the rules in `registry/scripts/lib/power.ts`), its connector's pins, and the header pin each lands on — the pin choice is the diagram's, not the registry's |
+| `example-readings.ts` | an example build's sample readings table: a column per `read.*`/`act.*` capability with the unit its suffix carries, rows on a fixed UTC clock |
 | `accent.ts` | schema `Accent` → pastel Tailwind classes |
 | `build-status.ts` | display status → pill label, accent, card action, and where the card links |
 | `cx.ts` | class-name joiner |

@@ -8,6 +8,8 @@ export * from "./device";
 export * from "./listings";
 export * from "./usage";
 export * from "./routes";
+export * from "./electrical";
+export * from "./units";
 export * from "./part";
 export * from "./parts";
 export * from "./connector";

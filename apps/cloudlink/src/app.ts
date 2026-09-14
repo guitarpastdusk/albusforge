@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import type { Pool } from "pg";
 import { registerTelemetry } from "./routes.js";
+import { registerObservations, type ObservationOptions } from "./observations.js";
+import { IngestAdmission } from "./admission.js";
 
 export type Log = (entry: Record<string, unknown>) => void;
-export function buildApp({ pool, now, maxInflight = 8, readyTimeoutMs = 2000, log = (entry) => console.log(JSON.stringify(entry)) }: {
-  pool: Pool; now?: () => Date; maxInflight?: number; readyTimeoutMs?: number; log?: Log;
+export function buildApp({ pool, now, observations, maxInflight = 8, readyTimeoutMs = 2000, log = (entry) => console.log(JSON.stringify(entry)) }: {
+  pool: Pool; now?: () => Date; observations?: ObservationOptions; maxInflight?: number; readyTimeoutMs?: number; log?: Log;
 }) {
   const app = Fastify({ logger: false, genReqId: () => randomUUID(), requestIdHeader: false, requestTimeout: 60_000 });
   app.addHook("onRequest", async (request, reply) => { reply.header("x-request-id", request.id); });
@@ -28,6 +30,8 @@ export function buildApp({ pool, now, maxInflight = 8, readyTimeoutMs = 2000, lo
       return reply.code(503).send({ error: { code: "unavailable", message: "Database unavailable" } });
     } finally { clearTimeout(timer); }
   });
-  app.register(async (scope) => registerTelemetry(scope, pool, now, maxInflight, log));
+  const admission = new IngestAdmission(maxInflight);
+  app.register(async (scope) => registerTelemetry(scope, pool, now, maxInflight, log, admission));
+  if (observations) app.register(async (scope) => registerObservations(scope, pool, observations, now, admission));
   return app;
 }

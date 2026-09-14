@@ -17,3 +17,5 @@ export const APP_SCHEMAS = [usersSchema.schemaName, registrySchema.schemaName, b
 export * from "./sensor-ask.js";
 
 export * from "./device-provisioning.js";
+
+export * from "./observations.js";

@@ -1,17 +1,18 @@
 import { performance } from "node:perf_hooks";
 import type { Log } from "./app.js";
-import { createHash } from "node:crypto";
+import { bearerHash, tokenHash } from "./device-auth.js";
+import { IngestAdmission } from "./admission.js";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { Pool } from "pg";
 import { TelemetryAck, TelemetryChannels, TelemetryEnvelope } from "@albusforge/schema";
 
-export const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+export { tokenHash } from "./device-auth.js";
 class IngestError extends Error {
   constructor(readonly statusCode: number, readonly code: string) { super(code); }
 }
 
 /** All tenant attribution comes from the authenticated device, never the wire. */
-export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8, log: Log = () => {}) {
+export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8, log: Log = () => {}, admission = new IngestAdmission(maxInflight)) {
   app.setErrorHandler((error, _request, reply) => {
     // Never log driver errors: they can contain values from parameterized SQL.
     const code = (error as { statusCode?: number }).statusCode;
@@ -20,8 +21,8 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
     reply.code(status).send({ error: { code: error instanceof IngestError ? error.code : status < 500 ? "invalid_request" : "storage_unavailable", message: status < 500 ? "Telemetry request rejected" : "Telemetry storage unavailable" } });
   });
   const ingest = async (request: FastifyRequest, reply: FastifyReply) => {
-    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
-    if (!match) throw new IngestError(401, "unauthorized");
+    const credentialHash = bearerHash(request.headers.authorization);
+    if (!credentialHash) throw new IngestError(401, "unauthorized");
     const parsed = TelemetryEnvelope.safeParse(request.body);
     if (!parsed.success) throw new IngestError(400, "invalid_envelope");
     const envelope = parsed.data;
@@ -49,7 +50,7 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       // marker while that worker inserts aggregates referencing this device.
       const device = (await client.query<{ channels: unknown; next_s: number }>(
         "SELECT channels, next_s FROM telemetry.devices WHERE id=$1 AND token_hash=$2 AND revoked_at IS NULL FOR NO KEY UPDATE",
-        [envelope.dev, tokenHash(match[1]!)],
+        [envelope.dev, credentialHash],
       )).rows[0];
       if (!device) throw new IngestError(401, "unauthorized");
       const prior = (await client.query<{ fingerprint: string; response: unknown }>(
@@ -106,10 +107,9 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       client.release(discard);
     }
   };
-  let inflight = 0;
   app.post("/ingest/v1", { bodyLimit: 128 * 1024 }, async (request, reply) => {
-    if (inflight >= maxInflight) return reply.code(503).header("retry-after", "1").send({ error: { code: "busy", message: "Retry this packet later" } });
-    inflight++;
-    try { return await ingest(request, reply); } finally { inflight--; }
+    const release = admission.acquire();
+    if (!release) return reply.code(503).header("retry-after", "1").send({ error: { code: "busy", message: "Retry this packet later" } });
+    try { return await ingest(request, reply); } finally { release(); }
   });
 }

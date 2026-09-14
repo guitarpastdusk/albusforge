@@ -6,6 +6,8 @@ import { ObservationAck, ObservationHeaders } from "@albusforge/schema";
 import { StoragePreconditionError, type ObservationStorage, type StoredObject } from "@albusforge/storage";
 import { bearerHash, tokenHash } from "./device-auth.js";
 import { validateJpeg } from "./jpeg.js";
+import { observationEvents } from "./observation-events.js";
+import type { Log } from "./app.js";
 import { IngestAdmission } from "./admission.js";
 
 interface Metadata { deviceId: string; observationId: string; capabilityId: string; payloadSchema: "jpeg.v1"; capturedAt: number; sha256: string }
@@ -62,14 +64,16 @@ function ack(metadata: Metadata, receipt: Receipt) {
 }
 
 /** Image codec behind the shared device identity. Numeric v1 retains its own SQL-only receipt. */
-export function registerObservations(app: FastifyInstance, pool: Pool, options: ObservationOptions, now: () => Date = () => new Date(), admission = new IngestAdmission(8)) {
+export function registerObservations(app: FastifyInstance, pool: Pool, options: ObservationOptions, now: () => Date = () => new Date(), admission = new IngestAdmission(8), log: Log = () => {}) {
+  const events = observationEvents(app, log);
   const { store, maxInflight = 4, maxDailyCount = 1200, maxDailyBytes = 128 * 1024 * 1024, maxAttemptsPerMinute = 6, leaseMs = 30_000 } = options;
   const contexts = new WeakMap<FastifyRequest, { metadata: Metadata; credentialHash: string; capability: Capability; release: () => void; enter: () => void; leave: () => void; signal: AbortSignal }>();
   let inflight = 0;
   app.addContentTypeParser("image/jpeg", { parseAs: "buffer" }, (_request, body, done) => done(null, body));
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     const status = error instanceof Rejected ? error.statusCode : (error as { statusCode?: number }).statusCode;
     const code = typeof status === "number" && status >= 400 && status < 500 ? status : 503;
+    events.reject(request, error instanceof Rejected ? error.code : code < 500 ? "invalid_request" : "storage_unavailable");
     if (code === 503 || code === 429) reply.header("retry-after", code === 429 ? "60" : "1");
     return reply.code(code).send({ error: { code: error instanceof Rejected ? error.code : code < 500 ? "invalid_request" : "storage_unavailable", message: "Observation request rejected" } });
   });
@@ -177,10 +181,10 @@ export function registerObservations(app: FastifyInstance, pool: Pool, options: 
       if (reservation.prior) return reply.code(200).send(ack(metadata, reservation.prior));
       signal.throwIfAborted();
       let object: StoredObject;
-      try { object = await store.create(key, body, { sha256, fingerprint }, signal); }
+      try { object = await events.storage(request, () => store.create(key, body, { sha256, fingerprint }, signal)); }
       catch (error) {
         if (!(error instanceof StoragePreconditionError)) throw error;
-        const existing = await store.head(key, signal);
+        const existing = await events.storage(request, () => store.head(key, signal));
         if (!existing) throw new Rejected(503, "object_unavailable");
         object = existing;
       }
@@ -206,6 +210,7 @@ export function registerObservations(app: FastifyInstance, pool: Pool, options: 
           last_received_at=GREATEST(capability_presence.last_received_at,EXCLUDED.last_received_at)`, [metadata.deviceId, metadata.capabilityId, new Date(metadata.capturedAt * 1000), received]);
         return receipt;
       });
+      events.accept(request, body.length);
       return reply.code(201).send(ack(metadata, stored));
     } finally { context.leave(); context.release(); }
   });

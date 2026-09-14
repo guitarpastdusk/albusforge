@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { ObservationStorage } from "@albusforge/storage";
 
+import { observationHealth, type ObservationHealth } from "./health.js";
+
 const DAY = 86_400_000;
 const WORKER_LOCK = "7243004119431865610";
 interface Receipt {
@@ -25,8 +27,9 @@ export interface MaintenanceOptions {
   maxDailyBytes?: number;
   now?: () => Date;
   signal?: AbortSignal;
+  onAccepted?: (bytes: number) => void;
 }
-export interface MaintenanceResult { busy: boolean; finalized: number; expired: number; deleted: number; orphans: number; deferred: number; errors: number }
+export interface MaintenanceResult { health?: ObservationHealth; busy: boolean; finalized: number; expired: number; deleted: number; orphans: number; deferred: number; errors: number }
 async function transaction<T>(client: PoolClient, fn: () => Promise<T>): Promise<T> {
   await client.query("BEGIN");
   try { const result = await fn(); await client.query("COMMIT"); return result; }
@@ -115,7 +118,7 @@ export async function maintainObservations(pool: Pool, store: ObservationStorage
         const object = await store.head(claim.object_key, AbortSignal.any([signal, AbortSignal.timeout(20_000)]));
         storagePhase = false;
         signal.throwIfAborted();
-        await transaction(client, async () => {
+        const finalizedBytes = await transaction(client, async () => {
           const device = await lockDevice(client, claim.device_id);
           const r = await receipt(client, claim.device_id, claim.observation_id);
           const time = now();
@@ -138,8 +141,12 @@ export async function maintainObservations(pool: Pool, store: ObservationStorage
           await client.query(`INSERT INTO telemetry.capability_presence(device_id,capability_id,last_capture_at,last_received_at) VALUES($1,$2,$3,$4)
             ON CONFLICT(device_id,capability_id) DO UPDATE SET last_capture_at=GREATEST(capability_presence.last_capture_at,EXCLUDED.last_capture_at),
               last_received_at=GREATEST(capability_presence.last_received_at,EXCLUDED.last_received_at)`, [r.device_id, r.capability_id, r.captured_at, time]);
-          result.finalized++;
+          return r.bytes;
         });
+        if (finalizedBytes !== undefined) {
+          result.finalized++;
+          try { options.onAccepted?.(finalizedBytes); } catch { /* log delivery cannot undo a confirmed commit */ }
+        }
       } catch (error) { if (signal.aborted || !storagePhase) throw error; result.errors++; }
     }
     // Delete only after the upload deadline/grace. A crashed uploader that wrote
@@ -191,6 +198,8 @@ export async function maintainObservations(pool: Pool, store: ObservationStorage
       });
     }
     await client.query("UPDATE telemetry.observation_maintenance_state SET orphan_page_token=$1 WHERE id=1", [page.nextPageToken]);
+    signal.throwIfAborted();
+    result.health = await observationHealth(client, now(), limit, signal);
     return result;
   } catch (error) { discard = true; throw error; }
   finally {

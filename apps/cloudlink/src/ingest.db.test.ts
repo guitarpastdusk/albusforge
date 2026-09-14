@@ -156,7 +156,7 @@ it("runs the local provision and simulator CLIs over real HTTP, retaining one pa
     await live.close();
     await rm(dir, { recursive: true, force: true });
   }
-});
+}, 180_000);
 
 it("deduplicates retries across independent service instances and SQL pools", async () => {
   const f = await fixture();

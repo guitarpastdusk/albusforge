@@ -27,7 +27,7 @@ Wi-Fi and OTA configuration by compiling against the local ignored
 | Flash / PSRAM | 16 MiB / 8 MiB octal PSRAM |
 | Camera | GC0308, PID `0x009b`, QVGA RGB565 with software JPEG conversion |
 | Camera live state | dashboard, stream and snapshot endpoints available |
-| Firmware image after sensor update | 1,054,939 bytes; 13% of the 8,126,464-byte app partition |
+| Firmware image after sensor update | approximately 1.05 MB; 13% of the 8,126,464-byte app partition |
 
 ## Recovery material and safety boundaries
 

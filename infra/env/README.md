@@ -24,7 +24,7 @@ The `default` workspace is not an environment and fails at plan with an invalid-
 - **db-migrate** job: runs `packages/db` migrations as `albus_migrate`, then creates or updates the app role `albus_app` and its grants. The app role can read and write but can't change the schema.
 - **registry-load** job: loads `registry/` into `registry.parts` as `albus_app`.
 - **gateway** gets the database env vars and mounts `db-app-password`.
-- **Empty secrets** `anthropic-api-key` and `resend-api-key`. Gateway can read the Resend key; intake gets the Anthropic key in M2.
+- **Secrets** `anthropic-api-key` and `resend-api-key`. Terraform creates the secret and the accessor bindings; the *versions* are added by hand and both environments now hold a real enabled version. Gateway reads the Resend key; intake and ask read the Anthropic key. A revision cannot start without a version present.
 
 Both jobs start with Google's sample job image; the gateway deploy workflow replaces them and executes each one, waiting for success, before deploying gateway (docs/adr/0005 applies to jobs too).
 
@@ -44,11 +44,13 @@ Use a separate key for staging and prod, with a spend limit set in the provider'
 - **intake**: internal-only Cloud Run service (ask → spec). Gateway holds `run.invoker` on it and calls it with an ID token. It mounts `anthropic-api-key` and the app DB password, and uses `LLM_MODEL=claude-opus-5`.
 - **gateway**: CPU always allocated, because it calls intake after replying to the client. It gets `INTAKE_URL` and mounts `resend-api-key`.
 - **Drafts on staging:** `REGISTRY_INCLUDE_DRAFTS` is `true` in staging, so chat can use the draft parts, and `false` in prod.
-- **LLM spend guardrail:** the log-based distribution metric `llm_cost`, built from intake's `event="llm_call"` log lines, with two alert policies (hourly and 24-hour budgets in `locals.tf`, one PromQL condition each) emailing `var.alert_email`. After apply, emit a test `llm_call` line to check the query and email delivery.
+- **LLM spend guardrail:** the log-based distribution metric `llm_cost`, built from intake's `event="llm_call"` log lines, with two alert policies (hourly and 22-hour budgets in `locals.tf`, one MQL condition each) emailing `var.alert_email`. 22h, not 24h: alerting reads at most 24h of history and a sliding window needs roughly an hour of headroom on top. After apply, emit a test `llm_call` line to check the query and email delivery.
 
 Mounting an API key requires a secret version to exist; both keys have one. ADR 0005 applies to intake too once its deploy workflow exists.
 
 ## Sensor rollout configuration
+
+**One owner applies this directory at a time** — see [ARCHITECTURE.md §12.3.1](../../docs/ARCHITECTURE.md#1231-who-applies-terraform) for who currently holds it and how handover works.
 
 `rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. Both environments now record their applied activation: model enabled with `claude-haiku-4-5` and schedules enabled, with SQL connection alert thresholds 37 for staging and 320 for production. Earlier disabled settings are preserved in the rollout ledger and git history. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
 

@@ -97,7 +97,7 @@ it("shows anonymous model usage only after the real sign-up claim and preserves 
   await handle.pool.query("INSERT INTO builds.builds(id,anon_owner_hash,ask_text) VALUES($1,$2,'test')", [build, anon]);
   await handle.pool.query("INSERT INTO builds.llm_calls(build_id,anon_owner_hash,stage,model,input_tokens,cost_usd) VALUES($1,$2,'intake','test-model',7,'0.654321')", [build, anon]);
   const other = await fixture(); expect((await other.get()).json().model.total.calls).toBe("0");
-  const store = createAuthStore(handle.db, { newSessionToken: () => randomBytes(32).toString("base64url") }), email = `${randomUUID()}@example.test`;
+  const store = createAuthStore(handle.db, { newSessionToken: () => randomBytes(32).toString("base64url"), pool: handle.pool }), email = `${randomUUID()}@example.test`;
   const code = await store.issueCode(email);
   const result = await store.verifyCode({ email, code: code.code, anonOwnerHash: anon, currentSessionToken: undefined, sessionMaxAgeS: 3600 });
   if (result.kind !== "verified") throw new Error("Claim fixture failed");

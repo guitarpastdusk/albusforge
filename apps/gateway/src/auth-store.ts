@@ -12,6 +12,8 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { builds, type Db, emailCodes, llmCalls, sessions, tenantMembers, tenants, type TenantRole, users } from "@albusforge/db";
 import type { Me, TenantMembership } from "@albusforge/schema";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import type { Pool } from "pg";
+import { writeTransaction } from "./read-snapshot";
 import { hashSessionToken } from "./session-cookie";
 
 /** ADR 0008: valid for 10 minutes. */
@@ -61,6 +63,7 @@ export interface AuthStore {
    * many sessions it revoked; 0 for an unknown or already revoked token.
    */
   revokeSessionFamily(sessionToken: string): Promise<number>;
+  switchTenant(sessionToken: string, tenantId: string): Promise<"switched" | "unauthenticated" | "forbidden">;
 }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -125,7 +128,7 @@ export async function sessionTenantIn(db: Queryable, token: string): Promise<str
   return row?.activeTenantId ?? null;
 }
 
-export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: () => string }): AuthStore {
+export function createAuthStore(db: Db, { newSessionToken, pool }: { newSessionToken: () => string; pool: Pool }): AuthStore {
   return {
     async issueCode(rawEmail, now = new Date()) {
       const email = normalizeEmail(rawEmail);
@@ -233,6 +236,42 @@ export function createAuthStore(db: Db, { newSessionToken }: { newSessionToken: 
 
     async sessionTenant(token) {
       return sessionTenantIn(db, token);
+    },
+
+    async switchTenant(token, tenantId) {
+      return writeTransaction(pool, async (tx) => {
+        // Lock first without a stale validity predicate; a concurrent sign-out
+        // that wins the lock is observed in the returned row.
+        const session = (await tx.execute<{ id: string; user_id: string; active_tenant_id: string }>(sql`
+          SELECT id, user_id, active_tenant_id FROM users.sessions
+          WHERE token_hash = ${hashSessionToken(token)} FOR UPDATE
+        `)).rows[0];
+        if (!session) return "unauthenticated";
+        // Stable order avoids two sessions switching opposite directions
+        // taking membership locks in opposite orders. KEY SHARE blocks delete.
+        const members = await tx.execute<{ tenant_id: string }>(sql`
+          SELECT tenant_id FROM users.tenant_members
+          WHERE user_id = ${session.user_id} AND tenant_id IN (${session.active_tenant_id}, ${tenantId})
+          ORDER BY tenant_id FOR KEY SHARE
+        `);
+        const family = await tx.execute<{ valid: boolean }>(sql`
+          WITH RECURSIVE family AS (
+            SELECT id,parent_session_id,user_id,expires_at,revoked_at FROM users.sessions WHERE id = ${session.id}
+            UNION
+            SELECT s.id,s.parent_session_id,s.user_id,s.expires_at,s.revoked_at
+            FROM users.sessions s JOIN family f ON s.id=f.parent_session_id
+          ) SELECT NOT EXISTS(SELECT 1 FROM family WHERE revoked_at IS NOT NULL
+            OR expires_at <= clock_timestamp() OR user_id <> ${session.user_id}) AS valid
+        `);
+        if (!family.rows[0]?.valid) return "unauthenticated";
+        if (!members.rows.some((member) => member.tenant_id === tenantId)) return "forbidden";
+        const changed = await tx.execute(sql`
+          UPDATE users.sessions SET active_tenant_id = ${tenantId}
+          WHERE id = ${session.id} AND revoked_at IS NULL AND expires_at > clock_timestamp()
+          RETURNING id
+        `);
+        return changed.rowCount === 1 ? "switched" : "unauthenticated";
+      });
     },
 
     async revokeSessionFamily(token) {

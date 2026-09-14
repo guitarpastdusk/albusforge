@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import type { TenantMembership } from "@albusforge/schema";
+import { WorkspaceControl } from "./WorkspaceControl";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { signOut } from "@/actions/auth";
@@ -10,6 +12,9 @@ import { cx } from "@/lib/cx";
 export interface HeaderUser {
   email: string;
   displayName: string | null;
+  workspace?: TenantMembership;
+  memberships?: TenantMembership[];
+  hostScoped?: boolean;
 }
 
 interface NavItem {
@@ -104,7 +109,8 @@ export function Header({ user, pending = false }: { user: HeaderUser | null; pen
         {pending ? null : user ? (
           <div className="flex items-center gap-2.5">
             <Avatar user={user} size="desktop" />
-            <span className="text-[15px] text-muted">{user.email}</span>
+            <span className="max-w-[160px] truncate text-[15px] text-muted" title={user.email}>{user.email}</span>
+            {user.workspace ? <WorkspaceControl key={user.workspace.id} workspace={user.workspace} memberships={user.memberships ?? [user.workspace]} hostScoped={user.hostScoped} /> : null}
             <Link href="/usage" aria-current={pathname === "/usage" ? "page" : undefined} className="text-[14px] text-muted hover:text-coral-deep">Usage</Link>
             <form action={signOut} className="ml-1.5">
               <button type="submit" className="whitespace-nowrap text-[14px] text-faint hover:text-coral-deep">
@@ -206,6 +212,7 @@ export function HeaderMenu({
                 <Avatar user={user} size="desktop" />
                 <span className="min-w-0 break-all text-[15px] text-muted">{user.email}</span>
               </div>
+              {user.workspace ? <div className="mt-4"><WorkspaceControl key={user.workspace.id} workspace={user.workspace} memberships={user.memberships ?? [user.workspace]} hostScoped={user.hostScoped} /></div> : null}
               <form action={signOut}>
                 <Link href="/usage" onClick={onNavigate} aria-current={pathname === "/usage" ? "page" : undefined} className="mt-4 block rounded-[14px] border border-hairline bg-white px-4 py-3 text-center text-[16px] text-ink hover:border-ink">Usage</Link>
                 <button

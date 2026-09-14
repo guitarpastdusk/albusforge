@@ -88,6 +88,12 @@ export type BuildDetail = z.infer<typeof BuildDetail>;
 export const CreateBuildRequest = z.object({
   ask_text: PersonText(2000),
   /**
+   * Workspace displayed when the caller initiated creation; null means anonymous.
+   * The gateway compares this with its authorized owner, never uses it to select
+   * a tenant. Omission supports older clients; workspace-aware clients send it.
+   */
+  expected_tenant_id: z.uuid().nullable().optional(),
+  /**
    * Client-generated, stored on the first message. Resending the same id with
    * the same anonymous owner cookie returns the build already created (200)
    * instead of creating another.

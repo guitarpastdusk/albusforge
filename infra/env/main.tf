@@ -30,13 +30,16 @@ module "gateway" {
   cpu_idle = false
 
   env = merge(local.db_env, {
-    PUBLIC_DOMAIN           = local.domain
-    SSR_SERVICE_ACCOUNT     = module.web.service_account_email
-    GOOGLE_CLOUD_PROJECT    = local.project_id
-    DB_USER                 = local.db_app_role
-    INTAKE_URL              = module.intake.uri
-    ASK_URL                 = module.ask.uri
-    REGISTRY_INCLUDE_DRAFTS = tostring(local.settings.registry_include_drafts)
+    PUBLIC_DOMAIN                   = local.domain
+    SSR_SERVICE_ACCOUNT             = module.web.service_account_email
+    GOOGLE_CLOUD_PROJECT            = local.project_id
+    DB_USER                         = local.db_app_role
+    INTAKE_URL                      = module.intake.uri
+    ASK_URL                         = module.ask.uri
+    REGISTRY_INCLUDE_DRAFTS         = tostring(local.settings.registry_include_drafts)
+    OBSERVATION_READS_ENABLED       = var.observation_reads_enabled ? "1" : "0"
+    CAMERA_IMAGES_BUCKET            = google_storage_bucket.observations.name
+    OBSERVATION_STORAGE_WORKER_PATH = "/app/storage-worker.cjs"
   })
   secret_env = {
     DB_PASSWORD    = { secret = module.sql.app_password_secret }

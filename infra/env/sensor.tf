@@ -14,13 +14,16 @@ module "cloudlink" {
   request_timeout     = "60s"
   deletion_protection = local.settings.deletion_protection
   env = merge(local.db_env, {
-    DB_USER               = local.db_app_role
-    DB_POOL_MAX           = tostring(local.settings.cloudlink_pool_max)
-    INGEST_MAX_INFLIGHT   = tostring(local.settings.cloudlink_concurrency)
-    DB_CONNECT_TIMEOUT_MS = "5000"
-    DB_QUERY_TIMEOUT_MS   = "10000"
-    DB_IDLE_TIMEOUT_MS    = "30000"
-    GOOGLE_CLOUD_PROJECT  = local.project_id
+    DB_USER                         = local.db_app_role
+    DB_POOL_MAX                     = tostring(local.settings.cloudlink_pool_max)
+    INGEST_MAX_INFLIGHT             = tostring(local.settings.cloudlink_concurrency)
+    DB_CONNECT_TIMEOUT_MS           = "5000"
+    DB_QUERY_TIMEOUT_MS             = "10000"
+    DB_IDLE_TIMEOUT_MS              = "30000"
+    GOOGLE_CLOUD_PROJECT            = local.project_id
+    OBSERVATION_UPLOADS_ENABLED     = var.observation_uploads_enabled ? "1" : "0"
+    CAMERA_IMAGES_BUCKET            = google_storage_bucket.observations.name
+    OBSERVATION_STORAGE_WORKER_PATH = "/app/storage-worker.cjs"
   })
   secret_env = { DB_PASSWORD = { secret = module.sql.app_password_secret } }
 }

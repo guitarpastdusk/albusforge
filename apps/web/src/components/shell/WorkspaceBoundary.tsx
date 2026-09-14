@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 const SWITCH_KEY = "albus-workspace-transition";
-interface Transition { begin: () => void; finish: () => void; fail: (message: string) => void; blocked: boolean; message: string }
+interface Transition { expectedTenant: string | null | undefined; setExpectedTenant: (tenant: string | null | undefined) => void; begin: () => void; finish: () => void; fail: (message: string) => void; blocked: boolean; message: string }
 const Context = createContext<Transition | null>(null);
 export const useWorkspaceTransition = () => useContext(Context);
 const reload = () => window.location.replace("/projects");
@@ -17,6 +17,7 @@ function signal(phase: "begin" | "finish") {
 /** A switch removes tenant components before mutation and never restores stale data. */
 export function WorkspaceBoundary({ children }: { children: ReactNode }) {
   const ownSignals = useRef(new Set<string>());
+  const [expectedTenant, setExpectedTenant] = useState<string | null | undefined>(undefined);
   const [blocked, setBlocked] = useState(false);
   const [message, setMessage] = useState("Switching workspace…");
   useEffect(() => {
@@ -40,7 +41,7 @@ export function WorkspaceBoundary({ children }: { children: ReactNode }) {
     window.addEventListener("focus", focus);
     return () => { window.removeEventListener("storage", storage);window.removeEventListener("pageshow", pageshow);window.removeEventListener("focus", focus);channel?.close(); };
   }, []);
-  return <Context.Provider value={{ blocked, message,
+  return <Context.Provider value={{ blocked, message, expectedTenant, setExpectedTenant,
     begin: () => { setBlocked(true);setMessage("Switching workspace…");ownSignals.current.add(signal("begin")); },
     finish: () => { ownSignals.current.add(signal("finish"));reload(); },
     fail: (reason) => { setMessage(reason);ownSignals.current.add(signal("finish")); },

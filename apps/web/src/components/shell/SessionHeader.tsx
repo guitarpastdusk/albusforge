@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { getHeaderSession } from "@/lib/session";
+import { WorkspaceIdentity } from "./WorkspaceIdentity";
 import { Header } from "./Header";
 
 /**
@@ -13,6 +14,6 @@ export async function SessionHeader() {
   const session = await getHeaderSession();
   const host = ((await headers()).get("host") ?? "").toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
   const hostScoped = host.endsWith(".albusforge.ai") && host !== "staging.albusforge.ai";
-  return <Header user={session ? { email: session.user.email, displayName: session.user.display_name,
-    workspace: hostScoped ? session.tenants.find((tenant) => tenant.slug === host.slice(0, -".albusforge.ai".length)) : session.tenant, memberships: session.tenants, hostScoped } : null} />;
+  return <><WorkspaceIdentity snapshot={session ? { userId: session.user.id, tenantId: session.tenant.id } : null} /><Header user={session ? { email: session.user.email, displayName: session.user.display_name,
+    workspace: hostScoped ? session.tenants.find((tenant) => tenant.slug === host.slice(0, -".albusforge.ai".length)) : session.tenant, memberships: session.tenants, hostScoped } : null} /></>;
 }

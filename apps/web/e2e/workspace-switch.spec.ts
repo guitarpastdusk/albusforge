@@ -56,3 +56,63 @@ test("workspace switch clears both tabs, isolates another session, and reconcile
     expect(errors).toEqual([]);
   } finally {await independent.close();await peer.close();}
 });
+
+test('a peer hydrating after a completed switch must not retain old tenant content',async({page,context,stack})=>{
+  const email='reviewer-hydration@example.test';
+  await page.goto(stack.webUrl+'/signin?next=%2Fprojects');
+  await page.getByLabel('Email',{exact:true}).fill(email);
+  await page.getByRole('button',{name:'Email me a code'}).click();
+  await page.getByLabel('6-digit code').fill(await stack.codeFor(email));
+  await page.getByRole('button',{name:'Verify & sign in'}).click();
+  await expect(page).toHaveURL(stack.webUrl+'/projects');
+  const row=(await stack.pool.query('SELECT s.active_tenant_id,u.id FROM users.sessions s JOIN users.users u ON u.id=s.user_id WHERE u.email=$1',[email])).rows[0];
+  const b=randomUUID();
+  await stack.pool.query("INSERT INTO users.tenants(id,name) VALUES($1,'Review workspace B')",[b]);
+  await stack.pool.query("INSERT INTO users.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'viewer')",[b,row.id]);
+  await stack.pool.query("INSERT INTO builds.builds(tenant_id,ask_text) VALUES($1,'Review private A'),($2,'Review private B')",[row.active_tenant_id,b]);
+  await page.reload();
+  await expect(page.getByRole('heading',{name:'Review private A',exact:true})).toBeVisible();
+  const peer=await context.newPage();
+  let release!:()=>void;const held=new Promise<void>(r=>release=r);
+  await peer.route('**/_next/static/**/*.js',async route=>{await held;await route.continue();});
+  try{
+    await peer.goto(stack.webUrl+'/projects',{waitUntil:'commit'});
+    await expect(peer.getByRole('heading',{name:'Checking workspace',exact:true})).toBeVisible();
+    await expect(peer.getByRole('heading',{name:'Review private A',exact:true})).toHaveCount(0);
+    await page.getByLabel('Workspace',{exact:true}).filter({visible:true}).selectOption(b);
+    await page.getByRole('button',{name:'Switch',exact:true}).filter({visible:true}).click();
+    await expect(page.getByRole('heading',{name:'Review private B',exact:true})).toBeVisible();
+    release();
+    await peer.waitForLoadState('networkidle');
+    await peer.bringToFront();
+    const staleA=await peer.getByRole('heading',{name:'Review private A',exact:true}).count();
+    await peer.getByRole('link',{name:/albusforge/}).first().click();
+    await expect(peer.getByRole('textbox',{name:'Describe the device you want'})).toBeVisible();
+    const displayedWorkspace=await peer.getByLabel('Workspace',{exact:true}).filter({visible:true}).inputValue();
+    await peer.getByRole('textbox',{name:'Describe the device you want'}).fill('Reviewer intended private workspace A');
+    await peer.getByRole('button',{name:'Start building'}).click();
+    await expect.poll(async()=> (await stack.pool.query('SELECT tenant_id FROM builds.builds WHERE ask_text=$1',['Reviewer intended private workspace A'])).rows.length).toBe(1);
+    const writtenWorkspace=(await stack.pool.query('SELECT tenant_id FROM builds.builds WHERE ask_text=$1',['Reviewer intended private workspace A'])).rows[0].tenant_id;
+    console.log(JSON.stringify({staleA,displayedOldWorkspace:displayedWorkspace===row.active_tenant_id,writtenToNewWorkspace:writtenWorkspace===b}));
+    expect(staleA).toBe(0);
+    expect(writtenWorkspace).toBe(displayedWorkspace);
+  }finally{release();await peer.close();}
+});
+
+// Model an event missed after successful admission: the server still rejects
+// the rendered A intent when the live session has advanced to B.
+test("a missed switch cannot retarget a new build after client admission", async ({page, stack}) => {
+  const email = "workspace-intent@example.test";
+  await signIn(page, stack, email);
+  const row = (await stack.pool.query("SELECT s.active_tenant_id,u.id FROM users.sessions s JOIN users.users u ON u.id=s.user_id WHERE u.email=$1", [email])).rows[0];
+  const other = randomUUID();
+  await stack.pool.query("INSERT INTO users.tenants(id,name) VALUES($1,'Intent B')", [other]);
+  await stack.pool.query("INSERT INTO users.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'viewer')", [other,row.id]);
+  await page.goto(stack.webUrl);
+  await expect(page.getByRole("button", {name:"Start building",exact:true})).toBeEnabled();
+  await stack.pool.query("UPDATE users.sessions SET active_tenant_id=$1 WHERE user_id=$2", [other,row.id]);
+  await page.getByLabel("Describe the device you want").fill("Must never be silently retargeted");
+  await page.getByRole("button", {name:"Start building",exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("Your workspace changed");
+  expect((await stack.pool.query("SELECT id FROM builds.builds WHERE ask_text=$1", ["Must never be silently retargeted"])).rows).toEqual([]);
+});

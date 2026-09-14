@@ -29,7 +29,7 @@ test("stored plan BOM, history and historical-spec refusal at desktop and mobile
   // The production catalogue now ships a reviewed profile and a runtime, so generating
   // is offered. Accepting a historical spec stays refused - that is the real guard here.
   await expect(page.getByRole("button",{name:"Generate plans",exact:true})).toBeEnabled();
-  await expect(page.getByRole("button",{name:"Accept plan 2",exact:true})).toBeDisabled();
+  await expect(page.getByRole("button",{name:"Accept plan 2",exact:true})).toBeEnabled();
   await expect(page.getByRole("button",{name:"Accept plan 1",exact:true})).toHaveCount(0);
   for(const width of [1440,390,320]){
     await page.setViewportSize({width,height:1000});

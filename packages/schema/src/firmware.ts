@@ -21,9 +21,16 @@ export const FirmwareManifest = z.strictObject({
 });
 export type FirmwareManifest = z.infer<typeof FirmwareManifest>;
 
+export const FirmwareJobRequest = z.strictObject({
+  request_id:z.uuid(), interval_s:z.number().int().min(10).max(86400), instruction:z.string().max(500),
+  based_on:z.number().int().positive().nullable(), attempts:z.number().int().min(0).max(3),
+});
+export type FirmwareJobRequest = z.infer<typeof FirmwareJobRequest>;
+
 /** Persisted in code_bundles.compile_log when status=passed. */
 export const FirmwarePassedRecord = z.strictObject({
   schema_version: z.literal(1),
+  job: FirmwareJobRequest.optional(),
   candidate_id: z.string().min(1).max(120),
   manifest: FirmwareManifest,
   manifest_digest: z.string().regex(/^[a-f0-9]{64}$/),

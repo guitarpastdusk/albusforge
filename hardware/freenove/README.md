@@ -34,9 +34,11 @@ has no active assembly/provisioning profiles; measured power/mechanical evidence
 and reviewed profile activation must land before the normal product flow can
 issue a production camera build.
 
-This configuration covers the bare-board stage of `bringup_workflow.svg`:
-Wi-Fi provisioning, camera, local dashboard, and an additional SD mount/capacity
-check. Sensors, servo, cloud ingestion, and a second node require later work.
+This configuration covers Wi-Fi provisioning, camera, local dashboard, an SD
+mount/capacity check, plus the wired BH1750 light and BME280 climate sensors.
+The I²C soil probe is presence-only until it receives a reviewed driver and
+calibration. Servo control, cloud ingestion, and a second node require later
+work.
 
 ## Provision Wi-Fi
 

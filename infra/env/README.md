@@ -48,9 +48,9 @@ Use a separate key for staging and prod, with a spend limit set in the provider'
 
 Mounting an API key requires a secret version to exist; both keys have one. ADR 0005 applies to intake too once its deploy workflow exists.
 
-## Initial sensor rollout configuration
+## Sensor rollout configuration
 
-`rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. They keep model calls disabled and telemetry schedules paused, with SQL connection alert thresholds 37 and 320 respectively. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
+`rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. Staging now records the applied activation: model enabled with `claude-haiku-4-5`, schedules enabled, SQL connection alert threshold 37. Production remains at initial deployment settings: model disabled, schedules paused, threshold 320. Earlier disabled staging settings are preserved in the rollout ledger and git history. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
 
 Before these commands, complete the [ADR 0005 exclusion window](../../docs/adr/0005-ci-owns-images-terraform-owns-shape.md): disable all affected deployment/promotion workflows, drain their complete paginated run histories and any already-started database/telemetry job executions, and pause affected schedules. Keep the window through apply. Plans made before the drain are inspection evidence only and must not be applied.
 
@@ -75,4 +75,4 @@ terraform apply <private-evidence>/prod.tfplan
 
 Apply consumes the reviewed saved plan, including both variable files; do not pass replacement variables during apply. Raw plans/JSON may contain sensitive values and must stay private. If the base file resides elsewhere, use its explicit absolute path instead of copying secrets into this checkout. These commands document operator procedure, not permission to skip review or evidence that an apply happened.
 
-Initial infrastructure creates placeholder service/job images. Promote verified immutable staging digests and establish schema readiness before invoking real processing. Root updates activation flags through a reviewed change only after the corresponding acceptance gates pass; operationally toggling schedules without updating desired configuration would introduce drift. See [the rollout ledger](../../docs/SENSOR-CLOUD-ROLLOUT.md).
+Initial infrastructure creates placeholder service/job images. Promote verified immutable staging digests and establish schema readiness before invoking real processing. Root records activation flag changes alongside their acceptance evidence; operationally toggling schedules without updating desired configuration would introduce drift. See [the rollout ledger](../../docs/SENSOR-CLOUD-ROLLOUT.md).

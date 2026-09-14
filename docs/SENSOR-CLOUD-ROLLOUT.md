@@ -2,7 +2,17 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active acceptance update — 2026-09-14, 00:14 UTC
+## Active activation update — 2026-09-14, 00:28 UTC
+
+Root applied staging model activation and schedule activation successfully. The current staging variable file now records `ask_model_enabled=true`, `ask_model=claude-haiku-4-5`, `telemetry_schedules_enabled=true` and SQL connection alert threshold 37, matching the applied private activation input. Both schedules and five schedule-dependent alerts are enabled. Actual automatic execution observation remains pending; enabled configuration alone does not prove scheduled processing.
+
+The provider acceptance request `520e1c51-286e-45b1-9173-95208454e904` was verified against SQL and logs through audit execution `registry-load-mbjh2`: model `claude-haiku-4-5-20251001`, 341 input tokens, 9 output tokens, recorded cost $0.000386, outcome `model`, known usage. This establishes one real-provider call with attributed usage; it is not a sustained quality or load evaluation.
+
+The full durable-quota SQL audit and cleanup passed through `registry-load-zg4s7`; subsequent cleanup verification passed and quota-test credentials were removed. Pipeline fixture cleanup remains in flight and is tracked separately.
+
+Production's fresh plan was reviewed after its exclusion window: 54 creates, two updates, no deletions. Root's production apply is in progress; completion and production service/acceptance evidence are not claimed. Production's committed rollout inputs remain model disabled, schedules paused and SQL alert threshold 320. Physical hardware validation and backend telemetry SSE remain outside the accepted scope.
+
+## Earlier acceptance update — 2026-09-14, 00:14 UTC
 
 Root-operated staging checks now extend the deployment snapshot below:
 
@@ -55,7 +65,7 @@ The earlier inventory, PR ownership states and local tests below remain historic
 
 The production preflight confirmed SQL alert threshold 320, model disabled and schedules paused. New sensor resources use the module bootstrap placeholders until release workflows promote immutable images. Its private plan hash is `9b681a90758d3ca0bc3d41bda3afde41d2ca751d327e2b681a44fc5549f01221`; the hash identifies inspection evidence, not an apply artifact. Refreshed registry-load drift was execution count/latest execution metadata only, with no desired job configuration update.
 
-Named nonsecret initial configuration is committed as [`rollout-staging.tfvars.json`](../infra/env/rollout-staging.tfvars.json) and [`rollout-prod.tfvars.json`](../infra/env/rollout-prod.tfvars.json). The [environment runbook](../infra/env/README.md#initial-sensor-rollout-configuration) requires the explicit private base plus matching environment file and the reviewed workflow/job exclusion window. Staging reservations remain 40/50 connections including observer/reserved slots; production's one-retry/600-second rollup bound is approximately 266/400. Those are capacity reservations, not demonstrated throughput.
+Named nonsecret initial configuration is committed as [`rollout-staging.tfvars.json`](../infra/env/rollout-staging.tfvars.json) and [`rollout-prod.tfvars.json`](../infra/env/rollout-prod.tfvars.json). The [environment runbook](../infra/env/README.md#sensor-rollout-configuration) requires the explicit private base plus matching environment file and the reviewed workflow/job exclusion window. Staging reservations remain 40/50 connections including observer/reserved slots; production's one-retry/600-second rollup bound is approximately 266/400. Those are capacity reservations, not demonstrated throughput.
 
 No physical sensor, real-provider chatbot, complete deployed portal journey or production acceptance is claimed by this snapshot. Later rollout updates append exact evidence here and change activation flags only after the corresponding acceptance gates pass.
 

@@ -9,6 +9,7 @@ export const ProvisioningProfile = z.strictObject({
   runtime: z.string().min(1).max(40),
   part_versions: z.array(Pin).min(1).max(64),
   firmware_profile_id: z.string().min(1).max(100),
+  health_sources: z.array(z.strictObject({ part: Pin, telemetry_schema: z.literal("device_health.v1") })).max(1),
   channels: z.array(z.strictObject({
     key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
     range: TelemetryChannel,
@@ -39,7 +40,12 @@ export function resolveProvisioningProfile(profiles: readonly ProvisioningProfil
   const covered = new Set<string>();
   for (const channel of profile.channels) {
     const part = parts.find(part => part.id === channel.part.id && part.version === channel.part.version);
-    if (!part || part.cloud.telemetry_schema !== channel.telemetry_schema) return null;
+    if (!part || channel.telemetry_schema === "device_health.v1" || part.cloud.telemetry_schema !== channel.telemetry_schema) return null;
+    covered.add(`${part.id}@${part.version}`);
+  }
+  for (const health of profile.health_sources) {
+    const part = parts.find(part => part.id === health.part.id && part.version === health.part.version);
+    if (!part || part.electrical.interface !== "host" || part.cloud.telemetry_schema !== health.telemetry_schema) return null;
     covered.add(`${part.id}@${part.version}`);
   }
   if (parts.some(part => part.cloud.telemetry_schema !== null && !covered.has(`${part.id}@${part.version}`))) return null;

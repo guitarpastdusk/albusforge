@@ -8,7 +8,7 @@ function fixture() {
   part.status = "active";
   const pin = { id: part.id, version: part.version };
   const accepted = { profile: { id: "test-fixture", version: "1.0.0" }, runtime: "0.1.0", part_versions: [pin] };
-  const profile = ProvisioningProfile.parse({ id: "test-only-temperature", version: "1.0.0", assembly_profile: accepted.profile, runtime: accepted.runtime, part_versions: [pin], firmware_profile_id: "test-only", channels: [{ key: "temperature", range: { unit: "C", min: -40, max: 85 }, part: pin, telemetry_schema: part.cloud.telemetry_schema }] });
+  const profile = ProvisioningProfile.parse({ id: "test-only-temperature", version: "1.0.0", assembly_profile: accepted.profile, runtime: accepted.runtime, part_versions: [pin], firmware_profile_id: "test-only", health_sources: [], channels: [{ key: "temperature", range: { unit: "C", min: -40, max: 85 }, part: pin, telemetry_schema: part.cloud.telemetry_schema }] });
   return { part, accepted, profile };
 }
 it("requires exact active pins, profile/runtime and firmware target, with no production defaults", () => {
@@ -29,4 +29,17 @@ it("refuses ambiguous profiles, incorrect telemetry schemas and unowned channel 
   expect(resolveProvisioningProfile([{ ...profile, channels: [{ ...profile.channels[0]!, part: { id: "different", version: "1.0.0" } }] }], accepted, [part], "test-only")).toBeNull();
   expect(ProvisioningProfile.safeParse({ ...profile, channels: [...profile.channels, ...profile.channels] }).success).toBe(false);
   expect(ProvisioningProfile.safeParse({ ...profile, channels: [{ ...profile.channels[0]!, range: { unit: "C", min: 20, max: 10 } }] }).success).toBe(false);
+});
+
+it("accounts explicitly for host packet health without inventing a sensor channel", () => {
+  const { part, accepted, profile } = fixture();
+  const host = PartDefinition.parse(JSON.parse(readFileSync(new URL("../../../registry/parts/C-001/part.json", import.meta.url), "utf8")));
+  host.status = "active";
+  const hostPin = { id: host.id, version: host.version };
+  const plan = { ...accepted, part_versions: [...accepted.part_versions, hostPin] };
+  const withHost = { ...profile, part_versions: plan.part_versions };
+  expect(resolveProvisioningProfile([withHost], plan, [part, host], "test-only")).toBeNull();
+  const withHealth = { ...withHost, health_sources: [{ part: hostPin, telemetry_schema: "device_health.v1" as const }] };
+  expect(resolveProvisioningProfile([withHealth], plan, [part, host], "test-only")?.channels).toEqual({ temperature: { unit: "C", min: -40, max: 85 } });
+  expect(resolveProvisioningProfile([{ ...withHealth, health_sources: [{ part: { id: part.id, version: part.version }, telemetry_schema: "device_health.v1" }] }], plan, [part, host], "test-only")).toBeNull();
 });

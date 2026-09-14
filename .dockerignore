@@ -16,6 +16,10 @@ infra
 firmware/esp32s3/build
 firmware/esp32s3/sdkconfig
 firmware/esp32s3/sdkconfig.old
+firmware/esp32s3-camera/build
+firmware/esp32s3-camera/managed_components
+firmware/esp32s3-camera/sdkconfig
+firmware/esp32s3-camera/sdkconfig.old
 firmware/**/__pycache__
 
 # Board credentials, captured data, flash backups and local ESPHome tool output.

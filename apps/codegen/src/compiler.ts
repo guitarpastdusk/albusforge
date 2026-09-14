@@ -10,6 +10,7 @@ import {
 } from "@albusforge/schema";
 
 import { COMPILER_IMAGE, CANDIDATE, CHANNELS, renderApp } from "./candidate";
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
 export { editInterval, renderApp } from "./candidate";
 export const sha256 = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -85,10 +86,11 @@ async function command(
   });
 }
 /** IDF mode runs inside the dedicated pinned compiler job; Docker mode is local isolation. */
-export async function compile(
+async function compileProfile(
   input: CompileInput,
   templateRoot: string,
-  mode: "docker" | "idf" = "docker",
+  mode: "docker" | "idf",
+  camera: boolean,
 ): Promise<Compiled> {
   input = z
     .strictObject({
@@ -106,7 +108,7 @@ export async function compile(
       : tmpdir());
   await mkdir(workRoot, { recursive: true });
   const workspace = await mkdtemp(join(workRoot, "albus-compile-"));
-  const source = renderApp(input.interval_s);
+  const source = camera ? renderCameraApp(input.interval_s) : renderApp(input.interval_s);
   const containerName = `albus-compile-${randomUUID()}`;
   try {
     await cp(templateRoot, workspace, {
@@ -138,6 +140,7 @@ export async function compile(
             "ALL",
             "--security-opt",
             "no-new-privileges",
+            ...(camera ? ["--tmpfs", "/tmp:rw,size=2g"] : []),
             "--memory",
             "4g",
             "--cpus",
@@ -166,9 +169,10 @@ export async function compile(
       build_id: input.build_id,
       plan_version: input.plan_version,
       code_version: input.code_version,
-      profile_id: CANDIDATE,
-      runtime: "0.1.0",
-      channels: CHANNELS,
+      profile_id: camera ? CAMERA_CANDIDATE : CANDIDATE,
+      runtime: camera ? CAMERA_RUNTIME : "0.1.0",
+      channels: camera ? {} : CHANNELS,
+      ...(camera ? { capabilities: CAMERA_CAPABILITIES } : {}),
       files: [...files].map(([path, bytes]) => ({
         path,
         size: bytes.length,
@@ -210,4 +214,16 @@ export async function compile(
       ).catch(() => undefined);
     await rm(workspace, { recursive: true, force: true });
   }
+}
+
+/** The existing worker remains numeric-only and uses the original template. */
+export function compile(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker"): Promise<Compiled> {
+  return compileProfile(input, templateRoot, mode, false);
+}
+/** Explicit local candidate build; does not make a camera plan production-approved.
+ * Resolve pinned managed_components using the committed lock before an offline
+ * Docker build, or supply them in the dedicated compiler image for IDF mode. */
+export function compileCameraCandidate(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker"): Promise<Compiled> {
+  renderCameraApp(input.interval_s);
+  return compileProfile(input, templateRoot, mode, true);
 }

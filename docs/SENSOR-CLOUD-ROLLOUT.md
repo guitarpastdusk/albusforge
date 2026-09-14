@@ -2,7 +2,42 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active rollout snapshot — 2026-09-13, 23:23 UTC
+## Active acceptance update — 2026-09-14, 00:14 UTC
+
+Root-operated staging checks now extend the deployment snapshot below:
+
+- The bounded HTTP load check sent 30 requests at concurrency 10: 20 returned 202 and 10 deliberately invalid-token requests returned 401. This is a small acceptance exercise, not sustained capacity or hardware evidence.
+- Post-ingest processing execution `telemetry-rollup-vrwkv` succeeded at 00:04:54 UTC. Verification found two raw readings, latest value 20, minute-rollup count 2, and the expected 401/404 authorization outcomes.
+- Model-disabled Ask request `dde56f84-9566-478c-8f7d-37fb1343602f` returned mean 15. Its SQL audit confirmed `evidence_only`, no model attempt, known usage and zero cost.
+- Deployed browser acceptance completed at 00:13:46 UTC with 12 screenshots across 1440px, 390px and 320px widths, no document overflow or page errors, and exactly one additional model-disabled question. This supports the deployed polling dashboard and chat. The SSE endpoint remains unavailable with 501; this is not backend telemetry-stream acceptance.
+- The durable actor-quota probe correlated request `cb4a719d-0e3f-423f-abd9-9e880f536de3` with an actor-scoped rejection log. The corresponding SQL quota audit and cleanup are still running, so full quota acceptance is not yet claimed.
+
+Model activation has not been applied. Schedules remain paused, production unchanged, physical-device and provider acceptance unproven. Fixture cleanup and the complete quota audit require their own successful execution evidence before closeout.
+
+## Deployment snapshot — 2026-09-14, 00:04 UTC
+
+All six staging deployment workflows succeeded at source `03f40c1a2cfc3304fe7637e88d37e5c4347f7a9e`: gateway/schema, intake, telemetry jobs, cloudlink, Ask and web. The four newly completed sensor/web runs were independently checked against GitHub for successful conclusion and the exact source SHA. The root-operated release ledger records these five service revisions and four job images in `albusforge-staging`, `us-central1`:
+
+| Service | Revision | Immutable image digest | Successful release |
+| --- | --- | --- | --- |
+| gateway | `gateway-00021-vlv` | `cc2da8a745e5b30bf501e9c1e721e3b7dca38ed06f5b3c6d9373dcfcf093c9e0` | [Run 34789222331](https://github.com/guitarpastdusk/albusforge/actions/runs/34789222331) |
+| intake | `intake-00009-klg` | `cd7e9b008ad4262bc36fd6757628af510d235812d0e6b949014a5a72a4ef6cbc` | [Run 34789264756](https://github.com/guitarpastdusk/albusforge/actions/runs/34789264756) |
+| cloudlink | `cloudlink-00002-x2v` | `63d59e652d50c7bcfb5db77e06022a624a7d52f00649a0bc2de81bebe15df92d` | [Run 34791185077](https://github.com/guitarpastdusk/albusforge/actions/runs/34791185077) |
+| ask | `ask-00002-msm` | `dbaef2150f6f518b5d9faa2e889e8eca8a8d6c4e23d5a062df5c29430afb70be` | [Run 34791186642](https://github.com/guitarpastdusk/albusforge/actions/runs/34791186642) |
+| web | `web-00035-s68` | `8e1e2ee8030514d77bf6497dcc8a85b41ddbe1bb3aaa2752e3d500b704558c23` | [Run 34791188063](https://github.com/guitarpastdusk/albusforge/actions/runs/34791188063) |
+
+| Job | Immutable image digest | Release |
+| --- | --- | --- |
+| db-migrate | `baeccb5bb370d958a64593a5760cb8c52a1c5b9968e22ab72236cf5dc8b08a97` | [Run 34789222331](https://github.com/guitarpastdusk/albusforge/actions/runs/34789222331) |
+| registry-load | `baeccb5bb370d958a64593a5760cb8c52a1c5b9968e22ab72236cf5dc8b08a97` | [Run 34789222331](https://github.com/guitarpastdusk/albusforge/actions/runs/34789222331) |
+| telemetry-rollup | `a39b4c21997137acefb31e34a7f92dd78f98977414bf2bb018f07d56d68c0d88` | [Run 34791182940](https://github.com/guitarpastdusk/albusforge/actions/runs/34791182940) |
+| telemetry-maintain | `a39b4c21997137acefb31e34a7f92dd78f98977414bf2bb018f07d56d68c0d88` | [Run 34791182940](https://github.com/guitarpastdusk/albusforge/actions/runs/34791182940) |
+
+These are software deployment observations, not completion of the acceptance gates. Root reports successful hash-only fixture provisioning through existing job execution `registry-load-h9kmd`; credentials remain private. Live HTTP checks passed accepted ingestion, duplicate handling, delayed/backfilled samples and wrong-token rejection. A scoped Ask HTTP request returned two readings with mean 15 with the model disabled. These results exercise deployed services with simulator data; they do not establish physical sensor operation or a provider response.
+
+At this snapshot, the Ask accounting audit, post-ingest rollup checks, bounded load and quota checks are still underway. Deployed browser acceptance, provider acceptance and production acceptance have no completed evidence here. Model calls remain disabled and schedules paused; no activation flag changes accompany these results. Production remains unchanged and its earlier plan remains non-applyable preflight evidence. Subsequent updates append completed checks and exact execution identifiers without replacing this historical boundary.
+
+## Earlier rollout snapshot — 2026-09-13, 23:23 UTC
 
 The earlier inventory, PR ownership states and local tests below remain historical evidence at their stated timestamps/commits. They are not overwritten by this execution record. Current architecture and deployment are distinct: implementation is merged; deployment and acceptance proceed in stages.
 

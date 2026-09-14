@@ -33,6 +33,6 @@ export function buildApp({ pool, now, observations, maxInflight = 8, readyTimeou
   });
   const admission = new IngestAdmission(maxInflight);
   app.register(async (scope) => registerTelemetry(scope, pool, now, maxInflight, log, admission));
-  if (observations) app.register(async (scope) => registerObservations(scope, pool, observations, now, admission));
+  if (observations) app.register(async (scope) => registerObservations(scope, pool, observations, now, admission, log));
   return app;
 }

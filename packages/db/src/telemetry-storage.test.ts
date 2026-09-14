@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
-import { createDb } from "./client.js";
+import { createTestDb as createDb, closeTestPool } from "../test/pool-shutdown.js";
 import { runMigrations, MIGRATIONS_FOLDER } from "./migrate.js";
 import { maintainTelemetryStorage, processTelemetryRollups } from "./telemetry-storage.js";
 
@@ -23,7 +23,7 @@ beforeAll(async () => {
   owner = createDb(config, { max: 2, statementTimeoutMs: 15000 });
   app = createDb({ ...config, user: "albus_app", password: "test-app" }, { max: 3, statementTimeoutMs: 10000 });
 });
-afterAll(async () => { await app?.pool.end(); await owner?.pool.end(); await container?.stop(); });
+afterAll(async () => { await closeTestPool(app?.pool); await closeTestPool(owner?.pool); await container?.stop(); });
 beforeEach(async () => {
   await owner.pool.query("TRUNCATE telemetry.devices CASCADE");
   await owner.pool.query("UPDATE telemetry.retention_state SET raw_before='1970-01-01 00:00:00+00' WHERE id=1");
@@ -117,7 +117,7 @@ it("upgrades a populated unpartitioned M6a database without losing raw data", as
     expect((await legacy.pool.query("SELECT count(*) AS n FROM telemetry.dirty_hours")).rows[0].n).toBe("2");
     expect(await processTelemetryRollups(legacy.pool)).toBe(2);
     expect((await legacy.pool.query("SELECT sum(n) AS n FROM telemetry.rollups WHERE resolution='1h'")).rows[0].n).toBe("2");
-  } finally { await legacy.pool.end(); await rm(folder, { recursive: true, force: true }); }
+  } finally { await closeTestPool(legacy.pool); await rm(folder, { recursive: true, force: true }); }
 });
 it("requeues an ingest that waits while a worker deletes its claimed dirty marker", async () => {
   await insert([{ value: 1, offset: 0 }]);

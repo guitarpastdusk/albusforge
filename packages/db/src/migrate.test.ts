@@ -4,7 +4,8 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { eq, sql } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createClientDb, createDb } from "./client.js";
+import { createClientDb } from "./client.js";
+import { createTestDb as createDb, closeTestPool } from "../test/pool-shutdown.js";
 import type { DbConfig } from "./config.js";
 import { MIGRATIONS_FOLDER, runMigrations } from "./migrate.js";
 import { APP_SCHEMAS, buildMessages, builds, llmCalls, tenants } from "./schema/index.js";
@@ -114,7 +115,7 @@ describe("constraints", () => {
   });
 
   afterAll(async () => {
-    await handle?.pool.end();
+    await closeTestPool(handle?.pool);
   });
 
   it("rejects a build with neither a tenant nor an anonymous owner", async () => {
@@ -188,7 +189,7 @@ describe("app role", () => {
       await db.delete(builds).where(eq(builds.id, build!.id));
       expect(await db.select({ n: sql<number>`count(*)::int` }).from(builds)).toEqual([{ n: 0 }]);
     } finally {
-      await pool.end();
+      await closeTestPool(pool);
     }
   });
 
@@ -283,7 +284,7 @@ describe("createClientDb", () => {
   });
 
   afterAll(async () => {
-    await handle?.pool.end();
+    await closeTestPool(handle?.pool);
   });
 
   /*

@@ -76,3 +76,75 @@ can remain retained for the configured seven days.
 This complements `packages/storage/ACCEPTANCE.md`, which separately exercises
 all three runtime identities' allowed/denied GCS permissions and unsigned read
 denial. No cloud acceptance has been executed merely by adding these harnesses.
+
+## Run from a Mac without a VPC route
+
+The optional registry-load transport runs the same synthetic JPEG and numeric
+HTTP checks on the Mac, with SQL assertions executed inside the existing staging
+VPC job. It needs no Cloud SQL proxy, VPN, public SQL address, or owner SQL role.
+It imports `staging-bench-job.ts` from the staging bench tooling. Do not execute
+until observation infrastructure, restricted IAM, maintenance, schema and upload
+activation gates are complete and the coordinator authorizes staging acceptance.
+
+Plan-only (no authentication, SQL execution, or object mutations):
+
+```sh
+pnpm --filter cloudlink exec tsx src/staging-acceptance-job-cli.ts \
+  --project albusforge-staging --origin https://staging.albusforge.ai \
+  --bucket albusforge-staging-observations
+```
+
+After authorization, use the exact immutable db-jobs image from the current
+successful gateway staging release. The operator must approve that image for
+this invocation; a floating tag is rejected. The runtime verifies the actual
+registry-load job image, staging service account, restricted `albus_app` role,
+`albusforge` database, TLS, private SQL IP, and exact staging VPC/subnet, then
+submits an execution override pinned atomically to the verified job etag.
+It never updates the shared job template or invokes the registry loader.
+The executing account needs existing staging SQL instance/job read permissions,
+job execution with overrides and operation read permissions, plus permission to
+impersonate the staging observation maintenance account for GCS get/list/delete.
+Use short-lived gcloud credentials; no key files or device bearer token enter
+execution arguments or cloud logs. Only a SHA256 token hash enters SQL.
+
+```sh
+pnpm --filter @albusforge/storage build
+export OBSERVATION_STORAGE_WORKER_PATH="$PWD/packages/storage/dist/storage-worker.cjs"
+# Create a new owned 0700 directory outside every Git repository.
+ACCEPTANCE_DIR="$(mktemp -d /private/tmp/albusforge-acceptance.XXXXXX)"
+# Set APPROVED_JOB_IMAGE to the coordinator-reviewed current immutable image:
+# us-central1-docker.pkg.dev/albusforge-ci/albusforge/db-jobs@sha256:<64 hex chars>
+pnpm --filter cloudlink exec tsx src/staging-acceptance-job-cli.ts \
+  --project albusforge-staging --origin https://staging.albusforge.ai \
+  --bucket albusforge-staging-observations --execute \
+  --job-image "$APPROVED_JOB_IMAGE" --journal "$ACCEPTANCE_DIR/fixture.json"
+```
+
+The 0600 journal is exclusively created and file/parent-directory synced before
+any SQL submission. It contains random fixture IDs, source ownership and token
+hash, never the bearer token. Full success deletes the fixture, exact object
+generation, deletion intent and local journal. All HTTPS calls reject redirects,
+have a 30-second deadline and bound response bodies to 8 KiB. SQL execution uses
+a 120-second task limit and bounded operation polling; an unknown completion is
+a failure requiring recovery, never inferred success.
+
+On failure, keep the journal. Recovery can use a **newly approved current**
+immutable job image after a subsequent gateway release; the journal binds the
+fixture rather than pinning an obsolete executor forever:
+
+```sh
+pnpm --filter cloudlink exec tsx src/staging-acceptance-job-cli.ts \
+  --project albusforge-staging --origin https://staging.albusforge.ai \
+  --bucket albusforge-staging-observations --execute \
+  --job-image "$APPROVED_JOB_IMAGE" --cleanup-journal "$ACCEPTANCE_DIR/fixture.json"
+```
+
+Recovery locks and checks the exact owned tenant/device, revokes and removes
+credentials, and queues durable object cleanup. A retained tenant named
+`Staging observation acceptance cleanup fence` prevents an ambiguously submitted
+provisioning execution from recreating the fixture later. Maintenance removes
+any delayed object after its grace window. Recovery intentionally retains this
+small tenant fence and journal: only remove them after an operator has proved
+all related job executions are terminal and no delayed provisioning remains.
+Repeating scoped recovery is safe. If the current job fails provenance checks,
+obtain approval for its current verified release image; do not relax the guards.

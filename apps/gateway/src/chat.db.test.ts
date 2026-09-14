@@ -74,7 +74,7 @@ async function listen(app: FastifyInstance): Promise<string> {
 }
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");

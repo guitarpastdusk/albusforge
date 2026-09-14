@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { Storage } from '@google-cloud/storage';
-import { GcsObservationStorage, StorageNotFoundError, StoragePreconditionError } from './index.js';
+import { GcsHttpObservationStorage as GcsObservationStorage, StorageNotFoundError, StoragePreconditionError, StoragePermissionError } from './transport.js';
 import { MemoryObservationStorage } from './testing.js';
 
 const bytes = Buffer.from('fixture JPEG bytes');
@@ -41,6 +41,15 @@ describe('memory object store semantics', () => {
 });
 
 describe('GCS adapter wire contract without cloud mutations', () => {
+  it('lists bounded prefix pages without requiring custom orphan metadata', async () => {
+    const request = vi.fn().mockResolvedValue({ data: { items: [{ name: 'tenant/a.jpg', generation: '1', timeCreated: '2026-09-15T00:00:00Z' }], nextPageToken: 'opaque/next' } });
+    const store = new GcsObservationStorage({ bucket: 'private-fixtures', client: client(request) });
+    expect(await store.list({ prefix: 'tenant/', limit: 1, pageToken: 'opaque/previous' })).toEqual({ objects: [{ key: 'tenant/a.jpg', generation: '1', createdAt: '2026-09-15T00:00:00Z' }], nextPageToken: 'opaque/next' });
+    const url = new URL(request.mock.calls[0]![0].url);
+    expect(url.searchParams.get('prefix')).toBe('tenant/');
+    expect(url.searchParams.get('maxResults')).toBe('1');
+    expect(url.searchParams.get('pageToken')).toBe('opaque/previous');
+  });
   it('uses ADC authenticated create-only multipart with immutable custom metadata', async () => {
     const request = vi.fn().mockResolvedValue({ data: metadata });
     const store = new GcsObservationStorage({ bucket: 'private-fixtures', client: client(request) });
@@ -68,7 +77,7 @@ describe('GCS adapter wire contract without cloud mutations', () => {
     const store = new GcsObservationStorage({ bucket: 'private-fixtures', client: client(request) });
     expect(await store.head('absent')).toBeNull();
     await expect(store.create('conflict', bytes, identity)).rejects.toBeInstanceOf(StoragePreconditionError);
-    await expect(store.head('forbidden')).rejects.toEqual({ response: { status: 403 } });
+    await expect(store.head('forbidden')).rejects.toBeInstanceOf(StoragePermissionError);
   });
   it('aborts timed-out network work and awaits settlement without abandoned promises', async () => {
     let settled = false;

@@ -7,7 +7,7 @@ import { withAuthorizedRead } from "./authorized-read";
 let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   handle = createDb({ host: container.getHost(), port: container.getPort(), database: container.getDatabase(), user: container.getUsername(), password: container.getPassword(), ssl: "disable" });
   await handle.pool.query(`CREATE SCHEMA users;
     CREATE TABLE users.sessions(id uuid PRIMARY KEY,parent_session_id uuid,user_id uuid,active_tenant_id uuid,token_hash text,expires_at timestamptz,revoked_at timestamptz);

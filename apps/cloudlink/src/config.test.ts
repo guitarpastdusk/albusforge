@@ -15,3 +15,9 @@ it("requires DB_HOST and TLS in Cloud Run without a connector setting", () => {
   expect(() => configFromEnv({ ...local, DB_HOST: undefined })).toThrow("DB_HOST");
   try { configFromEnv({ ...local, DB_HOST: undefined }); } catch (e) { expect(String(e)).not.toContain("private-value"); }
 });
+it("bounds observation admission and quotas independently while preserving defaults",()=>{
+  expect(configFromEnv(local).observations).toEqual({maxInflight:4,maxDailyCount:1200,maxDailyBytes:134217728,maxAttemptsPerMinute:6});
+  for(const [name,value] of Object.entries({OBSERVATION_MAX_INFLIGHT:'5',OBSERVATION_MAX_DAILY_COUNT:'0',OBSERVATION_MAX_DAILY_BYTES:'0',OBSERVATION_MAX_ATTEMPTS_PER_MINUTE:'0'})){
+    expect(()=>configFromEnv({...local,[name]:value})).toThrow(name);
+  }
+});

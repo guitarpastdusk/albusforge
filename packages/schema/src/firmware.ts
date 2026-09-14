@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { TelemetryChannels } from "./telemetry";
+import { ProvisionedChannels } from "./telemetry";
+import { DeviceCapabilities } from "./observations";
 import { SemVer } from "./part";
 
 export const FirmwareFile = z.strictObject({
@@ -19,7 +20,8 @@ export const FirmwareManifest = z.strictObject({
   code_version: z.number().int().positive(),
   profile_id: z.string().min(1).max(120),
   runtime: SemVer,
-  channels: TelemetryChannels,
+  channels: ProvisionedChannels,
+  capabilities: DeviceCapabilities.optional(),
   files: z
     .array(FirmwareFile)
     .length(3)
@@ -29,7 +31,7 @@ export const FirmwareManifest = z.strictObject({
     config_offset: z.literal(36864),
     config_size: z.literal(24576),
   }),
-});
+}).refine(manifest => Object.keys(manifest.channels).length > 0 || manifest.capabilities?.some(c => c.kind === "image"), "Firmware must declare channels or image capabilities");
 export type FirmwareManifest = z.infer<typeof FirmwareManifest>;
 
 export const FirmwareJobRequest = z.strictObject({

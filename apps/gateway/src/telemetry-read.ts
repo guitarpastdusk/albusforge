@@ -1,5 +1,5 @@
 import {
-  TelemetryChannels,
+  ProvisionedChannels,
   TelemetryDeviceDetail,
   TelemetryDeviceParams,
   TelemetryDeviceQuery,
@@ -20,10 +20,18 @@ import { updateDeviceMetadata } from "./telemetry-metadata";
 import { withSession } from "./session";
 
 // Explicit public projection: source snapshots and token hashes never leave SQL.
-const DEVICE_COLUMNS = `id,display_name,metadata_version,channels,next_s,revoked_at,last_seen_at,status AS health,
-  CASE WHEN last_seen_at IS NULL THEN 'never_seen'
-    WHEN revoked_at IS NOT NULL THEN 'offline'
-    WHEN last_seen_at >= CURRENT_TIMESTAMP - make_interval(secs => greatest(60,next_s*3)) THEN 'online'
+const RECEIVED = `GREATEST(last_seen_at,(SELECT max(p.last_received_at) FROM telemetry.capability_presence p WHERE p.device_id=devices.id))`;
+const STALE = `EXISTS(SELECT 1 FROM telemetry.device_capabilities c LEFT JOIN telemetry.capability_presence p USING(device_id,capability_id)
+  WHERE c.device_id=devices.id AND c.required AND (NOT c.enabled OR p.last_received_at IS NULL OR LEAST(p.last_received_at,p.last_capture_at)<CURRENT_TIMESTAMP-make_interval(secs=>CASE WHEN c.kind='image' THEN c.interval_s*2+300 ELSE GREATEST(60,c.interval_s*3) END)))`;
+const HAS_CAPABILITIES = `EXISTS(SELECT 1 FROM telemetry.device_capabilities c WHERE c.device_id=devices.id)`;
+const HAS_REQUIRED = `EXISTS(SELECT 1 FROM telemetry.device_capabilities c WHERE c.device_id=devices.id AND c.required)`;
+const HEALTHY_SOURCE = `EXISTS(SELECT 1 FROM telemetry.device_capabilities c JOIN telemetry.capability_presence p USING(device_id,capability_id)
+  WHERE c.device_id=devices.id AND c.enabled AND LEAST(p.last_received_at,p.last_capture_at)>=CURRENT_TIMESTAMP-make_interval(secs=>CASE WHEN c.kind='image' THEN c.interval_s*2+300 ELSE GREATEST(60,c.interval_s*3) END))`;
+const DEVICE_COLUMNS = `id,display_name,metadata_version,channels,next_s,revoked_at,${RECEIVED} AS last_seen_at,status AS health,
+  CASE WHEN ${RECEIVED} IS NULL THEN 'never_seen'
+    WHEN revoked_at IS NOT NULL OR ${STALE} THEN 'offline'
+    WHEN ${HAS_CAPABILITIES} THEN CASE WHEN ${HAS_REQUIRED} OR ${HEALTHY_SOURCE} THEN 'online' ELSE 'offline' END
+    WHEN ${RECEIVED} >= CURRENT_TIMESTAMP - make_interval(secs => greatest(60,next_s*3)) THEN 'online'
     ELSE 'offline' END AS status`;
 interface DeviceRow {
   display_name: string | null;
@@ -135,9 +143,15 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
               [tenant, user],
             )
           ).rows[0];
+          const capabilities = (await client.query(`SELECT c.capability_id AS id,c.kind,c.payload_schema AS schema,c.enabled,c.required,c.interval_s,p.last_capture_at,p.last_received_at,
+            CASE WHEN d.revoked_at IS NOT NULL THEN 'credential_revoked' WHEN NOT c.enabled THEN 'disabled' WHEN p.last_received_at IS NULL THEN 'waiting'
+            WHEN LEAST(p.last_received_at,p.last_capture_at)>=statement_timestamp()-make_interval(secs=>CASE WHEN c.kind='image' THEN c.interval_s*2+300 ELSE GREATEST(60,c.interval_s*3) END) THEN 'healthy' ELSE 'stale' END AS status
+            FROM telemetry.device_capabilities c JOIN telemetry.devices d ON d.id=c.device_id LEFT JOIN telemetry.capability_presence p USING(device_id,capability_id)
+            WHERE c.device_id=$1 ORDER BY c.capability_id LIMIT 64`, [id])).rows.map(c => ({ ...c, last_capture_at: c.last_capture_at?.toISOString() ?? null, last_received_at: c.last_received_at?.toISOString() ?? null }));
           return TelemetryDeviceDetail.parse({
             device: state(row, query.presentation === "1"),
             channels: row.channels,
+            ...(capabilities.length ? { capabilities } : {}),
             ...(query.presentation === "1"
               ? {
                   permissions: {
@@ -203,7 +217,7 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
           );
           const q = parse(TelemetrySeriesQuery, request.query, "query");
           const row = await device(client, tenant, id);
-          if (!Object.hasOwn(TelemetryChannels.parse(row.channels), q.channel))
+          if (!Object.hasOwn(ProvisionedChannels.parse(row.channels), q.channel))
             throw new HttpError(404, "NOT_FOUND", "Channel not found");
           const boundary = (
             await client.query<{

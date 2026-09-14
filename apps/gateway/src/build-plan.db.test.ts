@@ -13,7 +13,7 @@ let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;
 let app: ReturnType<typeof buildApp>;
 beforeAll(async()=>{
-  container=await new PostgreSqlContainer("postgres:16-alpine").start();
+  container=await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin=new pg.Client({connectionString:container.getConnectionUri()});await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migration'");await admin.query("CREATE DATABASE albus OWNER albus_migrate");await admin.end();
   const config:DbConfig={host:container.getHost(),port:container.getPort(),database:"albus",user:"albus_migrate",password:"migration",ssl:"disable"};

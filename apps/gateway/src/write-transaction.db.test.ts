@@ -5,7 +5,7 @@ import type { PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { writeTransaction } from "./read-snapshot";
 let container: StartedPostgreSqlContainer;
-beforeAll(async () => { container = await new PostgreSqlContainer("postgres:16-alpine").start(); });
+beforeAll(async () => { container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start(); });
 afterAll(async () => { await container?.stop(); });
 function connection() {
   return createDb({ host: container.getHost(), port: container.getPort(), database: container.getDatabase(), user: container.getUsername(), password: container.getPassword(), ssl: "disable" }, { max: 1, connectTimeoutMs: 1000, statementTimeoutMs: 1000, queryTimeoutMs: 1200 });

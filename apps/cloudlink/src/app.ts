@@ -1,3 +1,4 @@
+import { assertObservationSchema } from "@albusforge/db";
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import type { Pool } from "pg";
@@ -22,7 +23,7 @@ export function buildApp({ pool, now, observations, maxInflight = 8, readyTimeou
   app.get("/readyz", async (_request, reply) => {
     let timer: NodeJS.Timeout | undefined;
     try {
-      await Promise.race([pool.query("SELECT 1"), new Promise<never>((_resolve, reject) => {
+      await Promise.race([assertObservationSchema(pool), new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error("readiness timeout")), readyTimeoutMs);
       })]);
       return { status: "ok" };

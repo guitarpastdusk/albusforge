@@ -321,6 +321,23 @@ jobs:
           tags: db-jobs:ci
           provenance: false
           sbom: false
+      - name: Build observation maintenance image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/observation-maintain/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: observation-maintain:ci
+          provenance: false
+          sbom: false
+      - name: Verify isolated storage worker packaging
+        run: |
+          for image in cloudlink:ci observation-maintain:ci; do
+            docker run --rm --network none "$image" node -e 'require("node:fs").accessSync(process.env.OBSERVATION_STORAGE_WORKER_PATH)'
+          done
+          docker run --rm --network none cloudlink:ci node --input-type=module -e 'import sharp from "sharp"; const jpeg=await sharp({create:{width:320,height:240,channels:3,background:"green"}}).jpeg().toBuffer(); await sharp(jpeg,{failOn:"warning",limitInputPixels:76800}).timeout({seconds:2}).raw().toBuffer();'
       - name: Migrate and provision isolated fixture
         run: |
           docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \

@@ -19,7 +19,7 @@ const logs: string[] = [];
 const hour = new Date(Math.floor(Date.now() / 3600000) * 3600000 - 3600000);
 const time = (offset = 0) => new Date(hour.getTime() + offset * 1000).toISOString();
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");

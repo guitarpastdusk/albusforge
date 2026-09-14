@@ -42,7 +42,7 @@ const artifacts = {
   },
 };
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({
     connectionString: container.getConnectionUri(),
   });

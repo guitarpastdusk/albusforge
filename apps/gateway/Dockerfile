@@ -21,14 +21,17 @@ COPY --from=manifests /repo ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile --filter gateway... --store-dir /pnpm-store
 COPY . .
+RUN pnpm --filter @albusforge/storage build
 RUN pnpm --filter gateway build
 
 FROM node:22-alpine AS run
 ENV NODE_ENV=production \
-    PORT=8080
+    PORT=8080 \
+    OBSERVATION_STORAGE_WORKER_PATH=/app/storage-worker.cjs
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=build --chown=app:app /repo/apps/gateway/dist/server.js ./server.js
+COPY --from=build --chown=app:app /repo/packages/storage/dist/storage-worker.cjs ./storage-worker.cjs
 USER app
 EXPOSE 8080
 # Cloud Run sets PORT; SIGTERM reaches node directly (exec form), which drains and exits.

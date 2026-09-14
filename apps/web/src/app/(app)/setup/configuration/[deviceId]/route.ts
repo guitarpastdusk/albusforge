@@ -1,4 +1,4 @@
-import { DeviceConfigV1, DeviceHandoffRequest, DeviceSetupParams, routes } from "@albusforge/schema";
+import { DeviceConfig, DeviceHandoffRequest, DeviceSetupParams, routes } from "@albusforge/schema";
 import { unstable_rethrow } from "next/navigation";
 import { ApiRequestError } from "@/lib/api/core";
 import { apiMutationAction } from "@/lib/api/server";
@@ -17,7 +17,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ dev
   const body = DeviceHandoffRequest.safeParse(input);
   if (!body.success) return refused(400, "Refresh setup before downloading configuration.");
   try {
-    const configuration = await apiMutationAction("POST", routes.deviceProvisioning.download.path(target.data.id), DeviceConfigV1, body.data);
+    const configuration = await apiMutationAction("POST", routes.deviceProvisioning.download.path(target.data.id), DeviceConfig, body.data);
     return new Response(JSON.stringify(configuration), { headers: { ...privateHeaders, "content-type": "application/json", "content-disposition": 'attachment; filename="device-config.json"' } });
   } catch (error) {
     if (error instanceof ApiRequestError && [401, 403, 404, 409, 410, 503].includes(error.status)) return refused(error.status,

@@ -23,7 +23,7 @@ const logs: string[] = [];
 const keys = parseHandoffKeys(JSON.stringify({ active: "test", keys: { test: randomBytes(32).toString("base64url") } }))!;
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() }); await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'local-migrate'");
   await admin.query("CREATE DATABASE albus OWNER albus_migrate"); await admin.end();

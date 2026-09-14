@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { FirmwarePassedRecord, serializeFirmwareManifest, type TelemetryChannels } from "@albusforge/schema";
+import { FirmwarePassedRecord, serializeFirmwareManifest, DeviceCapabilities, type SensorCapability, type TelemetryChannels } from "@albusforge/schema";
 
 /** Persisted passed compiler output must match the exact immutable provisioning authority. */
 export function verifyProvisioningFirmware(value: unknown, identity: {
   buildId: string; planVersion: number; codeVersion: number; runtime: string;
-  firmwareProfileId: string; channels: TelemetryChannels;
+  firmwareProfileId: string; channels: TelemetryChannels; capabilities?: SensorCapability[];
 }): FirmwarePassedRecord | null {
   const parsed = FirmwarePassedRecord.safeParse(value);
   if (!parsed.success) return null;
@@ -16,6 +16,8 @@ export function verifyProvisioningFirmware(value: unknown, identity: {
     const actual = manifest.channels[key], expected = identity.channels[key]!;
     return !actual || actual.unit !== expected.unit || actual.min !== expected.min || actual.max !== expected.max;
   })) return null;
+  const expectedCapabilities = identity.capabilities ?? [];
+  if (JSON.stringify(DeviceCapabilities.optional().parse(manifest.capabilities)) !== JSON.stringify(expectedCapabilities.length ? DeviceCapabilities.parse(expectedCapabilities) : undefined)) return null;
   const digest = createHash("sha256").update(serializeFirmwareManifest(manifest), "utf8").digest("hex");
   return digest === record.manifest_digest ? record : null;
 }

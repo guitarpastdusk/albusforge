@@ -99,3 +99,30 @@ export const PersistedBuildPlan = z.strictObject({
   metadata: BuildPlanMetadata,
 });
 export type PersistedBuildPlan = z.infer<typeof PersistedBuildPlan>;
+
+export const BuildPlanRequest = z.strictObject({ expected_tenant_id: z.uuid(), spec_version: z.number().int().positive() });
+export type BuildPlanRequest = z.infer<typeof BuildPlanRequest>;
+export const BuildPlanPage = z.strictObject({
+  build_id: z.uuid(), current_spec_version: z.number().int().positive().nullable(),
+  can_edit: z.boolean(), catalogue_available: z.boolean(), plans: z.array(PersistedBuildPlan).max(21),
+});
+export type BuildPlanPage = z.infer<typeof BuildPlanPage>;
+export const BuildPlanSolveResponse = z.strictObject({
+  status: z.enum(["solved", "unavailable", "infeasible", "search_limit"]),
+  explanation: z.string(), plans: z.array(PersistedBuildPlan).max(3),
+});
+export type BuildPlanSolveResponse = z.infer<typeof BuildPlanSolveResponse>;
+
+/** Canonical JSON identity, not approval: consumers hash these UTF-8 bytes with SHA-256. */
+export function serializeBuildPlanInput(input: { spec: unknown; runtime: string; evidence: BuildPlanEvidence }): string {
+  const encode = (value: unknown): string => {
+    if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+    if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(encode).join(",")}]`;
+    if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+      return `{${Object.entries(value).filter(([,item]) => item !== undefined).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0).map(([key,item]) => `${JSON.stringify(key)}:${encode(item)}`).join(",")}}`;
+    }
+    throw new Error("Plan identity must contain only finite JSON data");
+  };
+  return encode({ spec: input.spec, runtime: input.runtime, evidence: input.evidence });
+}

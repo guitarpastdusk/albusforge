@@ -179,3 +179,10 @@ it("reconciles case-insensitive UUID identities while preserving the exact objec
   expect((await f.receipt()).state).toBe("stored");
   expect(await f.store.head(uppercaseKey)).not.toBeNull();
 });
+
+it("emits confirmed recovered bytes once and tolerates a failing metrics sink", async () => {
+ const f=await fixture();const accepted:number[]=[];
+ const run=()=>maintainObservations(pool,f.store,{now:()=>new Date(clock),onAccepted:value=>{accepted.push(value);throw Error('log sink');}});
+ expect(await run()).toMatchObject({finalized:1,errors:0});expect(accepted).toEqual([bytes.length]);
+ expect(await run()).toMatchObject({finalized:0,errors:0});expect(accepted).toEqual([bytes.length]);
+});

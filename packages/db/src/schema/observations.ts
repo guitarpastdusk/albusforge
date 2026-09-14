@@ -10,6 +10,7 @@ export const deviceCapabilities = telemetrySchema.table("device_capabilities", {
   profileId: text("profile_id").notNull(),
   profileVersion: integer("profile_version").notNull(),
   enabled: boolean("enabled").notNull().default(true),
+  monitoringStartedAt: timestamp("monitoring_started_at", { withTimezone: true }).notNull().defaultNow(),
   required: boolean("required").notNull().default(true),
   intervalS: integer("interval_s").notNull(),
   maxBytes: integer("max_bytes"),
@@ -103,4 +104,9 @@ export const observationAttempts = telemetrySchema.table("observation_attempts",
 export const observationMaintenanceState = telemetrySchema.table("observation_maintenance_state", {
   id: integer("id").primaryKey(),
   orphanPageToken: text("orphan_page_token"),
+  healthDeviceCursor: uuid("health_device_cursor"),
+  healthCapabilityCursor: text("health_capability_cursor"),
+  healthScanStartedAt: timestamp("health_scan_started_at", { withTimezone: true }),
+  healthEnabledCount: integer("health_enabled_count").notNull().default(0),
+  healthStaleCount: integer("health_stale_count").notNull().default(0),
 }, t => [check("observation_maintenance_singleton_check", sql`${t.id}=1`)]);

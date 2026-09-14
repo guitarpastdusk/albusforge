@@ -1,9 +1,10 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * The routes against a real Postgres: migrate with @albusforge/db, load the
  * committed registry with the registry loader as the app role, then query
  * through the gateway exactly as the server wires it.
  */
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -64,7 +65,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 

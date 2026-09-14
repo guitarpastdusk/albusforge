@@ -1,9 +1,10 @@
+import { createTestDb as createDb, closeTestPool, trackTestPool } from "./test-pool-shutdown";
 /*
  * The sign-in routes against a real Postgres: request a code, verify it,
  * read the session, sign out, and claim anonymous builds on the way. Codes
  * are captured from a recording email adapter; nothing leaves localhost.
  */
-import { buildMessages, builds, createDb, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, tenants, users } from "@albusforge/db";
+import { buildMessages, builds, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, tenants, users } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -100,7 +101,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   for (const app of apps) await app.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 
@@ -445,7 +446,7 @@ describe("build routes under a session", () => {
 
 describe("event poll database leases", () => {
   const socketOf = (client: pg.PoolClient) => (client as pg.PoolClient & { connection: { stream: Socket } }).connection.stream;
-  const pollPool = () => new pg.Pool({ ...handle.pool.options, password: "app-secret", max: 1, connectionTimeoutMillis: 1000, statement_timeout: 1000, query_timeout: 1200 });
+  const pollPool = () => trackTestPool(new pg.Pool({ ...handle.pool.options, password: "app-secret", max: 1, connectionTimeoutMillis: 1000, statement_timeout: 1000, query_timeout: 1200 }));
 
   it.each(["BEGIN", "COMMIT", "ROLLBACK"])("discards a stalled %s response and recovers pool capacity", async (phase) => {
     const pool = pollPool();
@@ -469,7 +470,7 @@ describe("event poll database leases", () => {
       expect(socket?.destroyed).toBe(true);
     } finally {
       socket?.resume();
-      await pool.end();
+      await closeTestPool(pool);
     }
   });
 
@@ -505,7 +506,7 @@ describe("event poll database leases", () => {
       await blocker.query("ROLLBACK");
       blocker.release();
       await reading;
-      await pool.end();
+      await closeTestPool(pool);
     }
   });
 });

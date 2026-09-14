@@ -5,7 +5,10 @@ import { loadParts } from "../../../../registry/scripts/lib/load";
 import { usableWindow } from "../../../../registry/scripts/lib/power";
 import { EXAMPLE_BUILDS, EXAMPLE_PARTS, exampleBuildDetail, exampleListing, exampleListings, exampleShowcase } from "./example-builds";
 
-const registry = new Map(loadParts().map((part) => [part.id, part]));
+// loadParts() now returns every committed version of a part, not one per id, so
+// key by id@version: a bundled example pins a specific version and must match that
+// exact definition, not whichever version happens to sort last.
+const registry = new Map(loadParts().map((part) => [`${part.id}@${part.version}`, part]));
 
 const partOf = (id: string): PartDefinition => {
   const found = EXAMPLE_PARTS.get(id);
@@ -16,7 +19,7 @@ const partOf = (id: string): PartDefinition => {
 describe("example builds use the registry's parts", () => {
   it("every bundled part is identical to the registry's part.json", () => {
     for (const [id, part] of EXAMPLE_PARTS) {
-      expect(registry.get(id), id).toEqual(part);
+      expect(registry.get(`${id}@${part.version}`), `${id}@${part.version}`).toEqual(part);
     }
   });
 

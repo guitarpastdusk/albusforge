@@ -313,6 +313,9 @@ async function answerLatest(
   const status = outcome.kind === "spec" ? outcome.decision.status : idleStatus;
 
   const write = db.transaction(async (tx) => {
+    // Plan acceptance and spec publication use the same resource lock before
+    // child inserts acquire FK key-share locks, avoiding lock upgrades/inversion.
+    await tx.execute(sql`SELECT 1 FROM ${builds} WHERE ${builds.id} = ${buildId} FOR UPDATE`);
     const [message] = await tx
       .insert(buildMessages)
       .values({

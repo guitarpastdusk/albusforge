@@ -19,6 +19,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ buildI
       <div className="mt-[18px]">
         <PageTitle kicker={buildStatus[build.display_status].label} title={build.name} description={build.description} />
       </div>
+      <Link href={`/projects/${encodeURIComponent(buildId)}/plan`} className="mt-5 inline-block rounded-xl border border-hairline bg-white px-5 py-3 text-ink hover:text-coral-deep">Review build plan →</Link>
       <ProjectOverview build={build} />
     </PageContainer>
   );

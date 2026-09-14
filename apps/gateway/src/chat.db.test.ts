@@ -578,9 +578,13 @@ describe("GET /v1/builds/:id", () => {
       { buildId: body.id, version: 2, data: { capabilities: ["read.temperature_c", "power.battery"], settled: false, sense: ["temperature"] }, confidence: 0.6 },
     ]);
 
-    // Every committed part is a draft.
+    // P-001 is the only promoted (active) part whose capabilities intersect this spec;
+    // E-001 and P-002 still match only as drafts.
     const active = BuildDetail.parse((await app.inject({ method: "GET", url: `/v1/builds/${body.id}`, headers: { cookie } })).json());
-    expect(active).toMatchObject({ spec_version: 2, spec: { capabilities: ["read.temperature_c", "power.battery"], sense: ["temperature"] }, candidate_parts: [] });
+    expect(active).toMatchObject({ spec_version: 2, spec: { capabilities: ["read.temperature_c", "power.battery"], sense: ["temperature"] } });
+    expect(active.candidate_parts?.map((p) => [`${p.id}@${p.version}`, p.status, p.matched_capabilities])).toEqual([
+      ["P-001@1.1.0", "active", ["read.temperature_c"]],
+    ]);
 
     const drafts = BuildDetail.parse((await withDrafts.inject({ method: "GET", url: `/v1/builds/${body.id}`, headers: { cookie } })).json());
     expect(drafts.candidate_parts?.map((p) => [p.id, p.matched_capabilities])).toEqual([
@@ -588,6 +592,8 @@ describe("GET /v1/builds/:id", () => {
       ["P-001", ["read.temperature_c"]],
       ["P-002", ["read.temperature_c"]],
     ]);
+    // Including drafts widens the set; it never downgrades a promoted part to its draft.
+    expect(drafts.candidate_parts?.find((p) => p.id === "P-001")?.version).toBe("1.1.0");
   });
 });
 

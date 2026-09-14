@@ -21,6 +21,12 @@ import { createPartsStore } from "./parts";
 
 const MAX = 2;
 /*
+ * The healthy /v1/parts response: one row per non-retired id in the committed registry,
+ * derived rather than hard-coded so promoting a part doesn't fail this file with a count
+ * mismatch that looks like a timeout regression.
+ */
+const HEALTHY_PART_COUNT = new Set(readValidatedParts(REGISTRY_ROOT).filter((p) => p.status !== "retired").map((p) => p.id)).size;
+/*
  * Budgets are generous on purpose. Every test ends by proving the pool is
  * usable again, and that recovery request opens a fresh connection and runs a
  * real query through the proxy. On a loaded CI runner that alone has taken
@@ -170,7 +176,7 @@ function expectAllUnavailable(responses: { statusCode: number; json: () => unkno
 async function expectHealthy() {
   const response = await app.inject({ method: "GET", url: "/v1/parts" });
   expect(response.statusCode).toBe(200);
-  expect(PartList.parse(response.json()).parts).toHaveLength(12);
+  expect(PartList.parse(response.json()).parts).toHaveLength(HEALTHY_PART_COUNT);
   expect((await app.inject({ method: "GET", url: "/readyz" })).statusCode).toBe(200);
   expect(handle.pool.waitingCount).toBe(0);
   expect(handle.pool.totalCount).toBeLessThanOrEqual(MAX);

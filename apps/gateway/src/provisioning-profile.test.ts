@@ -12,7 +12,15 @@ function fixture() {
   return { part, accepted, profile };
 }
 it("requires exact active pins, profile/runtime and firmware target, with no production defaults", () => {
-  expect(ProvisioningProfiles.parse(JSON.parse(readFileSync(new URL("../../../registry/provisioning-profiles.json", import.meta.url), "utf8")))).toEqual([]);
+  // The shipped manifest is reviewed data, not a default: assert it parses and that
+  // every entry pins an assembly profile, a firmware target and at least one source,
+  // rather than asserting it is empty.
+  const shipped = ProvisioningProfiles.parse(JSON.parse(readFileSync(new URL("../../../registry/provisioning-profiles.json", import.meta.url), "utf8")));
+  for (const entry of shipped) {
+    expect(entry.assembly_profile.id.length).toBeGreaterThan(0);
+    expect(entry.firmware_profile_id.length).toBeGreaterThan(0);
+    expect(entry.channels.length + (entry.capabilities?.length ?? 0)).toBeGreaterThan(0);
+  }
   const { part, accepted, profile } = fixture();
   expect(resolveProvisioningProfile([profile], accepted, [part], "test-only")?.channels).toEqual({ temperature: { unit: "C", min: -40, max: 85 } });
   expect(resolveProvisioningProfile([], accepted, [part], "test-only")).toBeNull();

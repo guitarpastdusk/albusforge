@@ -101,7 +101,13 @@ describe("GET /v1/parts", () => {
     const response = await app.inject({ method: "GET", url: "/v1/parts" });
     expect(response.statusCode).toBe(200);
     const body = PartList.parse(response.json());
-    expect(body.parts.map((p) => p.id)).toEqual([...registry.map((p) => p.id)].sort());
+    // The registry now ships several ids at more than one version, so the list is one
+    // row per non-retired id - the highest version of each - not every file on disk.
+    const ids = [...new Set(registry.filter((p) => p.status !== "retired").map((p) => p.id))].sort();
+    expect(body.parts.map((p) => p.id)).toEqual(ids);
+    const versions = Object.fromEntries(body.parts.map((p) => [p.id, p.version]));
+    // The promoted parts are served at the version they were promoted to, not the 1.0.0 draft.
+    expect([versions["E-005"], versions["M-001"], versions["P-001"], versions["V-005"]]).toEqual(["1.1.0", "1.1.0", "1.1.0", "1.1.0"]);
     expect(store.calls[0]?.statuses).toEqual(["draft", "active", "deprecated"]);
   });
 

@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 
 def canonical(value):
@@ -43,6 +44,20 @@ def verify(bundle, config):
         raise ValueError("Invalid device credential")
     if not re.fullmatch(r"[0-9a-fA-F-]{36}", config.get("device_id", "")):
         raise ValueError("Invalid device identity")
+    if config.get("v") == 2:
+        if config.get("capabilities") != manifest.get("capabilities"):
+            raise ValueError("Configuration capability identity does not match firmware")
+        if config.get("profile_id") != "freenove-esp32s3-n16r8-gc0308-usb-v1" or config.get("runtime") != "0.2.0":
+            raise ValueError("Unsupported camera profile")
+        expected_cap = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": config["profile_id"], "profile_version": 1,
+            "enabled": True, "required": True, "interval_s": 900, "max_bytes": 1048576, "max_width": 320, "max_height": 240}
+        if config.get("capabilities") != [expected_cap] or config.get("channels") != {}:
+            raise ValueError("Unsupported camera capability")
+        endpoint = urlsplit(config.get("observation_url", ""))
+        if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment or endpoint.path != f"/ingest/v2/devices/{config['device_id']}/observations":
+            raise ValueError("Invalid observation endpoint")
+    elif config.get("v") != 1 or config.get("profile_id") != "esp32s3-bh1750-usb-v1":
+        raise ValueError("Unsupported firmware configuration version")
     if not config.get("ingest_url", "").startswith("https://"):
         raise ValueError("Firmware requires an HTTPS ingestion endpoint")
     if type(config.get("seq_start")) is not int or not 0 <= config["seq_start"] < 9007199254740991:
@@ -51,9 +66,15 @@ def verify(bundle, config):
 
 
 def prepare(config, folder, ssid, password):
-    if not 1 <= len(ssid.encode()) <= 32 or not 8 <= len(password.encode()) <= 63:
+    hotspot = config.get("v") == 2 and not ssid and not password
+    if not hotspot and (not 1 <= len(ssid.encode()) <= 32 or not 8 <= len(password.encode()) <= 63):
         raise ValueError("Wi-Fi requires a 1–32 byte SSID and 8–63 byte WPA2 password")
-    private = dict(config, wifi_ssid=ssid, wifi_password=password)
+    private = dict(config)
+    if hotspot:
+        private.pop("wifi_ssid", None)
+        private.pop("wifi_password", None)
+    else:
+        private.update(wifi_ssid=ssid, wifi_password=password)
     json_path = folder / "private-config.json"
     json_path.write_bytes(canonical(private))
     json_path.chmod(0o600)
@@ -81,12 +102,16 @@ def main():
     if marker.exists() and marker.read_text() == fingerprint:
         raise ValueError("This configuration was already used; request a fresh cloud reissue")
     expected = verify(args.bundle, config)
-    ssid = input("Wi-Fi SSID (kept locally): ")
-    password = getpass.getpass("Wi-Fi password (kept locally): ")
+    if config.get("v") == 2:
+        ssid, password = "", ""
+        print("After flashing, read the temporary Plant-A Setup password over USB serial, join that hotspot, and open http://192.168.4.1. Wi-Fi credentials stay on the board.")
+    else:
+        ssid = input("Wi-Fi SSID (kept locally): ")
+        password = getpass.getpass("Wi-Fi password (kept locally): ")
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="albus-config-") as directory:
         image = prepare(config, Path(directory), ssid, password)
-        command = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", args.port, "write_flash", "--flash_size", "8MB"]
+        command = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "--port", args.port, "--baud", "115200", "write_flash", "--flash_size", "16MB" if config.get("v") == 2 else "8MB"]
         for filename, offset in expected.items():
             command += [hex(offset), str(args.bundle / filename)]
         command += ["0x9000", str(image)]

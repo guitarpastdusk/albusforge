@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("installer", Path(__file__).with_name("install.py"))
 installer = importlib.util.module_from_spec(spec)
@@ -65,6 +66,40 @@ class InstallerIntegrity(unittest.TestCase):
             self.config["seq_start"] = value
             with self.assertRaises(ValueError): installer.verify(self.root, self.config)
 
+
+
+class CameraInstallerIntegrity(InstallerIntegrity):
+    def setUp(self):
+        super().setUp()
+        profile = "freenove-esp32s3-n16r8-gc0308-usb-v1"
+        capability = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": profile, "profile_version": 1,
+            "enabled": True, "required": True, "interval_s": 900, "max_bytes": 1048576, "max_width": 320, "max_height": 240}
+        self.manifest.update(profile_id=profile, runtime="0.2.0", channels={}, capabilities=[capability])
+        self.config.update(v=2, profile_id=profile, runtime="0.2.0", channels={}, capabilities=[dict(capability)],
+            observation_url=f"https://ingest.example/ingest/v2/devices/{self.config['device_id']}/observations")
+        self.save()
+
+    def test_camera_capabilities_cannot_be_replaced(self):
+        self.config["capabilities"][0]["interval_s"] = 60
+        with self.assertRaisesRegex(ValueError, "capability"):
+            installer.verify(self.root, self.config)
+
+    def test_camera_default_provisions_hotspot_without_wifi_in_shared_config(self):
+        folder = self.root / "private"
+        folder.mkdir()
+        def generate(args, **_kwargs):
+            Path(args[-2]).write_bytes(b"fixture-nvs")
+        with patch.object(installer.subprocess, "run", side_effect=generate):
+            installer.prepare(self.config, folder, "", "")
+        private = json.loads((folder / "private-config.json").read_text())
+        self.assertNotIn("wifi_ssid", private)
+        self.assertNotIn("wifi_password", private)
+        self.assertEqual((folder / "private-config.json").stat().st_mode & 0o777, 0o600)
+
+    def test_camera_endpoint_is_device_bound(self):
+        self.config["observation_url"] = "https://example.com/ingest/v2/devices/other/observations"
+        with self.assertRaisesRegex(ValueError, "endpoint"):
+            installer.verify(self.root, self.config)
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,22 @@ device's whole-flash MD5. Its local SHA256 is
 `bf948696fa4772f75e248915f496adaee1f2b8f79649fec6f8d8e97bf1cd03c5`.
 High-speed reads at 460800 baud produced serial corruption; 115200 worked.
 
+Before native-camera testing, a fresh complete 16 MiB backup of the working
+camera and its provisioned configuration was read on 2026-09-14. Every populated
+64 KiB block and the whole flash were verified against device MD5; SHA256 is
+`a3af3ee2d8b186c822635a003cc040edada0544eff98965f60f206801152894d`.
+This recovery image remains private outside the repository. It supersedes the
+original pre-provisioning backup for restoring the current working camera.
+The board was reset after the read; this operation did not install native firmware.
+
+The separate [native camera candidate](../../firmware/esp32s3-camera/README.md)
+implements the 900-second capture/upload runtime. Native physical acceptance is
+still required. Neither successful compilation nor the existing ESPHome evidence
+approves it for the production accepted-plan catalogue. The catalogue currently
+has no active assembly/provisioning profiles; measured power/mechanical evidence
+and reviewed profile activation must land before the normal product flow can
+issue a production camera build.
+
 This configuration covers the bare-board stage of `bringup_workflow.svg`:
 Wi-Fi provisioning, camera, local dashboard, and an additional SD mount/capacity
 check. Sensors, servo, cloud ingestion, and a second node require later work.

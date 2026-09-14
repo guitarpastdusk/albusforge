@@ -1,4 +1,5 @@
-import { createDb } from "@albusforge/db";
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
+
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { Socket } from "node:net";
 import type { PoolClient } from "pg";
@@ -23,7 +24,7 @@ describe("managed write transaction", () => {
       await expect(writeTransaction(pool, async (_db, client) => { await client.query("INSERT INTO managed_write_test VALUES(2)");throw new Error("abort write"); })).rejects.toThrow("abort write");
       expect((await pool.query("SELECT value FROM managed_write_test")).rows).toEqual([{ value: 1 }]);
       expect(pool.idleCount).toBe(1);
-    } finally { await pool.end(); }
+    } finally { await closeTestPool(pool); }
   });
   it.each(["BEGIN", "COMMIT", "ROLLBACK"])("recovers its sole lease after stalled %s", async (phase) => {
     const { pool } = connection();pool.on("error", () => undefined);
@@ -36,7 +37,7 @@ describe("managed write transaction", () => {
       await expect(writeTransaction(pool, async (_db, client) => { await client.query("SELECT 1"); })).rejects.toThrow();
       expect((await pool.query("SELECT 1 AS recovered")).rows[0].recovered).toBe(1);
       expect(pool.idleCount).toBe(1);expect(socket?.destroyed).toBe(true);
-    } finally { socket?.resume();await pool.end(); }
+    } finally { socket?.resume();await closeTestPool(pool); }
   });
   it("absorbs active socket errors and recovers with a fresh connection", async () => {
     const { pool } = connection();pool.on("error", () => undefined);
@@ -50,6 +51,6 @@ describe("managed write transaction", () => {
       })).rejects.toThrow();
       expect((await pool.query("SELECT 1 AS recovered")).rows[0].recovered).toBe(1);
       expect(pool.idleCount).toBe(1);
-    } finally { await pool.end(); }
+    } finally { await closeTestPool(pool); }
   });
 });

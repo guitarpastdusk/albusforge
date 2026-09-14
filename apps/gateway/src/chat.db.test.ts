@@ -1,3 +1,4 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * The anonymous chat routes against a real Postgres, with a stub intake
  * server standing in for POST /v1/turns. No network beyond localhost.
@@ -6,7 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
-import { buildMessages, builds, createDb, type DbConfig, specs, tenants, users, sessions, tenantMembers } from "@albusforge/db";
+import { buildMessages, builds, type DbConfig, specs, tenants, users, sessions, tenantMembers } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -108,7 +109,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const app of apps) await app.close();
   await new Promise<void>((resolve) => (intake ? intake.close(() => resolve()) : resolve()));
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 

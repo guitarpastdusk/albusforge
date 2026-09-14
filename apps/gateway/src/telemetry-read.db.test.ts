@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { setTimeout as delay } from "node:timers/promises";
 import { processTelemetryRollups, maintainTelemetryStorage } from "@albusforge/db/telemetry-storage";
@@ -32,7 +33,7 @@ beforeAll(async () => {
   app = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool,
     log: (_level, message, context) => { logs.push(JSON.stringify({ message, context })); } });
 });
-afterAll(async () => { await app?.close(); await handle?.pool.end(); await owner?.end(); await container?.stop(); });
+afterAll(async () => { await app?.close(); await closeTestPool(handle?.pool); await closeTestPool(owner); await container?.stop(); });
 
 async function fixture() {
   const tenant = randomUUID(), user = randomUUID(), device = randomUUID(), session = randomUUID();

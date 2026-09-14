@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { DeviceConfigV2, serializeFirmwareManifest, type SensorCapability } from "@albusforge/schema";
 import { MemoryObservationStorage } from "@albusforge/storage/testing";
@@ -26,7 +27,7 @@ beforeAll(async () => {
   await runMigrations(config, { appRole: { name: "albus_app", password: "local-app" } });
   handle = createDb({ ...config, user: "albus_app", password: "local-app" }, { max: 8, connectTimeoutMs: 1000, statementTimeoutMs: 4000, queryTimeoutMs: 5000 });
 });
-afterAll(async () => { await Promise.all(services.map(app => app.close())); await handle?.pool.end(); await container?.stop(); });
+afterAll(async () => { await Promise.all(services.map(app => app.close())); await closeTestPool(handle?.pool); await container?.stop(); });
 
 /** Deliberately synthetic accepted evidence: server approves a test image codec
  * for the fixture source. It provides no real camera driver/hardware acceptance. */

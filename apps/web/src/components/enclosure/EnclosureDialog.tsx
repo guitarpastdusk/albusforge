@@ -153,7 +153,7 @@ export function EnclosureDialogButton({ preview, title }: { preview: EnclosurePr
         onClick={() => setOpen(true)}
         className="text-[15px] font-semibold text-coral-deep hover:text-coral"
       >
-        View enclosure in 3D →
+        {preview.sample ? "View a sample enclosure in 3D →" : "View enclosure in 3D →"}
       </button>
       {open ? (
         <EnclosureDialog title={`${title} · enclosure`} onClose={() => setOpen(false)} returnFocusTo={triggerRef}>

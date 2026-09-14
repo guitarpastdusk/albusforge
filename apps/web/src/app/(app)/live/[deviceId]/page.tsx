@@ -9,6 +9,7 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ObservationGallery } from "@/components/telemetry/ObservationGallery";
+import { AwaitingReadings } from "@/components/telemetry/AwaitingReadings";
 import { DeviceChat } from "@/components/devices/DeviceChat";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
@@ -142,6 +143,7 @@ export default async function DevicePage({
         </p>
       )}
       {detail.capabilities && <ObservationGallery deviceId={deviceId} capabilities={detail.capabilities} search={search} />}
+      {channels.length === 0 && <AwaitingReadings deviceId={device.id} revoked={Boolean(device.revoked_at)} />}
       {channels.length > 0 && <>
       <h2 className="text-xl font-semibold mt-8">Latest readings</h2>
       <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">

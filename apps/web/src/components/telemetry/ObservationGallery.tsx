@@ -2,7 +2,7 @@ import { ImageObservationPage, type TelemetryDeviceDetail } from "@albusforge/sc
 import Link from "next/link";
 import { PrivateObservationImage } from "./PrivateObservationImage";
 import { apiGet } from "@/lib/api/server";
-import { ApiRequestError } from "@/lib/api/core";
+import { ApiRequestError, isNotImplemented } from "@/lib/api/core";
 import { unstable_rethrow } from "next/navigation";
 import type { z } from "zod";
 import type { Search } from "@/lib/telemetry-monitor";
@@ -17,10 +17,13 @@ export async function ObservationGallery({ deviceId, capabilities, search }: {
   const query = new URLSearchParams({ limit: "24", ...(cursor ? { cursor } : {}) });
   let page: z.infer<typeof ImageObservationPage> | undefined;
   let error: string | undefined;
+  /** Gateway's 501: observation reads aren't switched on in this environment yet. Not a fault. */
+  let notEnabled = false;
   try { page = await apiGet(`/v1/devices/${deviceId}/capabilities/${encodeURIComponent(selected.id)}/images?${query}`, ImageObservationPage); }
   catch (failure) {
     unstable_rethrow(failure);
-    if (failure instanceof ApiRequestError && [401,403].includes(failure.status)) error = "Your workspace access changed. Refresh this page to sign in again.";
+    if (isNotImplemented(failure)) notEnabled = true;
+    else if (failure instanceof ApiRequestError && [401,403].includes(failure.status)) error = "Your workspace access changed. Refresh this page to sign in again.";
     else if (failure instanceof ApiRequestError && failure.status === 400) error = "This history link is no longer valid. Select the camera to return to its latest pictures.";
     else error = "Pictures are temporarily unavailable. Refresh to try again.";
   }
@@ -32,6 +35,7 @@ export async function ObservationGallery({ deviceId, capabilities, search }: {
     </Link>)}</nav>
     <p className="text-sm text-muted">Capture interval: {selected.interval_s / 60} minutes. Last received: {selected.last_received_at ?? "Waiting for the first picture"}.</p>
     <p className="mt-2 text-sm text-muted">Pictures are kept for 30 days from capture. Refresh to see new uploads.</p>
+    {notEnabled && <p className="mt-4 text-muted">Picture history isn&apos;t switched on for this workspace yet. The camera keeps capturing on its interval, and pictures appear here once it is.</p>}
     {error && <p role="alert" className="mt-4">{error}</p>}
     {page && page.images.length === 0 && <p className="mt-5">No retained pictures yet. Check power, Wi-Fi, the SD card, and device setup.</p>}
     <div className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">{page?.images.map(image => <figure key={image.observation_id} className="overflow-hidden rounded-2xl border border-current/10 p-3">

@@ -1,7 +1,10 @@
+import { CAMERA_CANDIDATE } from './camera-candidate';
+import { canonicalDigest, type CameraPlanApproval } from './accepted-candidate';
 /** SYNTHETIC acceptance fixtures only. Never import from production handlers or activate registry rows. */
 import { readFileSync } from "node:fs";
 import {
   BuildPlanMetadata,
+  BuildPlanV1,
   PartDefinition,
   serializeBuildPlanInput,
 } from "@albusforge/schema";
@@ -104,4 +107,25 @@ export function syntheticPlanFixture() {
     }),
   );
   return { spec, parts, wiring, metadata };
+}
+
+/** Synthetic wiring approval for resolver/worker tests; never registry data. */
+export function syntheticCameraPlanFixture() {
+  const f=syntheticPlanFixture();
+  f.spec.sense={what:['image'],interval_s:900};f.spec.capabilities=['capture.image'];
+  f.metadata.runtime='0.2.0';f.metadata.profile={id:'synthetic-camera-assembly',version:'1.0.0'};
+  f.metadata.evidence.profile={...f.metadata.evidence.profile,id:f.metadata.profile.id};
+  f.metadata.evidence.compat=f.metadata.evidence.compat.map(c=>({...c,runtime_ver:'0.2.0'}));
+  // Test-only snapshot mutation stands in for reviewed camera registry evidence.
+  f.metadata.evidence.profile.evidence='SYNTHETIC camera compiler test, not hardware approval';
+  const metadata=BuildPlanMetadata.parse(f.metadata);
+  metadata.input_digest=sha256(serializeBuildPlanInput({spec:f.spec,runtime:metadata.runtime,evidence:metadata.evidence}));
+  const plan=BuildPlanV1.parse({part_versions:f.parts.map(({id,version})=>({id,version})),wiring_graph:f.wiring,
+    power_budget:{average_source_ma:50,peak_source_ma:400,peak_brain_rail_ma:400,usable_capacity_mah:null,estimated_life_days:null},
+    bom:f.parts.map(({id,version})=>({part:{id,version},quantity:1 as const,unit_cost_usd:10})),solver_log:[],runtime:metadata.runtime,profile:metadata.profile,total_cost_usd:30});
+  return {...f,metadata,plan};
+}
+
+export function syntheticCameraApproval(f:ReturnType<typeof syntheticCameraPlanFixture>):CameraPlanApproval {
+  return {candidate_id:CAMERA_CANDIDATE,assembly_profile:f.plan.profile,part_versions:f.plan.part_versions,evidence_sha256:canonicalDigest(f.metadata.evidence),wiring_sha256:canonicalDigest(f.plan.wiring_graph)};
 }

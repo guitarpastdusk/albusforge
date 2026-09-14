@@ -9,7 +9,7 @@ export function verifyProvisioningFirmware(value: unknown, identity: {
   const parsed = FirmwarePassedRecord.safeParse(value);
   if (!parsed.success) return null;
   const record = parsed.data, manifest = record.manifest;
-  if (manifest.build_id !== identity.buildId || manifest.plan_version !== identity.planVersion || manifest.code_version !== identity.codeVersion
+  if (record.candidate_id !== manifest.profile_id || manifest.build_id !== identity.buildId || manifest.plan_version !== identity.planVersion || manifest.code_version !== identity.codeVersion
     || manifest.runtime !== identity.runtime || manifest.profile_id !== identity.firmwareProfileId) return null;
   const keys = Object.keys(identity.channels);
   if (keys.length !== Object.keys(manifest.channels).length || keys.some(key => {

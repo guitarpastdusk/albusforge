@@ -18,12 +18,14 @@ const build: BuildDetail = {
 };
 
 describe("project workspace", () => {
-  it("resumes the exact build with an honest empty spec and unavailable artifacts", () => {
+  it("resumes the exact build with an honest empty spec and reachable delivery stages", () => {
     const html = renderToStaticMarkup(<ProjectOverview build={build} />);
     expect(html).toContain('href="/build/build%2Fa"');
     expect(html).toContain("Resume conversation");
     expect(html).toContain("No specification has been saved yet");
-    expect(html).toContain("not available in this workspace yet");
+    expect(html).toContain('href="/projects/build%2Fa/plan"');
+    expect(html).toContain('href="/projects/build%2Fa/firmware"');
+    expect(html).toContain("physical wiring, fit and power checks");
     expect(html).not.toContain(".glb");
     expect(html).not.toContain("order the kit");
   });

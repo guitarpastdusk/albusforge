@@ -3,9 +3,11 @@ import { ButtonLink, Pill } from "@/components/ui";
 import { CandidateParts } from "./CandidateParts";
 import { SpecPanel } from "./SpecPanel";
 
-/** Overview of the stored build. Artifact and order links require future contracts. */
+/** Overview of the stored build and its next available delivery stages. */
 export function ProjectOverview({ build }: { build: BuildDetail }) {
   const conversationHref = `/build/${encodeURIComponent(build.id)}`;
+  const planHref = `/projects/${encodeURIComponent(build.id)}/plan`;
+  const firmwareHref = `/projects/${encodeURIComponent(build.id)}/firmware`;
   const inConversation = !build.status || build.status === "asking" || build.status === "specifying";
   return (
     <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -46,9 +48,13 @@ export function ProjectOverview({ build }: { build: BuildDetail }) {
             <div><dt className="text-muted">Devices</dt><dd>{build.device_count}</dd></div>
           </dl>
         </section>
-        <section aria-labelledby="artifacts" className="rounded-[20px] border border-hairline bg-porcelain p-6">
-          <h2 id="artifacts" className="font-display text-[24px]">Files and fulfillment</h2>
-          <p className="mt-3 text-[15px] text-muted">Firmware downloads, wiring diagrams, generated enclosure files and order tracking are not available in this workspace yet.</p>
+        <section aria-labelledby="delivery" className="rounded-[20px] border border-hairline bg-porcelain p-6">
+          <h2 id="delivery" className="font-display text-[24px]">Build and setup</h2>
+          <p className="mt-3 text-[15px] text-muted">Review the pinned parts before accepting a plan. Firmware becomes available only after an accepted plan and a configured compiler. Generated files still need physical wiring, fit and power checks.</p>
+          <div className="mt-5 grid gap-3">
+            <ButtonLink href={planHref} variant="coral" className="justify-center rounded-xl px-4 py-3">Review build plan →</ButtonLink>
+            <ButtonLink href={firmwareHref} variant="dark" className="justify-center rounded-xl px-4 py-3">Firmware and setup →</ButtonLink>
+          </div>
         </section>
       </aside>
     </div>

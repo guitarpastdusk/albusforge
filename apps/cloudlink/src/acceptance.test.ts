@@ -9,10 +9,7 @@ import { describe, it, expect } from 'vitest';
 // Avoid paying package-manager startup for every isolated CLI assertion. Keep
 // a hard per-child timeout as well as a bounded suite budget under CI contention.
 const loader=createRequire(import.meta.url).resolve('tsx');
-// These fixture CLIs are CPU-bound at startup and run beside real PostgreSQL
-// integration suites in CI. Give a successful child enough time under runner
-// contention, while retaining a finite bound and an unambiguous timeout signal.
-const runCli=(args:string[],env:NodeJS.ProcessEnv)=>spawnSync(process.execPath,['--import',loader,...args],{encoding:'utf8',env,timeout:60_000,killSignal:'SIGKILL',maxBuffer:1024*1024});
+const runCli=(args:string[],env:NodeJS.ProcessEnv)=>spawnSync(process.execPath,['--import',loader,...args],{encoding:'utf8',env,timeout:20_000,killSignal:'SIGKILL',maxBuffer:1024*1024});
 
 describe('deployment acceptance preparation', () => {
   it('exports only hashes for remote SQL and scopes cleanup without deleting accounting', () => {

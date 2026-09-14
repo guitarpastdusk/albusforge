@@ -26,8 +26,10 @@ function byIdAndChild(method: Method, pattern: string, child: string): Route<[id
 }
 
 export const routes = {
+  deviceSetup: { status: byId("GET", "/v1/devices/:id/setup") },
   /** Stored telemetry only; richer provisioned dashboard routes remain under devices/tenants. */
   telemetry: {
+    metadata: byId("PATCH", "/v1/telemetry/devices/:id/metadata"),
     devices: fixed("GET", "/v1/telemetry/devices"),
     device: byId("GET", "/v1/telemetry/devices/:id"),
     latest: byId("GET", "/v1/telemetry/devices/:id/latest"),

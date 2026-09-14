@@ -18,7 +18,7 @@ export function sessionTokenHash(cookie: string | undefined): string {
 }
 
 /** Host selects a tenant only under our public domain; forwarded headers are never trusted. */
-function tenantSlug(host: string): string | null {
+export function tenantSlug(host: string): string | null {
   const name = host.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
   if (name === "albusforge.ai" || name === "staging.albusforge.ai") return null;
   if (!name.endsWith(".albusforge.ai")) return null; // Internal SSR/localhost uses active tenant.

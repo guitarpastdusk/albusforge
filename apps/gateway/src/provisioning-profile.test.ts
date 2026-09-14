@@ -1,0 +1,32 @@
+import { readFileSync } from "node:fs";
+import { expect, it } from "vitest";
+import { PartDefinition } from "@albusforge/schema";
+import { ProvisioningProfile, ProvisioningProfiles, resolveProvisioningProfile } from "./provisioning-profile";
+// Synthetic approved evidence solely for resolver tests. The checked-in production list is empty.
+function fixture() {
+  const part = PartDefinition.parse(JSON.parse(readFileSync(new URL("../../../registry/parts/P-001/part.json", import.meta.url), "utf8")));
+  part.status = "active";
+  const pin = { id: part.id, version: part.version };
+  const accepted = { profile: { id: "test-fixture", version: "1.0.0" }, runtime: "0.1.0", part_versions: [pin] };
+  const profile = ProvisioningProfile.parse({ id: "test-only-temperature", version: "1.0.0", assembly_profile: accepted.profile, runtime: accepted.runtime, part_versions: [pin], firmware_profile_id: "test-only", channels: [{ key: "temperature", range: { unit: "C", min: -40, max: 85 }, part: pin, telemetry_schema: part.cloud.telemetry_schema }] });
+  return { part, accepted, profile };
+}
+it("requires exact active pins, profile/runtime and firmware target, with no production defaults", () => {
+  expect(ProvisioningProfiles.parse(JSON.parse(readFileSync(new URL("../../../registry/provisioning-profiles.json", import.meta.url), "utf8")))).toEqual([]);
+  const { part, accepted, profile } = fixture();
+  expect(resolveProvisioningProfile([profile], accepted, [part], "test-only")?.channels).toEqual({ temperature: { unit: "C", min: -40, max: 85 } });
+  expect(resolveProvisioningProfile([], accepted, [part], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([profile], accepted, [{ ...part, status: "draft" }], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([profile], { ...accepted, runtime: "1.0.0" }, [part], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([profile], { ...accepted, profile: { ...accepted.profile, version: "2.0.0" } }, [part], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([profile], accepted, [{ ...part, version: "2.0.0" }], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([profile], accepted, [part], "unknown-firmware")).toBeNull();
+});
+it("refuses ambiguous profiles, incorrect telemetry schemas and unowned channel declarations", () => {
+  const { part, accepted, profile } = fixture();
+  expect(resolveProvisioningProfile([profile, { ...profile, id: "other" }], accepted, [part], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([{ ...profile, channels: [{ ...profile.channels[0]!, telemetry_schema: "invented.v1" }] }], accepted, [part], "test-only")).toBeNull();
+  expect(resolveProvisioningProfile([{ ...profile, channels: [{ ...profile.channels[0]!, part: { id: "different", version: "1.0.0" } }] }], accepted, [part], "test-only")).toBeNull();
+  expect(ProvisioningProfile.safeParse({ ...profile, channels: [...profile.channels, ...profile.channels] }).success).toBe(false);
+  expect(ProvisioningProfile.safeParse({ ...profile, channels: [{ ...profile.channels[0]!, range: { unit: "C", min: 20, max: 10 } }] }).success).toBe(false);
+});

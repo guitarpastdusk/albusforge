@@ -1,6 +1,6 @@
 # Existing-device setup and first-reading confirmation
 
-Delivered scope: `/setup?device=UUID` checks a device already registered in the active workspace. It does not enroll devices, issue credentials, transfer ownership, flash firmware or validate physical hardware. This is the cloud-reception portion of [UI-BACKLOG B8](UI-BACKLOG.md).
+Read-only reception scope: `/setup?device=UUID` checks a device already registered in the active workspace. The complementary self-flash registration and configuration controls are delivered separately in [DEVICE-PROVISIONING.md](DEVICE-PROVISIONING.md). It does not enroll devices, issue credentials, transfer ownership, flash firmware or validate physical hardware. This is the cloud-reception portion of [UI-BACKLOG B8](UI-BACKLOG.md).
 
 ## Contract and dependencies
 
@@ -10,9 +10,9 @@ The remaining dependency chain is tracked in the existing documents, not a newly
 
 | Dependency | Meaning and current gap | Existing tracker |
 | --- | --- | --- |
-| Persisted trusted BuildPlan | A server-owned, validated and pinned plan must supply the board/channel/source facts used for a production identity. Existing untyped plan JSON is not a completed trusted provisioning contract. | UI-BACKLOG B3, CLOUD-PLATFORM §4.2 |
+| Persisted trusted BuildPlan (B3 dependency; see provisioning runbook for implemented adapter) | A server-owned, validated and pinned plan must supply the board/channel/source facts used for a production identity. Existing untyped plan JSON is not a completed trusted provisioning contract. | UI-BACKLOG B3, CLOUD-PLATFORM §4.2 |
 | Trusted provisioning producer | Fulfillment/self-flash needs an authorized producer that derives immutable device channels/source and tenant ownership from that plan. The local Cloudlink simulator CLI is not this producer. | UI-BACKLOG B6/B8, CLOUD-PLATFORM §4.2, ADR 0009 |
-| Firmware credential handoff | The provisioner must securely deliver the device's secret identity to generated firmware without exposing it through browser status APIs, logs or support copy. Firmware generation, flashing and self-flash claim issuance are still missing here. | UI-BACKLOG B6/B8, CLOUD-PLATFORM §4.2 |
+| Firmware credential handoff | The provisioner must securely deliver the device's secret identity to generated firmware without exposing it through browser status APIs, logs or support copy. The original read-only projection does not perform issuance; the complementary B8 path is documented in DEVICE-PROVISIONING.md. | UI-BACKLOG B6/B8, CLOUD-PLATFORM §4.2 |
 
 No migration or credential lifecycle is introduced. Fleet metadata is a separate workstream and does not alter channels/source.
 
@@ -37,7 +37,7 @@ Sign in and open a registered device's setup link from Live systems, or enter it
 
 For waiting devices, the visible page refreshes every five seconds, pauses while hidden, and stops after 60 automatic checks. A manual **Check again** restarts the budget. Completion and revocation stop automatic checks. Channel values preserve zero and show stored sample timestamps; the history link remains available for revoked devices.
 
-Use the provisioner's existing power/network/firmware instructions. Never paste a device secret into this screen or a support message. If no packet arrives after several configured intervals, ask the provisioner to check identity/endpoint/connectivity. Missing channels require sensor/firmware investigation. Revoked credentials require supported recovery by the provisioner; there is no browser rotation or recovery issuer in this change.
+Use the provisioner's existing power/network/firmware instructions. Never paste a device secret into this screen or a support message. If no packet arrives after several configured intervals, ask the provisioner to check identity/endpoint/connectivity. Missing channels require sensor/firmware investigation. Revoked credentials require supported recovery by the provisioner; the self-flash recovery controls described in [DEVICE-PROVISIONING.md](DEVICE-PROVISIONING.md) support explicit replacement for non-revoked enrolled identities.
 
 ## Reproducible validation
 

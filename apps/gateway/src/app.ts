@@ -20,6 +20,8 @@ import type { PartsStore } from "./parts";
 import type { Pool } from "pg";
 import { registerBuildPlans } from "./build-plan-routes";
 import type { ReviewedPlanCatalogue } from "./build-plan-catalogue";
+import { registerDeviceProvisioning } from "./device-provisioning-routes";
+import type { DeviceProvisioningOptions } from "./device-provisioning-store";
 import { registerDeviceSetup } from "./device-setup";
 import { registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
@@ -39,6 +41,7 @@ export interface AppOptions {
   planCatalogue?: ReviewedPlanCatalogue;
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
+  deviceProvisioning?: DeviceProvisioningOptions;
   sensorAsk?: SensorAskClient | null;
   parts: PartsStore;
   /** Resolves when the database answers; rejects otherwise. */
@@ -72,7 +75,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null, planCatalogue }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -197,6 +200,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     registerBuildPlans(app, telemetryPool, planCatalogue);
     registerTelemetryReads(app, telemetryPool);
     registerDeviceSetup(app, telemetryPool);
+    registerDeviceProvisioning(app, telemetryPool, deviceProvisioning);
     registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
   }

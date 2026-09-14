@@ -49,6 +49,7 @@ export const builds = buildsSchema.table(
   },
   (t) => [
     // Every build has one owner or the other (ADR 0009, PORTAL.md §5).
+    unique("builds_id_tenant_unique").on(t.id, t.tenantId),
     check("builds_owner_check", sql`"tenant_id" IS NOT NULL OR "anon_owner_hash" IS NOT NULL`),
     check("builds_status_check", oneOf("status", BUILD_STATUSES)),
     index("builds_tenant_id_idx").on(t.tenantId),
@@ -146,6 +147,7 @@ export const codeBundles = buildsSchema.table(
   },
   (t) => [
     primaryKey({ columns: [t.buildId, t.version] }),
+    unique("code_bundles_build_plan_version_unique").on(t.buildId, t.planVersion, t.version),
     foreignKey({
       name: "code_bundles_plan_fk",
       columns: [t.buildId, t.planVersion],

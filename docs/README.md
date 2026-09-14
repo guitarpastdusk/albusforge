@@ -4,7 +4,8 @@ Design and architecture documentation for Albus Forge.
 
 | File | What it covers |
 | --- | --- |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture: the core invariant, the six-stage pipeline, services, data model, API contract, infrastructure, and the open forks that must be settled before M0. |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture: the core invariant, the six-stage pipeline, services, data model, API contract, infrastructure, and the open forks — several now resolved in code, each linked to the ADR or document that settled it (section 18). |
+| [DEVICE-CHAT.md](DEVICE-CHAT.md) | The multi-turn device conversation: its tool surface, why the model may write the reply, and how it is metered and bounded. |
 | [CLOUD-PLATFORM.md](CLOUD-PLATFORM.md) | The cloud tier end to end: transport (MQTT vs HTTPS), the wire envelope, ingestion, storage tiering and retention, how readings reach the UI, and the three-tier intelligence layer — statistics, small model, frontier model. |
 | [TELEMETRY-INGEST.md](TELEMETRY-INGEST.md) | M6a standalone ingestion, wire/storage semantics, simulator runbook, production gates and dashboard/intelligence follow-ups. |
 | [CAMERA-CLOUD-PLAN.md](CAMERA-CLOUD-PLAN.md) | Verified Freenove bring-up, live cloud inventory, and proposed authenticated JPEG storage every 15 minutes. |

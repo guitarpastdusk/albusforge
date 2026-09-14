@@ -48,7 +48,7 @@ export function DeviceSetupView({ setup }: { setup: DeviceSetupStatus }) {
           </li>)}
         </ul>
       </div>}
-      <div className="flex flex-wrap gap-5"><Link href={`/live/${setup.device_id}`} className="font-medium text-coral-deep">Open readings, pictures and history →</Link><Link href="/live" className="text-muted">Return to live systems</Link></div>
+      <div className="flex flex-wrap gap-5"><Link href={`/live/${setup.device_id}`} className="font-medium text-coral-deep">{setup.capabilities?.some(cap => cap.kind === "image") ? (setup.channels.length ? "Open readings, pictures and history →" : "Open pictures and history →") : "Open readings and history →"}</Link><Link href="/live" className="text-muted">Return to live systems</Link></div>
       <section className="max-w-[760px] rounded-2xl bg-porcelain p-6" aria-labelledby="setup-help">
         <h2 id="setup-help" className="font-display text-[24px]">If uploads do not arrive</h2>
         <p className="mt-3 text-muted">Check power and network access using your provisioner’s instructions. Ask them to verify that the firmware contains this device’s existing identity and the correct ingestion endpoint. Never paste a device token into this page or a support message.</p>

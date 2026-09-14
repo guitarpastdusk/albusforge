@@ -10,7 +10,7 @@ import {
 } from "@albusforge/schema";
 
 import { COMPILER_IMAGE, CANDIDATE, CHANNELS, renderApp } from "./candidate";
-import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CHANNELS, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
 export { editInterval, renderApp } from "./candidate";
 export const sha256 = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -177,7 +177,7 @@ async function compileProfile(
       code_version: input.code_version,
       profile_id: camera ? CAMERA_CANDIDATE : CANDIDATE,
       runtime: camera ? CAMERA_RUNTIME : "0.1.0",
-      channels: camera ? {} : CHANNELS,
+      channels: camera ? CAMERA_CHANNELS : CHANNELS,
       ...(camera ? { capabilities: CAMERA_CAPABILITIES } : {}),
       files: [...files].map(([path, bytes]) => ({
         path,

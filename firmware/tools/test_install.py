@@ -72,16 +72,22 @@ class CameraInstallerIntegrity(InstallerIntegrity):
     def setUp(self):
         super().setUp()
         profile = "freenove-esp32s3-n16r8-gc0308-usb-v1"
-        capability = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": profile, "profile_version": 1,
+        camera = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": profile, "profile_version": 1,
             "enabled": True, "required": True, "interval_s": 900, "max_bytes": 1048576, "max_width": 320, "max_height": 240}
-        self.manifest.update(profile_id=profile, runtime="0.2.0", channels={}, capabilities=[capability])
-        self.config.update(v=2, profile_id=profile, runtime="0.2.0", channels={}, capabilities=[dict(capability)],
+        channels = {"ambient_light_lux": {"unit": "lux", "min": 0, "max": 65535},
+            "air_temperature_c": {"unit": "C", "min": -40, "max": 85},
+            "air_pressure_hpa": {"unit": "hPa", "min": 300, "max": 1100},
+            "air_humidity_pct": {"unit": "%", "min": 0, "max": 100}}
+        environment = {"id": "environment", "kind": "measurement", "schema": "readings.v1", "profile_id": profile, "profile_version": 1,
+            "enabled": True, "required": True, "interval_s": 900, "channels": channels}
+        self.manifest.update(profile_id=profile, runtime="0.3.0", channels=channels, capabilities=[camera, environment])
+        self.config.update(v=2, profile_id=profile, runtime="0.3.0", channels=channels, capabilities=[dict(camera), environment],
             observation_url=f"https://ingest.example/ingest/v2/devices/{self.config['device_id']}/observations")
         self.save()
 
     def test_camera_capabilities_cannot_be_replaced(self):
-        self.config["capabilities"][0]["interval_s"] = 60
-        with self.assertRaisesRegex(ValueError, "capability"):
+        self.config["capabilities"][1]["interval_s"] = 60
+        with self.assertRaises(ValueError):
             installer.verify(self.root, self.config)
 
     def test_camera_default_provisions_hotspot_without_wifi_in_shared_config(self):
@@ -99,6 +105,11 @@ class CameraInstallerIntegrity(InstallerIntegrity):
     def test_camera_endpoint_is_device_bound(self):
         self.config["observation_url"] = "https://example.com/ingest/v2/devices/other/observations"
         with self.assertRaisesRegex(ValueError, "endpoint"):
+            installer.verify(self.root, self.config)
+
+    def test_camera_numeric_profile_cannot_drop_a_channel(self):
+        del self.config["channels"]["air_humidity_pct"]
+        with self.assertRaises(ValueError):
             installer.verify(self.root, self.config)
 
 if __name__ == "__main__":

@@ -47,14 +47,23 @@ def verify(bundle, config):
     if config.get("v") == 2:
         if config.get("capabilities") != manifest.get("capabilities"):
             raise ValueError("Configuration capability identity does not match firmware")
-        if config.get("profile_id") != "freenove-esp32s3-n16r8-gc0308-usb-v1" or config.get("runtime") != "0.2.0":
+        if config.get("profile_id") != "freenove-esp32s3-n16r8-gc0308-usb-v1" or config.get("runtime") != "0.3.0":
             raise ValueError("Unsupported camera profile")
-        expected_cap = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": config["profile_id"], "profile_version": 1,
+        expected_camera = {"id": "camera", "kind": "image", "schema": "jpeg.v1", "profile_id": config["profile_id"], "profile_version": 1,
             "enabled": True, "required": True, "interval_s": 900, "max_bytes": 1048576, "max_width": 320, "max_height": 240}
-        if config.get("capabilities") != [expected_cap] or config.get("channels") != {}:
+        expected_channels = {"ambient_light_lux": {"unit": "lux", "min": 0, "max": 65535},
+            "air_temperature_c": {"unit": "C", "min": -40, "max": 85},
+            "air_pressure_hpa": {"unit": "hPa", "min": 300, "max": 1100},
+            "air_humidity_pct": {"unit": "%", "min": 0, "max": 100}}
+        expected_measurement = {"id": "environment", "kind": "measurement", "schema": "readings.v1", "profile_id": config["profile_id"], "profile_version": 1,
+            "enabled": True, "required": True, "interval_s": 900, "channels": expected_channels}
+        if config.get("capabilities") != [expected_camera, expected_measurement] or config.get("channels") != expected_channels:
             raise ValueError("Unsupported camera capability")
+        ingest = urlsplit(config.get("ingest_url", ""))
+        if ingest.scheme != "https" or not ingest.hostname or ingest.username or ingest.password or ingest.query or ingest.fragment or ingest.path != "/ingest/v1":
+            raise ValueError("Invalid ingestion endpoint")
         endpoint = urlsplit(config.get("observation_url", ""))
-        if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment or endpoint.path != f"/ingest/v2/devices/{config['device_id']}/observations":
+        if endpoint.scheme != ingest.scheme or endpoint.netloc != ingest.netloc or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment or endpoint.path != f"/ingest/v2/devices/{config['device_id']}/observations":
             raise ValueError("Invalid observation endpoint")
     elif config.get("v") != 1 or config.get("profile_id") != "esp32s3-bh1750-usb-v1":
         raise ValueError("Unsupported firmware configuration version")

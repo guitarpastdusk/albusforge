@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { DeviceConfigV2, serializeFirmwareManifest, type FirmwareManifest } from '@albusforge/schema';
-import { BENCH_PROFILE, benchManifest, prepareBench, readJournal, sha256, cleanupBenchSql, markBench } from './staging-bench.js';
+import { BENCH_PROFILE, BENCH_CHANNELS, benchManifest, prepareBench, readJournal, sha256, cleanupBenchSql, markBench } from './staging-bench.js';
 import { executeBenchSql, verifyBenchJob, type CloudRequest, JOB, benchRunner } from './staging-bench-job.js';
 export const image = `us-central1-docker.pkg.dev/albusforge-ci/albusforge/db-jobs@sha256:${'a'.repeat(64)}`;
-export const manifestBytes = Buffer.from(serializeFirmwareManifest({ v: 1, build_id: '00000000-0000-4000-8000-000000000000', plan_version: 1, code_version: 1, profile_id: BENCH_PROFILE, runtime: '0.2.0', channels: {}, capabilities: [{ id: 'camera', kind: 'image', schema: 'jpeg.v1', profile_id: BENCH_PROFILE, profile_version: 1, enabled: true, required: true, interval_s: 900, max_bytes: 1048576, max_width: 320, max_height: 240 }], files: ['bootloader.bin','partition-table.bin','albusforge.bin'].map(path => ({path,sha256:'b'.repeat(64),size:100})), flash: {chip:'esp32s3',config_offset:36864,config_size:24576} } as FirmwareManifest));
+export const manifestBytes = Buffer.from(serializeFirmwareManifest({ v: 1, build_id: '00000000-0000-4000-8000-000000000000', plan_version: 1, code_version: 1, profile_id: BENCH_PROFILE, runtime: '0.3.0', channels: BENCH_CHANNELS, capabilities: [{ id: 'camera', kind: 'image', schema: 'jpeg.v1', profile_id: BENCH_PROFILE, profile_version: 1, enabled: true, required: true, interval_s: 900, max_bytes: 1048576, max_width: 320, max_height: 240 }, { id: 'environment', kind: 'measurement', schema: 'readings.v1', profile_id: BENCH_PROFILE, profile_version: 1, enabled: true, required: true, interval_s: 900, channels: BENCH_CHANNELS }], files: ['bootloader.bin','partition-table.bin','albusforge.bin'].map(path => ({path,sha256:'b'.repeat(64),size:100})), flash: {chip:'esp32s3',config_offset:36864,config_size:24576} } as FirmwareManifest));
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(d => rm(d,{recursive:true,force:true}))); });
 async function directory() { const path = await mkdtemp(join(tmpdir(),'camera-bench-test-')); dirs.push(path); return path; }
@@ -15,6 +15,7 @@ it('writes exact bound V2 config and a nonsecret cleanup journal privately befor
   const f = await prepareBench(output, process.cwd(), manifestBytes, sha256(manifestBytes), image);
   const config = DeviceConfigV2.parse(JSON.parse(await readFile(join(output,'device-config.json'),'utf8')));
   expect(config.manifest_digest).toBe(sha256(manifestBytes)); expect(config.capabilities[0]?.interval_s).toBe(900);
+  expect(f.sql).toContain('channels,source,next_s) VALUES'); expect(f.sql).toContain(',900);');
   expect(config.observation_url).toBe(`https://staging.albusforge.ai/ingest/v2/devices/${f.journal.device}/observations`);
   expect(f.sql).toContain(sha256(config.token)); expect(f.sql).not.toContain(config.token);
   expect(await readFile(join(output,'cleanup.json'),'utf8')).not.toContain(config.token);

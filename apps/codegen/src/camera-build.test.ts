@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { compileCameraCandidate, sha256 } from "./compiler";
-import { CAMERA_CANDIDATE } from "./camera-candidate";
+import { CAMERA_CANDIDATE, CAMERA_CHANNELS } from "./camera-candidate";
 import { FirmwareManifest } from "@albusforge/schema";
 
 it.skipIf(process.env.FIRMWARE_CAMERA_COMPILER !== "1")("compiles the locked native camera, verifies 16 MiB boot header and reviewed partition layout", async () => {
@@ -9,7 +9,7 @@ it.skipIf(process.env.FIRMWARE_CAMERA_COMPILER !== "1")("compiles the locked nat
     fileURLToPath(new URL("../../../firmware/esp32s3-camera", import.meta.url)));
   const manifest = FirmwareManifest.parse(JSON.parse(result.manifestBytes));
   expect(manifest.profile_id).toBe(CAMERA_CANDIDATE);
-  expect(manifest.channels).toEqual({});
+  expect(manifest.channels).toEqual(CAMERA_CHANNELS);
   expect(manifest.capabilities?.[0]).toMatchObject({ id: "camera", interval_s: 900, kind: "image", max_width: 320, max_height: 240 });
   expect(result.manifest_digest).toBe(sha256(result.manifestBytes));
   for (const file of manifest.files) {

@@ -23,8 +23,10 @@
 #include "mbedtls/sha256.h"
 #include "nvs_flash.h"
 #include "observation-spool.h"
+#include "plant-sensors.h"
 #include "observation-owner.h"
 #include "sdmmc_cmd.h"
+#include "telemetry-packet.h"
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -43,7 +45,8 @@ static EventGroupHandle_t events;
 #define AUTH_PAUSED BIT3
 static SemaphoreHandle_t camera_lock, spool_lock;
 static char claimed[37];
-static const char *device_id, *observation_url, *token;
+static const char *device_id, *observation_url, *ingest_url, *token;
+static uint64_t telemetry_initial_seq;
 static obs_owner_identity spool_owner;
 static obs_owner_status owner_status = OBS_OWNER_UNBOUND;
 static unsigned dropped_count, corrupt_count, quarantine_dropped,
@@ -51,6 +54,9 @@ static unsigned dropped_count, corrupt_count, quarantine_dropped,
 static size_t queued_count, queued_bytes;
 static int64_t last_capture, last_successful_upload;
 static int last_http_status;
+static int64_t last_telemetry_upload;
+static int telemetry_http_status;
+static const char *telemetry_error = "pending";
 static const char *last_error = "none";
 /* Caller holds spool_lock (or no tasks exist yet). Never cache across card I/O. */
 static bool owner_valid(void) {
@@ -83,6 +89,40 @@ static const char *field(cJSON *j, const char *key, size_t maximum) {
 static bool number(cJSON *j, const char *key, double expected) {
   cJSON *v = cJSON_GetObjectItemCaseSensitive(j, key);
   return cJSON_IsNumber(v) && v->valuedouble == expected;
+}
+static bool text(cJSON *j, const char *key, const char *expected,
+                 size_t maximum) {
+  const char *value = field(j, key, maximum);
+  return value && !strcmp(value, expected);
+}
+static bool channel(cJSON *channels, const char *key, const char *unit,
+                    double minimum, double maximum) {
+  cJSON *value = cJSON_GetObjectItemCaseSensitive(channels, key);
+  return cJSON_IsObject(value) && text(value, "unit", unit, 40) &&
+         number(value, "min", minimum) && number(value, "max", maximum);
+}
+static unsigned member_count(const cJSON *object) {
+  unsigned count = 0;
+  for (const cJSON *member = object ? object->child : NULL; member;
+       member = member->next)
+    count++;
+  return count;
+}
+static bool measurement_capability(cJSON *cap) {
+  cJSON *channels = cJSON_GetObjectItemCaseSensitive(cap, "channels");
+  return text(cap, "id", "environment", 64) &&
+         text(cap, "kind", "measurement", 20) &&
+         text(cap, "schema", "readings.v1", 20) &&
+         text(cap, "profile_id", HSX_PROFILE_ID, 120) &&
+         number(cap, "profile_version", 1) && number(cap, "interval_s", 900) &&
+         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(cap, "enabled")) &&
+         cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(cap, "required")) &&
+         cJSON_IsObject(channels) &&
+         channel(channels, "ambient_light_lux", "lux", 0, 65535) &&
+         channel(channels, "air_temperature_c", "C", -40, 85) &&
+         channel(channels, "air_pressure_hpa", "hPa", 300, 1100) &&
+         channel(channels, "air_humidity_pct", "%", 0, 100) &&
+         member_count(channels) == 4;
 }
 static void digest(const unsigned char *bytes, size_t length, char out[65]) {
   unsigned char hash[32];
@@ -154,7 +194,7 @@ static esp_err_t preview(httpd_req_t *request) {
 }
 static esp_err_t health(httpd_req_t *request) {
   EventBits_t bits = xEventGroupGetBits(events);
-  char body[600];
+  char body[800];
   if (xSemaphoreTake(spool_lock, pdMS_TO_TICKS(1000)) != pdTRUE) {
     httpd_resp_set_status(request, "503 Service Unavailable");
     return httpd_resp_sendstr(request, "Storage busy");
@@ -164,13 +204,16 @@ static esp_err_t health(httpd_req_t *request) {
            "\"queued_count\":%zu,\"queued_bytes\":%zu,\"last_capture\":%lld,"
            "\"last_successful_upload\":%lld,\"last_error\":\"%s\",\"last_http_"
            "status\":%d,\"dropped\":%u,\"corrupt\":%u,\"quarantined\":%u,"
-           "\"quarantine_dropped\":%u,\"spool_owner\":\"%s\"}",
+           "\"quarantine_dropped\":%u,\"spool_owner\":\"%s\","
+           "\"last_telemetry_upload\":%lld,\"telemetry_http_status\":%d,"
+           "\"telemetry_error\":\"%s\"}",
            bits & CLOCK_READY ? "true" : "false",
            bits & STORAGE_READY ? "true" : "false",
            bits & AUTH_PAUSED ? "true" : "false", queued_count, queued_bytes,
            (long long)last_capture, (long long)last_successful_upload,
            last_error, last_http_status, dropped_count, corrupt_count,
-           quarantine_count, quarantine_dropped, obs_owner_reason(owner_status));
+           quarantine_count, quarantine_dropped, obs_owner_reason(owner_status),
+           (long long)last_telemetry_upload, telemetry_http_status, telemetry_error);
   xSemaphoreGive(spool_lock);
   httpd_resp_set_type(request, "application/json");
   httpd_resp_set_hdr(request, "Cache-Control", "no-store");
@@ -334,6 +377,190 @@ static bool exact_ack(const response_buffer *response,
             number(ack, "bytes", record->bytes);
   cJSON_Delete(ack);
   return ok;
+}
+static bool telemetry_ack(const response_buffer *response, unsigned expected) {
+  if (response->overflow || !response->length)
+    return false;
+  cJSON *ack = cJSON_Parse(response->body);
+  if (!ack)
+    return false;
+  cJSON *commands = cJSON_GetObjectItemCaseSensitive(ack, "cmd");
+  bool ok = number(ack, "ok", expected) && number(ack, "next_s", 900) &&
+            cJSON_IsArray(commands) && cJSON_GetArraySize(commands) == 0;
+  cJSON_Delete(ack);
+  return ok;
+}
+static bool telemetry_state_read(nvs_handle_t store, uint64_t initial,
+                                 uint64_t *next, char **packet,
+                                 unsigned *count) {
+  *next = initial;
+  *packet = NULL;
+  *count = 0;
+  size_t size = 0;
+  esp_err_t result = nvs_get_str(store, "telemetry_state", NULL, &size);
+  if (result == ESP_ERR_NVS_NOT_FOUND)
+    return true;
+  if (result != ESP_OK || size < 3 || size > 4096)
+    return false;
+  char *raw = malloc(size);
+  if (!raw || nvs_get_str(store, "telemetry_state", raw, &size) != ESP_OK) {
+    free(raw);
+    return false;
+  }
+  cJSON *state = cJSON_Parse(raw);
+  free(raw);
+  if (!cJSON_IsObject(state)) {
+    cJSON_Delete(state);
+    return false;
+  }
+  cJSON *saved = cJSON_GetObjectItemCaseSensitive(state, "next_seq"),
+        *saved_count = cJSON_GetObjectItemCaseSensitive(state, "count");
+  const char *saved_packet = field(state, "packet", 2048);
+  bool ok = cJSON_IsNumber(saved) && saved->valuedouble >= initial &&
+            saved->valuedouble <= 9007199254740991.0 &&
+            floor(saved->valuedouble) == saved->valuedouble &&
+            cJSON_IsNumber(saved_count) && saved_count->valuedouble >= 1 &&
+            saved_count->valuedouble <= 4 &&
+            floor(saved_count->valuedouble) == saved_count->valuedouble &&
+            saved_packet;
+  if (ok) {
+    *packet = strdup(saved_packet);
+    *next = (uint64_t)saved->valuedouble;
+    *count = (unsigned)saved_count->valuedouble;
+    ok = *packet != NULL;
+  }
+  cJSON_Delete(state);
+  return ok;
+}
+static bool telemetry_state_write(nvs_handle_t store, uint64_t next,
+                                  unsigned count, const char *packet) {
+  cJSON *state = cJSON_CreateObject();
+  if (!state)
+    return false;
+  cJSON_AddNumberToObject(state, "next_seq", (double)next);
+  cJSON_AddNumberToObject(state, "count", count);
+  cJSON_AddStringToObject(state, "packet", packet);
+  char *serialized = cJSON_PrintUnformatted(state);
+  cJSON_Delete(state);
+  if (!serialized)
+    return false;
+  bool ok = nvs_set_str(store, "telemetry_state", serialized) == ESP_OK &&
+            nvs_commit(store) == ESP_OK;
+  memset(serialized, 0, strlen(serialized));
+  free(serialized);
+  return ok;
+}
+static bool telemetry_state_clear(nvs_handle_t store) {
+  return nvs_erase_key(store, "telemetry_state") == ESP_OK &&
+         nvs_commit(store) == ESP_OK;
+}
+static void telemetry_task(void *arg) {
+  (void)arg;
+  nvs_handle_t store;
+  if (nvs_open_from_partition("albus_cfg", "albus", NVS_READWRITE, &store) != ESP_OK) {
+    telemetry_error = "state_unavailable";
+    vTaskDelete(NULL);
+    return;
+  }
+  uint64_t next = 0;
+  char *pending = NULL;
+  unsigned expected = 0;
+  if (!telemetry_state_read(store, telemetry_initial_seq, &next, &pending, &expected)) {
+    nvs_close(store);
+    telemetry_error = "state_invalid";
+    vTaskDelete(NULL);
+    return;
+  }
+  bool sensors_ready = false;
+  unsigned failures = 0;
+  for (;;) {
+    xEventGroupWaitBits(events, CONNECTED | CLOCK_READY, pdFALSE, pdTRUE,
+                        portMAX_DELAY);
+    if (xEventGroupGetBits(events) & AUTH_PAUSED) {
+      telemetry_error = "auth_paused";
+      vTaskDelay(pdMS_TO_TICKS(60000));
+      continue;
+    }
+    if (!sensors_ready) {
+      sensors_ready = plant_sensors_init() == ESP_OK;
+      if (!sensors_ready) {
+        telemetry_error = "sensors_unavailable";
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        continue;
+      }
+    }
+    if (!pending) {
+      plant_sensor_reading reading;
+      time_t now = time(NULL);
+      wifi_ap_record_t station;
+      int rssi = esp_wifi_sta_get_ap_info(&station) == ESP_OK ? station.rssi : -151;
+      if (now < 1700000000 || plant_sensors_read(&reading) != ESP_OK ||
+          next >= 9007199254740991ULL) {
+        telemetry_error = "sensor_read_failed";
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        continue;
+      }
+      pending = malloc(2048);
+      if (!pending || telemetry_packet_encode(pending, 2048, device_id, next, now,
+                                  esp_timer_get_time() / 1000000, rssi,
+                                  &reading, &expected) < 0 ||
+          !telemetry_state_write(store, next + 1, expected, pending)) {
+        free(pending);
+        pending = NULL;
+        telemetry_error = "state_unavailable";
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        continue;
+      }
+      next++;
+    }
+    char authorization[51];
+    snprintf(authorization, sizeof authorization, "Bearer %s", token);
+    response_buffer response = {0};
+    esp_http_client_config_t config = {.url = ingest_url,
+                                       .timeout_ms = 20000,
+                                       .crt_bundle_attach = esp_crt_bundle_attach,
+                                       .disable_auto_redirect = true,
+                                       .method = HTTP_METHOD_POST,
+                                       .event_handler = http_event,
+                                       .user_data = &response};
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t sent = ESP_FAIL;
+    int status = 0;
+    if (client) {
+      esp_http_client_set_header(client, "Authorization", authorization);
+      esp_http_client_set_header(client, "Content-Type", "application/json");
+      esp_http_client_set_post_field(client, pending, strlen(pending));
+      sent = esp_http_client_perform(client);
+      status = esp_http_client_get_status_code(client);
+      esp_http_client_cleanup(client);
+    }
+    telemetry_http_status = status;
+    if (sent == ESP_OK && status == 202 && telemetry_ack(&response, expected)) {
+      if (!telemetry_state_clear(store)) {
+        telemetry_error = "state_unavailable";
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        continue;
+      }
+      free(pending);
+      pending = NULL;
+      expected = 0;
+      failures = 0;
+      last_telemetry_upload = time(NULL);
+      telemetry_error = "none";
+      vTaskDelay(pdMS_TO_TICKS(900000));
+    } else if (sent == ESP_OK &&
+               (status == 400 || status == 401 || status == 403 || status == 409 ||
+                status == 413 || status == 422)) {
+      telemetry_error = "upload_rejected";
+      xEventGroupSetBits(events, AUTH_PAUSED);
+    } else {
+      telemetry_error = sent == ESP_OK ? "ack_mismatch" : "network_error";
+      unsigned delay = obs_retry_seconds(failures, esp_random(), response.retry_after);
+      if (failures < 10)
+        failures++;
+      vTaskDelay(pdMS_TO_TICKS(delay * 1000));
+    }
+  }
 }
 static void upload_task(void *arg) {
   (void)arg;
@@ -511,17 +738,37 @@ void hsx_camera_run(void) {
   device_id = field(cfg, "device_id", 36);
   token = field(cfg, "token", 43);
   observation_url = field(cfg, "observation_url", 256);
+  ingest_url = field(cfg, "ingest_url", 256);
   const char *profile = field(cfg, "profile_id", 120),
              *runtime = field(cfg, "runtime", 30),
              *build = field(cfg, "build_id", 36);
+  cJSON *seq_start = cJSON_GetObjectItemCaseSensitive(cfg, "seq_start");
   if (!number(cfg, "v", 2) || !device_id || !obs_uuid_valid(device_id) ||
-      !token || strlen(token) != 43 || !observation_url ||
+      !token || strlen(token) != 43 || !observation_url || !ingest_url ||
       strncmp(observation_url, "https://", 8) || strchr(observation_url, '?') ||
       strchr(observation_url, '#') || strchr(observation_url, '@') ||
+      strncmp(ingest_url, "https://", 8) || strchr(ingest_url, '?') ||
+      strchr(ingest_url, '#') || strchr(ingest_url, '@') ||
       !profile || strcmp(profile, HSX_PROFILE_ID) || !runtime ||
       strcmp(runtime, HSX_RUNTIME) || !build || strcmp(build, HSX_BUILD_ID) ||
       !number(cfg, "plan_version", HSX_PLAN_VERSION) ||
-      !number(cfg, "code_version", HSX_CODE_VERSION))
+      !number(cfg, "code_version", HSX_CODE_VERSION) || !cJSON_IsNumber(seq_start) ||
+      seq_start->valuedouble < 0 || seq_start->valuedouble > 9007199254740990.0 ||
+      floor(seq_start->valuedouble) != seq_start->valuedouble)
+    fail_closed();
+  telemetry_initial_seq = (uint64_t)seq_start->valuedouble;
+  const char *ingest_suffix = "/ingest/v1";
+  size_t ingest_size = strlen(ingest_url), ingest_suffix_size = strlen(ingest_suffix);
+  if (ingest_size <= 8 + ingest_suffix_size ||
+      strcmp(ingest_url + ingest_size - ingest_suffix_size, ingest_suffix))
+    fail_closed();
+  char expected_observation[300];
+  int expected_size = snprintf(expected_observation, sizeof expected_observation,
+                               "%.*s/ingest/v2/devices/%s/observations",
+                               (int)(ingest_size - ingest_suffix_size), ingest_url,
+                               device_id);
+  if (expected_size < 0 || (size_t)expected_size >= sizeof expected_observation ||
+      strcmp(observation_url, expected_observation))
     fail_closed();
   char suffix[100];
   snprintf(suffix, sizeof suffix, "/ingest/v2/devices/%s/observations",
@@ -537,19 +784,32 @@ void hsx_camera_run(void) {
           token[i] == '-'))
       fail_closed();
   cJSON *caps = cJSON_GetObjectItemCaseSensitive(cfg, "capabilities"),
-        *cap = cJSON_GetArrayItem(caps, 0);
-  const char *id = field(cap, "id", 64), *kind = field(cap, "kind", 20),
-             *schema = field(cap, "schema", 20),
-             *cap_profile = field(cap, "profile_id", 120);
-  if (!cJSON_IsArray(caps) || cJSON_GetArraySize(caps) != 1 || !id ||
-      strcmp(id, "camera") || !kind || strcmp(kind, "image") || !schema ||
-      strcmp(schema, "jpeg.v1") || !cap_profile ||
-      strcmp(cap_profile, HSX_PROFILE_ID) ||
-      !number(cap, "profile_version", 1) || !number(cap, "interval_s", 900) ||
-      !number(cap, "max_bytes", OBS_MAX_BYTES) ||
-      !number(cap, "max_width", 320) || !number(cap, "max_height", 240) ||
-      !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(cap, "enabled")) ||
-      !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(cap, "required")))
+        *camera_cap = NULL, *measurement_cap = NULL;
+  if (cJSON_IsArray(caps)) {
+    for (int i = 0; i < cJSON_GetArraySize(caps); i++) {
+      cJSON *cap = cJSON_GetArrayItem(caps, i);
+      if (text(cap, "id", "camera", 64)) camera_cap = cap;
+      if (text(cap, "id", "environment", 64)) measurement_cap = cap;
+    }
+  }
+  const char *id = camera_cap ? field(camera_cap, "id", 64) : NULL,
+             *schema = camera_cap ? field(camera_cap, "schema", 20) : NULL,
+             *cap_profile = camera_cap ? field(camera_cap, "profile_id", 120) : NULL;
+  cJSON *channels = cJSON_GetObjectItemCaseSensitive(cfg, "channels");
+  if (!cJSON_IsArray(caps) || cJSON_GetArraySize(caps) != 2 || !id ||
+      !text(camera_cap, "kind", "image", 20) || !schema || strcmp(schema, "jpeg.v1") ||
+      !cap_profile || strcmp(cap_profile, HSX_PROFILE_ID) ||
+      !number(camera_cap, "profile_version", 1) || !number(camera_cap, "interval_s", 900) ||
+      !number(camera_cap, "max_bytes", OBS_MAX_BYTES) ||
+      !number(camera_cap, "max_width", 320) || !number(camera_cap, "max_height", 240) ||
+      !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(camera_cap, "enabled")) ||
+      !cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(camera_cap, "required")) ||
+      !measurement_capability(measurement_cap) || !cJSON_IsObject(channels) ||
+      !channel(channels, "ambient_light_lux", "lux", 0, 65535) ||
+      !channel(channels, "air_temperature_c", "C", -40, 85) ||
+      !channel(channels, "air_pressure_hpa", "hPa", 300, 1100) ||
+      !channel(channels, "air_humidity_pct", "%", 0, 100) ||
+      member_count(channels) != 4)
     fail_closed();
   events = xEventGroupCreate();
   camera_lock = xSemaphoreCreateMutex();
@@ -626,6 +886,7 @@ void hsx_camera_run(void) {
   }
   xEventGroupSetBits(events, CLOCK_READY);
   if (xTaskCreate(capture_task, "capture", 8192, NULL, 4, NULL) != pdPASS ||
-      xTaskCreate(upload_task, "upload", 12288, NULL, 3, NULL) != pdPASS)
+      xTaskCreate(upload_task, "upload", 12288, NULL, 3, NULL) != pdPASS ||
+      xTaskCreate(telemetry_task, "telemetry", 8192, NULL, 3, NULL) != pdPASS)
     fail_closed();
 }

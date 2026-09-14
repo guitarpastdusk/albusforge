@@ -1,6 +1,7 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { syntheticPlanFixture } from "../../codegen/src/testing";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import {
   FirmwareManifest,
@@ -86,7 +87,7 @@ beforeEach(async () => {
 });
 afterAll(async () => {
   await app?.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 async function fixture(role = "operator") {

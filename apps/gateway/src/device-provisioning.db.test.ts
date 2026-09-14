@@ -1,10 +1,11 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { DeviceConfigV1, DeviceProvisioning, TelemetryEnvelope } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -35,7 +36,7 @@ beforeAll(async () => {
     log: (level, message, context) => logs.push(JSON.stringify({ level, message, context })) });
   ingest = buildIngest({ pool: handle.pool, log: entry => logs.push(JSON.stringify(entry)) });
 });
-afterAll(async () => { await app?.close(); await ingest?.close(); await handle?.pool.end(); await container?.stop(); });
+afterAll(async () => { await app?.close(); await ingest?.close(); await closeTestPool(handle?.pool); await container?.stop(); });
 async function fixture(role = "admin") {
   const user = await provisioningUser(handle.pool, role), plan = await seedProvisioningFixture(handle.pool, user.tenantId, user.userId);
   const body = { build_id: plan.buildId, plan_version: 1, code_version: 1, request_id: randomUUID(), expected_tenant_id: user.tenantId };

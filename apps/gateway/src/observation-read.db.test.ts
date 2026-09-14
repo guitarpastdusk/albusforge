@@ -1,6 +1,7 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { MemoryObservationStorage } from "@albusforge/storage/testing";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -18,7 +19,7 @@ beforeAll(async () => {
   pool = createDb({ ...config, user: "observation_reader_test", password: "local-test-only" }).pool;
   jpeg = await readFile(new URL("./fixtures/observation-test.jpg", import.meta.url));
 });
-afterAll(async () => { await pool?.end(); await container?.stop(); });
+afterAll(async () => { await closeTestPool(pool); await container?.stop(); });
 async function fixture() {
   const user = await provisioningUser(pool, "viewer"), device = randomUUID(), deviceToken = randomBytes(32).toString("base64url");
   await pool.query("INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source) VALUES($1,$2,$3,'{}','{}')", [device,user.tenantId,createHash("sha256").update(deviceToken).digest("hex")]);

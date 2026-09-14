@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { DeviceSetupStatus, SESSION_COOKIE } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
@@ -27,7 +28,7 @@ beforeAll(async () => {
   app = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool, log: (level, message, context) => logs.push(JSON.stringify({ level, message, context })) });
   ingest = buildIngest({ pool: handle.pool, log: entry => logs.push(JSON.stringify(entry)) });
 });
-afterAll(async () => { await app?.close(); await ingest?.close(); await handle?.pool.end(); await container?.stop(); });
+afterAll(async () => { await app?.close(); await ingest?.close(); await closeTestPool(handle?.pool); await container?.stop(); });
 async function fixture() {
   const tenant = randomUUID(), user = randomUUID(), id = randomUUID(), session = randomUUID();
   const sessionToken = randomBytes(32).toString("base64url"), token = randomBytes(32).toString("base64url");

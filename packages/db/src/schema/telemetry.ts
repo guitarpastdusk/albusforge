@@ -1,4 +1,4 @@
-import { bigint, doublePrecision, index, integer, jsonb, numeric, pgSchema, primaryKey, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, doublePrecision, index, integer, jsonb, numeric, pgSchema, primaryKey, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 import { tenants } from "./users.js";
 import { createdAt } from "./columns.js";
 
@@ -18,7 +18,7 @@ export const telemetryDevices = telemetrySchema.table("devices", {
   lastSeq: bigint("last_seq", { mode: "number" }),
   status: jsonb("status"),
   createdAt: createdAt(),
-}, (t) => [index("devices_tenant_idx").on(t.tenantId), index("devices_tenant_cursor_idx").on(t.tenantId, t.id)]);
+}, (t) => [index("devices_tenant_idx").on(t.tenantId), index("devices_tenant_cursor_idx").on(t.tenantId, t.id), unique("devices_id_tenant_unique").on(t.id, t.tenantId)]);
 export const telemetryPackets = telemetrySchema.table("packets", {
   deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id, { onDelete: "cascade" }),
   seq: bigint("seq", { mode: "number" }).notNull(),

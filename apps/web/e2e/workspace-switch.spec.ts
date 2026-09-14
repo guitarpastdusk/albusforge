@@ -1,7 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { test, expect, type Stack } from "./stack";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
+/**
+ * Continue a route, tolerating the one race we cannot remove: a handler that
+ * holds a request open loses it if the page navigates or the context closes
+ * while it waits, and continuing then throws "Route is already handled!".
+ * Nothing is being suppressed — the request is gone either way — but the throw
+ * would surface as an unrelated assertion failure further down the test.
+ * Any other route error still fails the test.
+ */
+async function settle(route: Route): Promise<void> {
+  try {
+    await route.continue();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("already handled")) throw error;
+  }
+}
+
 async function signIn(page: Page, stack: Stack, email: string) {
   await page.goto(`${stack.webUrl}/signin?next=%2Fprojects`);
   await page.getByLabel("Email", { exact: true }).fill(email);
@@ -28,7 +44,7 @@ test("workspace switch clears both tabs, isolates another session, and reconcile
     await independent.route("**/*", route => new URL(route.request().url()).origin === stack.webUrl ? route.continue() : route.abort());
     const separate=await independent.newPage();await signIn(separate, stack, email);await expect(separate.getByRole("heading", { name: "Only in Workspace A", exact: true })).toBeVisible();
     let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});let entered!:()=>void;const requested=new Promise<void>(resolve=>{entered=resolve;});let first=true;
-    await page.route("**/*", async route => { if(first&&route.request().headers()["next-action"]){first=false;entered();await held;}await route.continue(); });
+    await page.route("**/*", async route => { if(first&&route.request().headers()["next-action"]){first=false;entered();await held;}await settle(route); });
     await page.getByLabel("Workspace", { exact:true }).filter({visible:true}).selectOption(tenantB);
     await page.getByRole("button",{name:"Switch",exact:true}).filter({visible:true}).click();await requested;
     await expect(page.getByRole("heading",{name:"Workspace transition"})).toBeVisible();
@@ -40,8 +56,12 @@ test("workspace switch clears both tabs, isolates another session, and reconcile
     await page.screenshot({path:info.outputPath("workspace-switched.png"),fullPage:true});
     // A dropped mutation response is ambiguous to the UI: keep data unmounted
     // and reload the authoritative active workspace instead of restoring A/B.
-    await page.unroute("**/*");let failed=false;
-    await page.route("**/*", route=>{if(!failed&&route.request().headers()["next-action"]){failed=true;return route.abort("failed");}return route.continue();});
+    // `unroute` removes the handler without waiting for one that is mid-flight, so a
+    // route still inside the held handler above could be continued after the page had
+    // moved on — "Route is already handled!", and a flaky failure two assertions later.
+    // `unrouteAll({behavior:"wait"})` drains the running handler first.
+    await page.unrouteAll({ behavior: "wait" });let failed=false;
+    await page.route("**/*", route=>{if(!failed&&route.request().headers()["next-action"]){failed=true;return route.abort("failed");}return settle(route);});
     await page.getByLabel("Workspace",{exact:true}).filter({visible:true}).selectOption(tenantA);
     await page.getByRole("button",{name:"Switch",exact:true}).filter({visible:true}).click();
     await expect(page.getByRole("button",{name:"Reload workspace"})).toBeVisible();

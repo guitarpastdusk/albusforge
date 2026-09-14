@@ -418,19 +418,18 @@ it("concurrent workers admit one active compiler and later claim each queued ver
   await a.post();
   await b.post();
   const calls: string[] = [];
-  await Promise.all(
-    [1, 2, 3].map(() =>
-      runOne({
-        pool: handle.pool,
-        artifacts,
-        compile: async (input) => {
-          calls.push(input.build_id);
-          return compiled(input);
-        },
-      }),
-    ),
-  );
-  expect(calls).toHaveLength(1);
+  let entered!: () => void, release!: () => void;
+  const claimed = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const first = runOne({pool:handle.pool,artifacts,compile:async(input)=>{
+    calls.push(input.build_id); entered(); await held; return compiled(input);
+  }});
+  await claimed;
+  try {
+    const contenders = await Promise.all([1,2].map(()=>runOne({pool:handle.pool,artifacts,compile:compiled})));
+    expect(contenders).toEqual([false,false]);
+    expect(calls).toHaveLength(1);
+  } finally { release(); await first; }
   await runOne({pool:handle.pool,artifacts,compile:async(input)=>{calls.push(input.build_id);return compiled(input);}});
   expect(calls.sort()).toEqual([a.build, b.build].sort());
   expect(new Set(calls).size).toBe(2);

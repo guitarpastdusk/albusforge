@@ -33,3 +33,12 @@ export const FirmwarePassedRecord = z.strictObject({
   diagnostics: z.string().max(20000),
 });
 export type FirmwarePassedRecord = z.infer<typeof FirmwarePassedRecord>;
+
+/** Download these exact UTF-8 bytes; installers hash bytes, not a second language's JSON serialization. */
+export function serializeFirmwareManifest(input: FirmwareManifest): string {
+  const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, sort(item)]))
+      : value;
+  return JSON.stringify(sort(FirmwareManifest.parse(input)));
+}

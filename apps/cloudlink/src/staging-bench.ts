@@ -7,14 +7,28 @@ import { z } from 'zod';
 
 export const BENCH_PROFILE = 'freenove-esp32s3-n16r8-gc0308-usb-v1';
 export const BENCH_ORIGIN = 'https://staging.albusforge.ai';
+export const BENCH_CHANNELS = { ambient_light_lux: { unit: 'lux', min: 0, max: 65535 }, air_temperature_c: { unit: 'C', min: -40, max: 85 }, air_pressure_hpa: { unit: 'hPa', min: 300, max: 1100 }, air_humidity_pct: { unit: '%', min: 0, max: 100 } };
 export const BenchJournal = z.strictObject({ v: z.literal(1), kind: z.literal('staging-camera-bench'), project: z.literal('albusforge-staging'), origin: z.literal(BENCH_ORIGIN), tenant: z.uuid(), device: z.uuid(), run: z.uuid(), manifest_digest: z.string().regex(/^[a-f0-9]{64}$/), job_image: z.string().regex(/^us-central1-docker\.pkg\.dev\/albusforge-ci\/albusforge\/db-jobs@sha256:[a-f0-9]{64}$/) });
 export type BenchJournal = z.infer<typeof BenchJournal>;
 export const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+const exactChannels = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const channels = value as Record<string, unknown>;
+  return Object.keys(channels).length === 4 && Object.entries(BENCH_CHANNELS).every(([key, expected]) => {
+    const actual = channels[key];
+    return !!actual && typeof actual === 'object' && !Array.isArray(actual) &&
+      (actual as Record<string, unknown>).unit === expected.unit &&
+      (actual as Record<string, unknown>).min === expected.min &&
+      (actual as Record<string, unknown>).max === expected.max &&
+      Object.keys(actual as Record<string, unknown>).length === 3;
+  });
+};
 export function benchManifest(bytes: Buffer, approvedDigest: string) {
   if (bytes.length > 16384 || !/^[a-f0-9]{64}$/.test(approvedDigest) || sha256(bytes) !== approvedDigest) throw new Error('Bench manifest does not match approved digest');
   const manifest = FirmwareManifest.parse(JSON.parse(bytes.toString('utf8')));
   const cap = manifest.capabilities;
-  if (manifest.profile_id !== BENCH_PROFILE || manifest.runtime !== '0.2.0' || Object.keys(manifest.channels).length || cap?.length !== 1 || cap[0]?.id !== 'camera' || cap[0].kind !== 'image' || cap[0].schema !== 'jpeg.v1' || cap[0].profile_id !== BENCH_PROFILE || cap[0].profile_version !== 1 || !cap[0].enabled || !cap[0].required || cap[0].interval_s !== 900 || cap[0].max_bytes !== 1048576 || cap[0].max_width !== 320 || cap[0].max_height !== 240) throw new Error('Bench requires the reviewed 900-second native camera candidate');
+  const camera = cap?.[0], environment = cap?.[1];
+  if (manifest.profile_id !== BENCH_PROFILE || manifest.runtime !== '0.3.0' || !exactChannels(manifest.channels) || cap?.length !== 2 || camera?.id !== 'camera' || camera.kind !== 'image' || camera.schema !== 'jpeg.v1' || camera.profile_id !== BENCH_PROFILE || camera.profile_version !== 1 || !camera.enabled || !camera.required || camera.interval_s !== 900 || camera.max_bytes !== 1048576 || camera.max_width !== 320 || camera.max_height !== 240 || environment?.id !== 'environment' || environment.kind !== 'measurement' || environment.schema !== 'readings.v1' || environment.profile_id !== BENCH_PROFILE || environment.profile_version !== 1 || !environment.enabled || !environment.required || environment.interval_s !== 900 || !exactChannels(environment.channels)) throw new Error('Bench requires the reviewed 900-second native Plant A candidate');
   return manifest;
 }
 export async function privateRead(path: string, max = 16384): Promise<Buffer> {
@@ -56,8 +70,9 @@ export function createBenchSql(input: BenchJournal, tokenHash: string) {
   if (!/^[a-f0-9]{64}$/.test(tokenHash)) throw new Error('Bench invalid credential hash');
   return `BEGIN;
 INSERT INTO users.tenants(id,name) VALUES(${literal(j.tenant)},${literal(`Staging camera bench ${j.run}`)});
-INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source) VALUES(${literal(j.device)},${literal(j.tenant)},${literal(tokenHash)},'{}',${literal(source(j))}::jsonb);
+INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source,next_s) VALUES(${literal(j.device)},${literal(j.tenant)},${literal(tokenHash)},${literal(BENCH_CHANNELS)}::jsonb,${literal(source(j))}::jsonb,900);
 INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,enabled,required,interval_s,max_bytes,max_width,max_height) VALUES(${literal(j.device)},'camera','image','jpeg.v1',${literal(BENCH_PROFILE)},1,true,true,900,1048576,320,240);
+INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,enabled,required,interval_s,channels) VALUES(${literal(j.device)},'environment','measurement','readings.v1',${literal(BENCH_PROFILE)},1,true,true,900,${literal(BENCH_CHANNELS)}::jsonb);
 COMMIT;`;
 }
 export function cleanupBenchSql(input: BenchJournal) {

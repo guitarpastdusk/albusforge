@@ -10,7 +10,7 @@ import {
   serializeFirmwareManifest,
 } from "@albusforge/schema";
 import { runOne } from "@albusforge/codegen/worker";
-import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "../../codegen/src/camera-candidate";
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CHANNELS, CAMERA_CAPABILITIES, renderCameraApp } from "../../codegen/src/camera-candidate";
 import type { CameraPlanApproval } from "@albusforge/codegen/accepted-candidate";
 import { renderApp, CANDIDATE, CHANNELS } from "@albusforge/codegen/candidate";
 import {
@@ -617,7 +617,7 @@ it.each([60, 120, 30])("provisions compiled cadence %i against an accepted 60-se
 
 async function cameraCompiled(input:CompileInput):Promise<Compiled> {
   const result=await compiled(input);
-  result.manifest=FirmwareManifest.parse({...result.manifest,profile_id:CAMERA_CANDIDATE,runtime:CAMERA_RUNTIME,channels:{},capabilities:CAMERA_CAPABILITIES});
+  result.manifest=FirmwareManifest.parse({...result.manifest,profile_id:CAMERA_CANDIDATE,runtime:CAMERA_RUNTIME,channels:CAMERA_CHANNELS,capabilities:CAMERA_CAPABILITIES});
   result.manifestBytes=serializeFirmwareManifest(result.manifest);result.manifest_digest=sha256(result.manifestBytes);
   result.source=renderCameraApp(input.interval_s);result.source_sha256=sha256(result.source);
   return result;
@@ -629,7 +629,7 @@ it("keeps camera plans gated, dispatches approved native candidates and renders 
   expect((await f.post()).statusCode).toBe(202);
   await runOne({pool:handle.pool,artifacts,cameraApprovals:firmwareOptions.cameraApprovals,compile:async()=>{throw Error('wrong numeric compiler');},compileCamera:cameraCompiled});
   const page=FirmwarePage.parse((await f.get()).json());
-  expect(page.versions[0]).toMatchObject({status:'passed',interval_s:900,source:renderCameraApp(900),manifest:{profile_id:CAMERA_CANDIDATE,channels:{},capabilities:CAMERA_CAPABILITIES}});
+  expect(page.versions[0]).toMatchObject({status:'passed',interval_s:900,source:renderCameraApp(900),manifest:{profile_id:CAMERA_CANDIDATE,channels:CAMERA_CHANNELS,capabilities:CAMERA_CAPABILITIES}});
   expect((await f.post({request_id:randomUUID(),based_on:1,instruction:'Set interval to 1800 seconds'})).statusCode).toBe(400);
   expect((await f.post({request_id:randomUUID(),based_on:1,instruction:'Set interval to 900 seconds'})).statusCode).toBe(202);
   expect(FirmwarePage.parse((await f.get()).json()).versions[0]?.previous_source).toBe(renderCameraApp(900));

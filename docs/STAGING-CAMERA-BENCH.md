@@ -11,7 +11,7 @@ pnpm --filter cloudlink exec tsx src/staging-bench-cli.ts \
   --project albusforge-staging --origin https://staging.albusforge.ai
 ```
 
-After source review, staging deployment checks, and authorization for fixture creation, run the following with a **new absolute directory outside every checkout**, under a private local parent. Do not place it in cloud-synced folders. The values below identify the reviewed local native artifact and the db-jobs image verified on 2026-09-14; after a rebuilt artifact or job deployment, obtain the newly reviewed digest rather than hashing arbitrary input and treating that as approval.
+After source review, staging deployment checks, and authorization for fixture creation, run the following with a **new absolute directory outside every checkout**, under a private local parent. Do not place it in cloud-synced folders. The values below identify the earlier 0.2 native artifact and the db-jobs image verified on 2026-09-14. They are historical and must not be used with the 0.3 Plant A profile: obtain a newly reviewed artifact digest after its build, rather than hashing arbitrary input and treating that as approval.
 
 ```sh
 pnpm --filter cloudlink exec tsx src/staging-bench-cli.ts \
@@ -22,7 +22,7 @@ pnpm --filter cloudlink exec tsx src/staging-bench-cli.ts \
   --job-image us-central1-docker.pkg.dev/albusforge-ci/albusforge/db-jobs@sha256:220e65d8e2c1ba24fd34427bf9026c471832ae0eeab581575074c22da116e18b
 ```
 
-The command creates a mode0700 directory and exclusive mode0600 files. `cleanup.json` is a nonsecret identity journal, fsynced before SQL. `device-config.json` contains a fresh bearer token; only its SHA256 reaches SQL or execution arguments. Never paste, commit, attach, or print the private configuration. `ready.json` appears only after confirmed successful SQL execution. The candidate manifest bytes, profile/runtime/build versions, exact camera capability, 320×240 limits, 1MiB maximum and 900-second cadence are bound into the private configuration. The installer separately verifies binary hashes against that manifest. Wi-Fi credentials stay local: native installation defaults to the board setup hotspot.
+The command creates a mode0700 directory and exclusive mode0600 files. `cleanup.json` is a nonsecret identity journal, fsynced before SQL. `device-config.json` contains a fresh bearer token; only its SHA256 reaches SQL or execution arguments. Never paste, commit, attach, or print the private configuration. `ready.json` appears only after confirmed successful SQL execution. The candidate manifest bytes, profile/runtime/build versions, exact camera capability, four environment channels (light, temperature, pressure and humidity), 320×240 limits, 1MiB maximum and 900-second cadence are bound into the private configuration. The installer separately verifies binary hashes against that manifest. Wi-Fi credentials stay local: native installation defaults to the board setup hotspot. Soil is not part of this fixture.
 
 A failed or interrupted operation may have committed remotely. Preserve the whole directory and run cleanup before preparing another fixture. **Do not install a configuration without `ready.json`, or after cleanup.** Cleanup needs only `cleanup.json`, so it still works if configuration writing or readiness acknowledgement failed:
 

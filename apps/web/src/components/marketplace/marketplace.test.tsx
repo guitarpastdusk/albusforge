@@ -56,11 +56,11 @@ describe("MarketplaceView", () => {
 });
 
 describe("ListingCard", () => {
-  it("shows the category, name, description with price, author, clones and Clone build", () => {
+  it("shows the category, name, description with price, author, clones and Open build", () => {
     const html = renderToStaticMarkup(<ListingCard listing={listing("b", "industrial")} />);
     expect(html).toContain("Industrial");
     expect(html).toContain("A proven build. ~$51/machine.");
     expect(html).toContain("by priya · 88 clones");
-    expect(html).toMatch(/href="\/marketplace\/b"[^>]*>Clone build →/);
+    expect(html).toMatch(/href="\/marketplace\/b"[^>]*>Open build →/);
   });
 });

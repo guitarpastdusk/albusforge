@@ -294,10 +294,21 @@ describe("DesignReadyCard enclosure preview", () => {
     expect(html).toContain("Sign up to continue →");
   });
 
-  it("says the preview isn't generated yet in live mode, and links nothing", () => {
+  it("says the preview isn't generated yet when there is none, and links nothing", () => {
     const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={null} />);
     expect(html).toContain("3D preview available once the enclosure is generated");
     expect(html).not.toContain("View enclosure in 3D");
     expect(html).not.toContain(".glb");
+  });
+
+  it("live mode offers the fixture as a sample enclosure, and says so on the button", async () => {
+    const { enclosurePreviewFor, ENCLOSURE_FIXTURE } = await import("@/components/enclosure/fixture");
+    const live = enclosurePreviewFor("live");
+    expect(live.sample).toBe(true);
+    expect(live.glbUrl).toBe(ENCLOSURE_FIXTURE.glbUrl);
+    expect(live.description).toMatch(/^Sample enclosure\./);
+    expect(enclosurePreviewFor("mock").sample).toBeUndefined();
+    const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={live} />);
+    expect(html).toContain("View a sample enclosure in 3D →");
   });
 });

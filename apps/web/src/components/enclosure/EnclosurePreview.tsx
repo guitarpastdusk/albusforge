@@ -99,11 +99,16 @@ export function EnclosurePreview({ preview, autoRotate = false }: { preview: Enc
       description={preview.description}
       controls={controls}
       footer={
-        <p id={hintId} className="mt-1.5 font-mono text-[12px] text-faint">
-          {mode === "static"
-            ? "Still image — the interactive preview needs WebGL 2."
-            : "Drag to rotate · scroll or pinch to zoom · right-drag to pan · arrow keys rotate"}
-        </p>
+        <>
+          {preview.sample ? (
+            <p className="mt-2 font-mono text-[13px] uppercase tracking-[0.18em] text-coral-deep">Sample enclosure · not this build&apos;s</p>
+          ) : null}
+          <p id={hintId} className="mt-1.5 font-mono text-[12px] text-faint">
+            {mode === "static"
+              ? "Still image — the interactive preview needs WebGL 2."
+              : "Drag to rotate · scroll or pinch to zoom · right-drag to pan · arrow keys rotate"}
+          </p>
+        </>
       }
     >
       <div className={STAGE_CLASS}>

@@ -20,9 +20,8 @@ export function ListingCard({ listing }: { listing: Listing }) {
           <span className="text-muted">
             by {listing.author.handle} · {listing.remix_count} clones
           </span>
-          {/* TODO(M7): "Clone build" is POST /v1/listings/:id/remix after sign-in; for now it opens the listing. */}
           <Link href={`/marketplace/${encodeURIComponent(listing.id)}`} className="font-semibold text-coral-deep hover:text-coral">
-            Clone build →
+            Open build →
           </Link>
         </div>
       </div>

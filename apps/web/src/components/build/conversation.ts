@@ -50,7 +50,8 @@ export type ConversationEvent =
 
 export const OVERDUE_MESSAGE = "The reply is taking longer than usual.";
 
-export function initConversation(initial?: Partial<BuildTranscript>): ConversationState {
+/** `draft` seeds the input before anything is sent: the home page's `?ask=` (lib/clone-ask.ts). */
+export function initConversation(initial?: Partial<BuildTranscript>, draft = ""): ConversationState {
   return {
     buildId: initial?.buildId ?? null,
     messages: initial?.messages ?? [],
@@ -59,7 +60,7 @@ export function initConversation(initial?: Partial<BuildTranscript>): Conversati
     specVersion: initial?.specVersion ?? null,
     spec: initial?.spec ?? null,
     candidateParts: initial?.candidateParts ?? [],
-    draft: "",
+    draft,
     error: null,
     refreshError: null,
     detailsStale: false,

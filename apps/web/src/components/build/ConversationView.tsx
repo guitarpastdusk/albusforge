@@ -13,7 +13,7 @@ import { SpecPanel } from "./SpecPanel";
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview } = useConversation();
+  const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, streamState } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -24,6 +24,19 @@ export function ConversationView({ active = false }: { active?: boolean }) {
           <ChatBubble key={message.id} role={message.role} text={message.text} />
         ))}
         {typing ? <TypingDots /> : null}
+        {streamState === "reconnecting" || streamState === "unavailable" ? (
+          <p role="status" className="text-[14px] text-muted">
+            {streamState === "reconnecting" ? "Reconnecting to build updates…" : "Live updates are unavailable right now. Replies still arrive when you check for one."}
+            {streamState === "unavailable" && state.buildId ? (
+              <>
+                {" "}
+                <button type="button" onClick={checkAgain} className="font-semibold text-coral-deep hover:text-coral">
+                  Check for a reply
+                </button>
+              </>
+            ) : null}
+          </p>
+        ) : null}
         {state.error ? (
           <div role="alert" className="flex flex-wrap items-center gap-3 text-[15px] text-coral-deep">
             <span>{state.error}</span>

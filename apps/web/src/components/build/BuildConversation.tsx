@@ -1,11 +1,11 @@
 "use client";
 
 import { BUILD_EVENT, BuildUpdatedEvent, MessageCreatedEvent } from "@albusforge/schema";
-import { createContext, useContext, useReducer, type ReactNode } from "react";
+import { createContext, useContext, useReducer, useState, type ReactNode } from "react";
 import { useWorkspaceTransition } from "@/components/shell/WorkspaceBoundary";
 import { refreshBuild, sendBuildMessage, startBuild } from "@/actions/builds";
 import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
-import { useEventStream } from "@/lib/sse/useEventStream";
+import { useEventStream, type StreamState } from "@/lib/sse/useEventStream";
 import {
   clientMessageIdFor,
   conversationReducer,
@@ -34,8 +34,10 @@ interface ConversationApi {
   /** Waiting for a reply and not yet overdue: typing dots, and no new send. */
   typing: boolean;
   signedIn: boolean | Promise<boolean>;
-  /** The device-ready card's 3D enclosure preview: the fixture in mock mode, null in live mode. */
+  /** The device-ready card's 3D enclosure preview: the fixture in mock mode, a labelled sample in live mode, null to show none. */
   enclosurePreview: EnclosurePreviewData | null;
+  /** The event stream's state, once a build exists; null before. The view says when replies may be delayed. */
+  streamState: StreamState | null;
   /** Send a message; the first one creates the build. False if nothing was sent. */
   send: (text: string) => boolean;
   setDraft: (text: string) => void;
@@ -60,22 +62,26 @@ export function useConversation(): ConversationApi {
  * Replies and spec progress arrive on GET /v1/builds/:id/events (same-origin,
  * so the anonymous owner cookie goes with it). Messages are merged by id, so
  * the transcript a fresh connection replays is harmless. A reply that takes
- * past 60 s turns into "Check for a reply".
+ * past REPLY_CHECK_AFTER_MS turns into "Check for a reply".
  */
 export function BuildConversation({
   initial,
+  initialDraft = "",
   signedIn = false,
   enclosurePreview = null,
   children,
 }: {
   initial?: BuildTranscript;
+  /** Text waiting in the input before the first send: a Marketplace clone (lib/clone-ask.ts). */
+  initialDraft?: string;
   signedIn?: boolean | Promise<boolean>;
   enclosurePreview?: EnclosurePreviewData | null;
   children: ReactNode;
 }) {
   const workspace = useWorkspaceTransition();
-  const [state, dispatch] = useReducer(conversationReducer, initial, initConversation);
+  const [state, dispatch] = useReducer(conversationReducer, initial, (transcript) => initConversation(transcript, initialDraft));
   const typing = isTyping(state);
+  const [streamState, setStreamState] = useState<StreamState | null>(null);
   const { buildId } = state;
   const requestRefresh = useBuildRefresh(ACTIONS, dispatch);
 
@@ -118,11 +124,12 @@ export function BuildConversation({
     onOpen: () => {
       if (buildId) requestRefresh(buildId, state.observedSpecVersion);
     },
+    onState: setStreamState,
   });
 
   useReplyWatchdog(Boolean(buildId) && typing, () => dispatch({ type: "overdue", message: OVERDUE_MESSAGE }));
 
-  return <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview }}>{children}</ConversationContext>;
+  return <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, streamState }}>{children}</ConversationContext>;
 }
 
 /** Renders its children only while the conversation hasn't started — the landing hero. */

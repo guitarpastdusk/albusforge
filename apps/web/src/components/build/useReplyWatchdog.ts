@@ -3,10 +3,12 @@
 import { useEffect, useEffectEvent } from "react";
 
 /**
- * A reply usually lands within ~45 s (ASK-TO-ENCLOSURE.md §3). Past this, stop
- * the typing dots and offer "Check for a reply": a refetch, never a resend.
+ * A reply usually lands well within 30 s (ASK-TO-ENCLOSURE.md §3 allows ~45 s
+ * at the outside). Past this, stop the typing dots and offer "Check for a
+ * reply": a refetch, never a resend. A viewer facing a dead stream sees the
+ * offer sooner; a slow reply that does land still merges by id.
  */
-export const REPLY_CHECK_AFTER_MS = 60_000;
+export const REPLY_CHECK_AFTER_MS = 30_000;
 
 /**
  * Calls `onOverdue` once if `waiting` stays true for `afterMs`. The clock

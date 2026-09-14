@@ -9,13 +9,16 @@ export interface EnclosurePreviewData {
   dimensionsLabel: string;
   /** The accessible description of the model, and the static image's alt text. */
   description: string;
+  /** True when this is a stand-in for the build's own enclosure, which isn't generated yet (docs/DEMO-ASSUMPTIONS.md). */
+  sample?: boolean;
 }
 
 /**
- * Mock mode's preview: the checked-in fixture (scripts/make-enclosure-fixture.mjs).
- * Live mode has none yet: the body endpoint is the M5.5 contract
- * (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and doesn't exist, so the
- * portal shows a placeholder and never requests it.
+ * The checked-in fixture (scripts/make-enclosure-fixture.mjs). Mock mode shows
+ * it as the build's preview. Live mode has no enclosure yet: the body endpoint
+ * is the M5.5 contract (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and
+ * doesn't exist, so the portal shows the same model labelled as a sample and
+ * never requests one (docs/DEMO-ASSUMPTIONS.md).
  */
 export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
   glbUrl: "/enclosure/fixture.glb",
@@ -25,6 +28,13 @@ export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
     "A rounded sensor enclosure, 90 × 60 × 35 mm with 1.6 mm walls: a base with a cable hole in the floor, and a lid with five vent slots.",
 };
 
-export function enclosurePreviewFor(apiMode: ApiMode): EnclosurePreviewData | null {
-  return apiMode === "mock" ? ENCLOSURE_FIXTURE : null;
+/** Live mode's stand-in: the fixture, said to be a sample. */
+export const ENCLOSURE_SAMPLE: EnclosurePreviewData = {
+  ...ENCLOSURE_FIXTURE,
+  sample: true,
+  description: `Sample enclosure. ${ENCLOSURE_FIXTURE.description} The enclosure generated for this build will replace it.`,
+};
+
+export function enclosurePreviewFor(apiMode: ApiMode): EnclosurePreviewData {
+  return apiMode === "mock" ? ENCLOSURE_FIXTURE : ENCLOSURE_SAMPLE;
 }

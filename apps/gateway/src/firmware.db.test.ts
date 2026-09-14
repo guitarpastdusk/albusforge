@@ -23,6 +23,9 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app";
+import { parseHandoffKeys } from "./device-credential";
+import { ProvisioningProfile } from "./provisioning-profile";
+import { loadProvisioningAuthority } from "./provisioning-authority";
 let container: StartedPostgreSqlContainer,
   handle: ReturnType<typeof createDb>,
   app: FastifyInstance;
@@ -548,5 +551,56 @@ it("fences a superseded worker lease without overwriting its successful replacem
   } finally {
     release();
     await original;
+  }
+});
+
+
+it.each([60, 120, 30])("provisions compiled cadence %i against an accepted 60-second plan", async (interval) => {
+  const f = await fixture();
+  expect((await f.post()).statusCode).toBe(202);
+  await runOne({ pool: handle.pool, artifacts, compile: compiled });
+  let codeVersion = 1;
+  if (interval === 120) {
+    expect((await f.post({ request_id: randomUUID(), based_on: 1, instruction: "Set interval to 120 seconds" })).statusCode).toBe(202);
+    await runOne({ pool: handle.pool, artifacts, compile: compiled });
+    codeVersion = 2;
+  } else if (interval === 30) {
+    // The producer refuses shorter edits; also exercise provisioning's independent
+    // refusal of a malformed passed record instead of trusting producer admission.
+    expect((await f.post({ request_id: randomUUID(), based_on: 1, instruction: "Set interval to 30 seconds" })).statusCode).toBe(422);
+    await handle.pool.query("UPDATE builds.code_bundles SET compile_log=jsonb_set(compile_log,'{job,interval_s}','30') WHERE build_id=$1 AND version=1", [f.build]);
+  }
+  const profile = ProvisioningProfile.parse({
+    id: "synthetic-firmware-provisioning", version: "1.0.0", assembly_profile: f.metadata.profile,
+    runtime: "0.1.0", part_versions: f.metadata.evidence.parts.map(part => ({ id: part.id, version: part.version })),
+    firmware_profile_id: CANDIDATE,
+    health_sources: [{ part: { id: "C-001", version: "1.0.0" }, telemetry_schema: "device_health.v1" }],
+    channels: [{ key: "illuminance", range: CHANNELS.illuminance, part: { id: "V-005", version: "1.0.0" },
+      telemetry_schema: f.metadata.evidence.parts.find(part => part.id === "V-005")!.cloud.telemetry_schema }],
+  });
+  const client = await handle.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const authority = loadProvisioningAuthority(client, f.tenant, f.build, 1, codeVersion, [profile]);
+    if (interval < 60) await expect(authority).rejects.toMatchObject({ statusCode: 409, code: "FIRMWARE_NOT_READY" });
+    else expect((await authority).nextS).toBe(interval);
+  } finally { await client.query("ROLLBACK"); client.release(); }
+  const provisioning = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool,
+    deviceProvisioning: { profiles: [profile], ingestUrl: "https://ingest.example.test/ingest/v1",
+      keys: parseHandoffKeys(JSON.stringify({ active: "test", keys: { test: randomBytes(32).toString("base64url") } })) }, log: () => {} });
+  try {
+    const response = await provisioning.inject({ method: "POST", url: "/v1/devices/claim",
+      headers: { cookie: f.cookie, origin: "http://localhost" },
+      payload: { expected_tenant_id: f.tenant, build_id: f.build, plan_version: 1, code_version: codeVersion, request_id: randomUUID() } });
+    const devices = (await handle.pool.query("SELECT id,next_s FROM telemetry.devices WHERE tenant_id=$1", [f.tenant])).rows;
+    if (interval < 60) {
+      expect(response.statusCode).toBe(409); expect(response.json().error.code).toBe("FIRMWARE_NOT_READY"); expect(devices).toHaveLength(0);
+    } else {
+      expect(response.statusCode).toBe(200); expect(response.json()).toMatchObject({ build_id: f.build, plan_version: 1, code_version: codeVersion });
+      expect(devices).toEqual([{ id: response.json().device_id, next_s: interval }]);
+    }
+  } finally {
+    await provisioning.close();
+    await handle.pool.query("DELETE FROM telemetry.devices WHERE tenant_id=$1", [f.tenant]);
   }
 });

@@ -1,11 +1,10 @@
-import { ConnectorDefinition, type ConnectorPin, type PartDefinition } from "@albusforge/schema";
+import { ConnectorDefinition, usableWindow, type ConnectorPin, type PartDefinition, type VoltageWindow } from "@albusforge/schema";
 import hsx3pin from "../../../../registry/connectors/hsx-3pin-v1.json";
 import hsx4pinGpio from "../../../../registry/connectors/hsx-4pin-gpio-v1.json";
 import hsxI2c from "../../../../registry/connectors/hsx-i2c-4pin-v1.json";
 import hsxPower from "../../../../registry/connectors/hsx-power-2pin-v1.json";
 import usbC from "../../../../registry/connectors/usb-c-v1.json";
 import usbMicroB from "../../../../registry/connectors/usb-micro-b-v1.json";
-import { usableWindow, type VoltageWindow } from "../../../../registry/scripts/lib/power";
 import { EXAMPLE_PARTS, type ExampleBuild } from "./example-builds";
 
 /*
@@ -14,9 +13,12 @@ import { EXAMPLE_PARTS, type ExampleBuild } from "./example-builds";
  * Where the numbers come from: the parts' own `electrical` blocks and the
  * connector definitions, both read from the registry. Which rail feeds a
  * peripheral, and the window it is usable over, follow the same rules the
- * registry's power check uses (registry/scripts/lib/power.ts): a part that
+ * registry's power check uses (registry/scripts/lib/power.ts, over the shared
+ * `usableWindow`): a part that
  * requires `power.5v` runs from the supply, everything else from the brain's
- * regulated rail, and the usable window is the overlap.
+ * regulated rail, and the usable window is the overlap. A supply-fed
+ * peripheral is drawn on the supply itself, not on the board's 5V header,
+ * which sits after the USB Schottky and carries less than the supply puts out.
  *
  * What is ours, not the registry's: which header pin each signal lands on.
  * The registry has no pin map, so `BRAIN_HEADER` picks pins that exist on the
@@ -39,6 +41,7 @@ export const CONNECTORS: ReadonlyMap<string, ConnectorDefinition> = new Map(
  */
 export const BRAIN_HEADER = {
   rail3v3: "3V3",
+  /** A power input, not an output: the board's 5V pin feeds VCC_5V and the regulator. */
   rail5v: "5V",
   ground: "GND",
   sda: "GPIO8",
@@ -48,10 +51,15 @@ export const BRAIN_HEADER = {
   pwm: ["GPIO10", "GPIO11"],
 } as const;
 
-/** One wire: a pin on the part's connector, and the header pin it goes to. */
+/** One wire: a pin on the part's connector, and what the other end lands on. */
 export interface WiringLead {
   pin: ConnectorPin;
-  brainPin: string;
+  /**
+   * Where the lead ends. A part that runs from the supply takes its power from
+   * the supply itself, not from the board's 5V header: that header is VCC_5V,
+   * after the USB Schottky, and power.ts's window is the supply's own output.
+   */
+  source: { kind: "header" | "supply"; label: string };
   /** Volts the lead carries, on the power lead; null on ground and signal leads, where the pin names say it. */
   window: VoltageWindow | null;
   /** What the signal is, on signal leads: "I²C 0x77", "ADC", "PWM". */
@@ -177,24 +185,36 @@ export function exampleWiring(build: ExampleBuild): Wiring {
       const usable = usableWindow(railWindow, part.electrical.voltage_range);
       if (!usable) throw new Error(`${part.id} can't run from ${fromSupply ? supplyPart.id : `${brain.id}'s rail`}`);
 
+      // The supply's own power pin, for a peripheral wired to the supply rather than the board.
+      const supplyPin = connectorOf(supplyPart).pins.find((pin) => pin.role === "power");
+      const header = (label: string) => ({ kind: "header" as const, label });
+
       const units = Array.from({ length: qty }, (_unit, index) => ({
         label: qty > 1 ? `${part.id} · ${index + 1} of ${qty}` : part.id,
         leads: connector.pins.map((pin): WiringLead => {
           switch (pin.role) {
             case "power":
-              return { pin, brainPin: fromSupply ? BRAIN_HEADER.rail5v : BRAIN_HEADER.rail3v3, window: usable, signal: null };
+              return {
+                pin,
+                source: fromSupply
+                  ? { kind: "supply", label: `${supplyPart.id} ${supplyPin?.name ?? "+"}` }
+                  : header(BRAIN_HEADER.rail3v3),
+                window: usable,
+                signal: null,
+              };
             case "ground":
-              return { pin, brainPin: BRAIN_HEADER.ground, window: null, signal: null };
+              // Ground is common: the peripheral's returns to the board, whatever powers it.
+              return { pin, source: header(BRAIN_HEADER.ground), window: null, signal: null };
             case "sda":
-              return { pin, brainPin: BRAIN_HEADER.sda, window: null, signal: `I²C ${part.electrical.i2c_address}` };
+              return { pin, source: header(BRAIN_HEADER.sda), window: null, signal: `I²C ${part.electrical.i2c_address}` };
             case "scl":
-              return { pin, brainPin: BRAIN_HEADER.scl, window: null, signal: `I²C ${part.electrical.i2c_address}` };
+              return { pin, source: header(BRAIN_HEADER.scl), window: null, signal: `I²C ${part.electrical.i2c_address}` };
             case "signal":
               return part.electrical.interface === "adc"
-                ? { pin, brainPin: takeAdc(), window: null, signal: "ADC" }
+                ? { pin, source: header(takeAdc()), window: null, signal: "ADC" }
                 : part.electrical.interface === "pwm"
-                  ? { pin, brainPin: takePwm(), window: null, signal: "PWM" }
-                  : { pin, brainPin: takeDigital(), window: null, signal: part.electrical.interface === "1-wire" ? "One-Wire" : "digital in" };
+                  ? { pin, source: header(takePwm()), window: null, signal: "PWM" }
+                  : { pin, source: header(takeDigital()), window: null, signal: part.electrical.interface === "1-wire" ? "One-Wire" : "digital in" };
           }
         }),
       }));

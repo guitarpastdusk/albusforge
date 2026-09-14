@@ -1,5 +1,5 @@
+import { capabilityUnit } from "@albusforge/schema";
 import { describe, expect, it } from "vitest";
-import { capabilityUnit } from "../../../../registry/scripts/lib/units";
 import { EXAMPLE_BUILDS, EXAMPLE_PARTS } from "./example-builds";
 import { cadenceOf, exampleReadings, SAMPLE_READINGS_END } from "./example-readings";
 

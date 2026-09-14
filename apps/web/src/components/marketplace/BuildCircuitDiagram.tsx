@@ -11,7 +11,7 @@ import { volts, type Wiring, type WiringLead } from "@/lib/example-wiring";
  * diagram scrolls rather than shrinking on a narrow screen.
  */
 
-const WIDTH = 1040;
+const WIDTH = 1084;
 const TOP = 20;
 /** The brain card's own text and power input, above the first peripheral. */
 const BRAIN_HEAD = 104;
@@ -112,12 +112,18 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
 
   const stackBottom = stack.reduce((bottom, block) => Math.max(bottom, block.y + block.h), TOP + BRAIN_HEAD);
   const brainHeight = Math.max(stackBottom - TOP + 14, BRAIN_HEAD + 40);
+  // Leads that take their power from the supply run around the board, not through it.
+  const fromSupply = stack.flatMap(({ unit, head, y }) =>
+    unit.leads.flatMap((lead, index) => (lead.source.kind === "supply" ? [{ lead, y: y + head + index * LEAD - 3.5 }] : [])),
+  );
+  const busY = TOP + brainHeight + 18;
   const inputY = TOP + BRAIN_HEAD - 12;
   const supplyName = wrapName(supply.part.name, SUPPLY_NAME_CHARS);
   const supplyHeight = SUPPLY.h + (supplyName.length - 1) * NAME_LINE;
   const supplyY = inputY - supplyHeight / 2;
   const chargerY = supplyY + supplyHeight + 30;
-  const legendY = Math.max(TOP + brainHeight, supply.upstream.length > 0 ? chargerY + 76 : supplyY + supplyHeight) + 34;
+  const legendY =
+    Math.max(TOP + brainHeight, supply.upstream.length > 0 ? chargerY + 76 : supplyY + supplyHeight, fromSupply.length > 0 ? busY + 10 : 0) + 34;
   const height = legendY + 16;
 
   const description = [
@@ -127,7 +133,7 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
     ...stack.map(
       ({ node, unit }) =>
         `${node.part.name} (${unit.label}) at ${volts(node.usable)} from the ${node.rail.label}, wired ${unit.leads
-          .map((lead) => `${lead.pin.name} to ${lead.brainPin}`)
+          .map((lead) => `${lead.pin.name} to ${lead.source.label}`)
           .join(", ")}.`,
     ),
   ].join(" ");
@@ -212,14 +218,15 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
             </text>
             {unit.leads.map((lead, index) => {
               const leadY = y + head + index * LEAD;
+              const onHeader = lead.source.kind === "header";
               return (
                 <g key={lead.pin.n}>
-                  <Wire y={leadY - 3.5} from={BRAIN.x + BRAIN.w} to={NODE.x} lead={lead} />
+                  {onHeader ? <Wire y={leadY - 3.5} from={BRAIN.x + BRAIN.w} to={NODE.x} lead={lead} /> : null}
                   <text x={BRAIN.x + BRAIN.w - 14} y={leadY} fontSize="10" textAnchor="end" className="fill-ink font-mono">
-                    {lead.brainPin}
+                    {onHeader ? lead.source.label : ""}
                   </text>
                   <text x={(BRAIN.x + BRAIN.w + NODE.x) / 2} y={leadY - 8} fontSize="9.5" textAnchor="middle" className="fill-muted font-mono">
-                    {leadLabel(lead)}
+                    {onHeader ? leadLabel(lead) : ""}
                   </text>
                   <text x={NODE.x + 14} y={leadY} fontSize="10" className="fill-ink font-mono">
                     {lead.pin.n} {lead.pin.name}
@@ -229,6 +236,26 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
             })}
           </g>
         ))}
+
+        {/* Peripherals the supply powers directly: down from the supply, under the board and up the
+            outside, so the branch crosses none of the board's own leads. */}
+        {fromSupply.map(({ lead, y }, index) => {
+          const drop = SUPPLY.x + SUPPLY.w - 30;
+          const riser = NODE.x + NODE.w + 16 + index * 12;
+          return (
+            <g key={`${lead.source.label}-${y}`}>
+              <path
+                d={`M${drop} ${supplyY + supplyHeight}V${busY}H${riser}V${y}H${NODE.x + NODE.w}`}
+                fill="none"
+                strokeWidth="1.5"
+                className="stroke-coral-deep"
+              />
+              <text x={drop + 10} y={busY - 6} fontSize="9.5" className="fill-coral-deep font-mono">
+                {lead.source.label} · {leadLabel(lead)}
+              </text>
+            </g>
+          );
+        })}
 
         {/* Legend. */}
         {[

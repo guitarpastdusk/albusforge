@@ -1,5 +1,4 @@
-import type { PartDefinition } from "@albusforge/schema";
-import { capabilityUnit } from "../../../../registry/scripts/lib/units";
+import { capabilityUnit, type PartDefinition } from "@albusforge/schema";
 import { EXAMPLE_PARTS, type ExampleBuild } from "./example-builds";
 import { formatChannelValue } from "./format";
 
@@ -8,7 +7,7 @@ import { formatChannelValue } from "./format";
  *
  * The columns are real: each one is a `read.*` or `act.*` capability of a part
  * the build pins, and its unit comes from the capability's suffix, the one
- * place units are written down (registry/scripts/lib/units.ts). The values and
+ * place units are written down (@albusforge/schema, the table registry/scripts/lib/units.ts re-exports). The values and
  * their times are sample data, authored per build in example-builds.ts.
  *
  * The window ends at a fixed instant rather than `now`, so the table is the

@@ -1,20 +1,9 @@
-import type { PartDefinition } from "@albusforge/schema";
+import { usableWindow, type PartDefinition, type VoltageWindow } from "@albusforge/schema";
 import type { GoldenBuild } from "../golden-builds";
 
-/** [min, max] volts. */
-export type VoltageWindow = readonly [number, number];
-
-/**
- * The window over which `source` can feed `input`, or null if it can't. The
- * source must never exceed the input's maximum. Below the input's minimum it
- * only stops working (a Li-ion cell sagging under a regulator's dropout), so
- * partial overlap is allowed, and the overlap is the usable window.
- */
-export function usableWindow(source: VoltageWindow, input: VoltageWindow): VoltageWindow | null {
-  if (source[1] > input[1]) return null;
-  const low = Math.max(source[0], input[0]);
-  return low <= source[1] ? [low, source[1]] : null;
-}
+// The rule itself lives in @albusforge/schema, so the portal draws the same
+// windows these checks work out. Re-exported for this package's own callers.
+export { usableWindow, type VoltageWindow };
 
 export interface PowerAssignment {
   supply: string;

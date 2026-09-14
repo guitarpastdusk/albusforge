@@ -41,7 +41,7 @@ describe("ExampleBuildDetails", () => {
   it("wires a 5 V peripheral to the supply, and says where the servo's current comes from", () => {
     const html = text(renderToStaticMarkup(<ExampleBuildDetails detail={exampleBuildDetail("plant-waterer")!} />));
     expect(html).toContain("PWM");
-    expect(html).toContain("4.845–5.355 V");
+    expect(html).toContain("E-005 VBUS · 4.845–5.355 V");
     expect(html).toContain("stall current (600 mA) comes from the supply, not the brain");
   });
 
@@ -68,7 +68,8 @@ describe("BuildCircuitDiagram", () => {
     const label = /aria-label="([^"]*)"/.exec(html)?.[1] ?? "";
     expect(label).toContain("Presence alert wiring.");
     expect(label).toContain("USB-C 5.1 V 3 A Power Supply at 4.845–5.355 V feeds");
-    expect(label).toContain("wired VCC to 5V, GND to GND, SIG to GPIO5");
+    // The PIR runs from the supply, so its VCC lands there and not on the board's 5V input pin.
+    expect(label).toContain("wired VCC to E-005 VBUS, GND to GND, SIG to GPIO5");
   });
 
   it("breaks a long part name over two lines rather than cutting it", () => {

@@ -35,7 +35,7 @@ export const EXAMPLE_PARTS: ReadonlyMap<string, PartDefinition> = new Map(
 export interface SampleChannel {
   /** The part in the build that reads or drives it. */
   part: string;
-  /** Its `read.*` or `act.*` capability; the unit comes from the suffix (registry/scripts/lib/units.ts). */
+  /** Its `read.*` or `act.*` capability; the unit comes from the suffix (`capabilityUnit`). */
   capability: string;
   /** Column heading. */
   label: string;

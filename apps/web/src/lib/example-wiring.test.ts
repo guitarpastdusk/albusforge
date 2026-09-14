@@ -1,7 +1,6 @@
-import { ConnectorDefinition } from "@albusforge/schema";
+import { ConnectorDefinition, usableWindow } from "@albusforge/schema";
 import { describe, expect, it } from "vitest";
 import { loadRegistry } from "../../../../registry/scripts/lib/load";
-import { usableWindow } from "../../../../registry/scripts/lib/power";
 import { EXAMPLE_BUILDS, EXAMPLE_PARTS } from "./example-builds";
 import { BRAIN_HEADER, CONNECTORS, exampleWiring, volts } from "./example-wiring";
 
@@ -50,16 +49,19 @@ describe.each(EXAMPLE_BUILDS.map((build) => [build.id, build] as const))("%s wir
     }
   });
 
-  it("lands every lead on a header pin the board has", () => {
-    for (const { lead } of leads) expect(HEADER_PINS.has(lead.brainPin), `${lead.pin.name} → ${lead.brainPin}`).toBe(true);
+  it("lands every lead on a header pin the board has, or on the supply", () => {
+    for (const { lead } of leads) {
+      if (lead.source.kind === "header") expect(HEADER_PINS.has(lead.source.label), `${lead.pin.name} → ${lead.source.label}`).toBe(true);
+      else expect(lead.source.label).toMatch(new RegExp(`^${build.power.supply} `));
+    }
   });
 
   it("gives each signal its own pin, and shares the I2C bus", () => {
     const signals = leads.filter(({ lead }) => lead.pin.role === "signal");
-    expect(new Set(signals.map(({ lead }) => lead.brainPin)).size).toBe(signals.length);
+    expect(new Set(signals.map(({ lead }) => lead.source.label)).size).toBe(signals.length);
     for (const { lead } of leads) {
-      if (lead.pin.role === "sda") expect(lead.brainPin).toBe(BRAIN_HEADER.sda);
-      if (lead.pin.role === "scl") expect(lead.brainPin).toBe(BRAIN_HEADER.scl);
+      if (lead.pin.role === "sda") expect(lead.source.label).toBe(BRAIN_HEADER.sda);
+      if (lead.pin.role === "scl") expect(lead.source.label).toBe(BRAIN_HEADER.scl);
     }
   });
 
@@ -73,7 +75,15 @@ describe.each(EXAMPLE_BUILDS.map((build) => [build.id, build] as const))("%s wir
         const power = unitLeads.filter((lead) => lead.window !== null);
         expect(power.map((lead) => lead.pin.role)).toEqual(["power"]);
         expect(power[0]!.window).toEqual(node.usable);
-        expect(power[0]!.brainPin).toBe(fromSupply ? BRAIN_HEADER.rail5v : BRAIN_HEADER.rail3v3);
+        // A supply-fed part hangs off the supply, never off the board's 5V header: that pin is an
+        // input, and sits after the USB Schottky, so it carries less than the supply puts out.
+        expect(power[0]!.source).toEqual(
+          fromSupply
+            ? { kind: "supply", label: `${wiring.supply.part.id} ${wiring.supply.connector.pins.find((pin) => pin.role === "power")!.name}` }
+            : { kind: "header", label: BRAIN_HEADER.rail3v3 },
+        );
+        // Ground is common whatever powers the part.
+        expect(unitLeads.find((lead) => lead.pin.role === "ground")!.source).toEqual({ kind: "header", label: BRAIN_HEADER.ground });
       }
     }
   });

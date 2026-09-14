@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { BuildPlanMetadata, BuildPlanV1, type Spec, type FirmwareManifest } from '@albusforge/schema';
 import { NUMERIC_CANDIDATES, selectNumericCandidate, renderApp, editInterval, type NumericSelection } from './candidate';
-import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from './camera-candidate';
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CHANNELS, CAMERA_CAPABILITIES, renderCameraApp } from './camera-candidate';
 const Pin=z.strictObject({id:z.string().min(1).max(120),version:z.string().min(1).max(40)});
 const Digest=z.string().regex(/^[a-f0-9]{64}$/);
 /** Server-owned physical approval. No approved entries ship with this source.
@@ -49,7 +49,7 @@ export function resolveAcceptedCandidate(plan:BuildPlanV1,metadata:BuildPlanMeta
     ||evidence.profile.brain.id!==plan.wiring_graph.brain.id||evidence.profile.source.id!==plan.wiring_graph.source.id
     ||evidence.parts.some(p=>p.software.driver_pkg!==null&&!evidence.compat.some(c=>c.status==='passed'&&c.brain_id===plan.wiring_graph.brain.id&&c.driver_pkg===p.software.driver_pkg&&c.driver_ver===p.software.driver_version&&c.runtime_ver===CAMERA_RUNTIME))
     ||spec.connect.transport!=='wifi'||spec.power.source!=='usb'||spec.sense.interval_s!==900)throw Error('This accepted plan has no approved camera compiler profile');
-  return {id:CAMERA_CANDIDATE,kind:'camera',runtime:CAMERA_RUNTIME,interval_s:900,template:'esp32s3-camera',channels:{},capabilities:CAMERA_CAPABILITIES};
+  return {id:CAMERA_CANDIDATE,kind:'camera',runtime:CAMERA_RUNTIME,interval_s:900,template:'esp32s3-camera',channels:CAMERA_CHANNELS,capabilities:CAMERA_CAPABILITIES};
 }
 export function renderCandidate(candidate:AcceptedCandidate,interval:number):string {
   return candidate.kind==='camera'?renderCameraApp(interval):renderApp(interval);

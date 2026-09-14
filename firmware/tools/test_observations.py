@@ -27,6 +27,16 @@ class ObservationPolicies(unittest.TestCase):
                 str(main / "observation_spool.c"), str(main / "setup_form.c"), str(firmware / "tests" / "observations.c"), "-o", executable], check=True)
             subprocess.run([executable], check=True, timeout=30)
 
+    def test_plant_telemetry_packet(self):
+        firmware = Path(__file__).resolve().parents[1]
+        main = firmware / "esp32s3-camera" / "main"
+        with tempfile.TemporaryDirectory(prefix="albus-plant-telemetry-") as folder:
+            executable = str(Path(folder) / "telemetry")
+            subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+                f"-I{main / 'include'}", str(main / "telemetry_packet.c"),
+                str(firmware / "tests" / "telemetry_packet.c"), "-lm", "-o", executable], check=True)
+            subprocess.run([executable], check=True, timeout=30)
+
 
 if __name__ == "__main__":
     unittest.main()

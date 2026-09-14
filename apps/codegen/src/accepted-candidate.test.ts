@@ -1,14 +1,14 @@
 import { expect,it } from 'vitest';
 import { Spec } from '@albusforge/schema';
 import { syntheticCameraPlanFixture, syntheticCameraApproval as cameraFixtureApproval } from './testing';
-import { CAMERA_CANDIDATE } from './camera-candidate';
+import { CAMERA_CANDIDATE, CAMERA_CHANNELS } from './camera-candidate';
 import { cameraApprovalsFromEnv,resolveAcceptedCandidate,renderCandidate,editCandidate } from './accepted-candidate';
 it('keeps camera compilation off without explicit exact approved evidence and wiring',()=>{
   const f=syntheticCameraPlanFixture(),approval=cameraFixtureApproval(f),spec=Spec.parse(f.spec);
   expect(cameraApprovalsFromEnv({})).toEqual([]);
   expect(()=>resolveAcceptedCandidate(f.plan,f.metadata,spec)).toThrow('approved camera');
   const candidate=resolveAcceptedCandidate(f.plan,f.metadata,spec,[approval]);
-  expect(candidate).toMatchObject({id:CAMERA_CANDIDATE,kind:'camera',runtime:'0.2.0',interval_s:900,template:'esp32s3-camera',channels:{}});
+  expect(candidate).toMatchObject({id:CAMERA_CANDIDATE,kind:'camera',runtime:'0.3.0',interval_s:900,template:'esp32s3-camera',channels:CAMERA_CHANNELS});
   expect(renderCandidate(candidate,900)).toContain('hsx_camera_run');
   for(const seconds of [60,899,901,1800])expect(()=>renderCandidate(candidate,seconds)).toThrow();
   expect(editCandidate(candidate,'Set interval to 900 seconds')).toBe(900);

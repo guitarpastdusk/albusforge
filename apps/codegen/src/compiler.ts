@@ -10,7 +10,7 @@ import {
 } from "@albusforge/schema";
 
 import { COMPILER_IMAGE, CANDIDATE, CHANNELS, RUNTIME, numericProfileHeader, renderApp, type NumericSelection } from "./candidate";
-import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CHANNELS, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
 export { editInterval, renderApp } from "./candidate";
 export const sha256 = (bytes: Uint8Array | string) =>
   createHash("sha256").update(bytes).digest("hex");
@@ -195,7 +195,9 @@ async function compileProfile(
       code_version: input.code_version,
       profile_id: camera ? CAMERA_CANDIDATE : (numeric?.candidate.id ?? CANDIDATE),
       runtime: camera ? CAMERA_RUNTIME : (numeric?.candidate.runtime ?? RUNTIME),
-      channels: camera ? {} : (numeric?.channels ?? CHANNELS),
+      // main taught the camera path to declare channels; keep that, and keep our
+      // per-candidate numeric channels rather than the single hard-coded set.
+      channels: camera ? CAMERA_CHANNELS : (numeric?.channels ?? CHANNELS),
       ...(camera ? { capabilities: CAMERA_CAPABILITIES } : {}),
       files: [...files].map(([path, bytes]) => ({
         path,

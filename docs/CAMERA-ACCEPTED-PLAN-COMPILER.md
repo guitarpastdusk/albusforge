@@ -27,13 +27,15 @@ GC0308 image correction, power budget, native capture/upload reliability and exa
 registry/provisioning sources before an entry is approved. Synthetic test
 snapshots and their hashes must never be put in deployed configuration.
 
-The resolver independently requires runtime 0.2.0, active pinned parts, passed
+The resolver independently requires runtime 0.3.0, active pinned parts, passed
 compatibility for every supplied driver, matching accepted metadata/profile/parts,
 Wi-Fi, USB power and exactly 900 seconds. Templates, runtime, channels and
 capabilities are fixed in reviewed source and cannot be supplied by the request or
-approval JSON. The resulting camera manifest has empty numeric channels and one
-`camera`/`jpeg.v1` capability with 900-second cadence, 320×240 limits and 1 MiB
-maximum. This first candidate does not claim support for additional wired sensors.
+approval JSON. The resulting Plant A manifest has four fixed numeric channels and
+two 900-second capabilities: `camera`/`jpeg.v1` with 320×240/1MiB limits and
+`environment`/`readings.v1` for light, temperature, pressure and humidity. Soil
+remains outside the candidate until its physical protocol and calibration are
+reviewed.
 
 ## Runtime behavior
 

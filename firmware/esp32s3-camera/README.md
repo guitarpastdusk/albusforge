@@ -14,6 +14,24 @@ old frame, and return the camera frame before network I/O. The driver and
 converter API are pinned to [esp32-camera 2.1.3](https://github.com/espressif/esp32-camera/tree/v2.1.3).
 The committed dependency lock also pins esp_jpeg 1.3.1 and component hashes.
 
+Plant A's external sensor chain uses a separate I2C bus: GPIO47 SDA and GPIO21
+SCL. The native profile reads BH1750 at `0x23` and BME280 at `0x77`; it sends
+ambient light (lux), air temperature (C), air pressure (hPa), and air humidity
+(%) in one Cloudlink `POST /ingest/v1` packet every 900 seconds. The packet is
+written to private NVS before sending, so a retry retains its original sequence
+and payload. A `202` is accepted only when its count and `next_s=900` match.
+The `0x36` soil board remains scan-only and is intentionally absent from the
+profile, packet, and cloud channel contract until its protocol and calibration
+are separately reviewed.
+
+The same DeviceConfigV2 identity binds the HTTPS numeric endpoint and the
+device-specific image endpoint. It includes exactly the required `camera` and
+`environment` capabilities. The private bearer credential is never compiled
+into the image, logged, or placed in a shared artifact. This candidate is not
+approved for flashing or cloud admission merely because it compiles; physical
+sensor reads, staging receipts, SD behavior and the accepted-plan/provisioning
+gates remain required.
+
 After the first SNTP synchronization, a 0–15 second jitter precedes the first
 capture. Further captures use 900-second monotonic deadlines. Slow uploads,
 reconnection, and retries do not change capture cadence; missed deadlines are

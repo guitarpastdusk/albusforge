@@ -113,9 +113,9 @@ export function syntheticPlanFixture() {
 export function syntheticCameraPlanFixture() {
   const f=syntheticPlanFixture();
   f.spec.sense={what:['image'],interval_s:900};f.spec.capabilities=['capture.image'];
-  f.metadata.runtime='0.2.0';f.metadata.profile={id:'synthetic-camera-assembly',version:'1.0.0'};
+  f.metadata.runtime='0.3.0';f.metadata.profile={id:'synthetic-camera-assembly',version:'1.0.0'};
   f.metadata.evidence.profile={...f.metadata.evidence.profile,id:f.metadata.profile.id};
-  f.metadata.evidence.compat=f.metadata.evidence.compat.map(c=>({...c,runtime_ver:'0.2.0'}));
+  f.metadata.evidence.compat=f.metadata.evidence.compat.map(c=>({...c,runtime_ver:'0.3.0'}));
   // Test-only snapshot mutation stands in for reviewed camera registry evidence.
   f.metadata.evidence.profile.evidence='SYNTHETIC camera compiler test, not hardware approval';
   const metadata=BuildPlanMetadata.parse(f.metadata);

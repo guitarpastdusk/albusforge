@@ -17,15 +17,20 @@ export const metadata: Metadata = {
  * the device-ready card's estimate is "est. $NN".
  */
 
+/** A plan line. `planned` marks what the preview doesn't do yet (docs/DEMO-ASSUMPTIONS.md); the card says so. */
+type Line = string | { text: string; planned: true };
+
 interface Plan {
   name: string;
   accent: Accent;
   price: string;
   per: string;
   summary: string;
-  includes: readonly string[];
+  includes: readonly Line[];
   cta: { label: string; href: string };
 }
+
+const planned = (text: string): Line => ({ text, planned: true });
 
 const KITS: readonly Plan[] = [
   {
@@ -34,7 +39,7 @@ const KITS: readonly Plan[] = [
     price: "Parts cost",
     per: "no markup",
     summary: "The parts list, priced from the registry, to order and assemble yourself.",
-    includes: ["Every part with its supplier and price", "Wiring diagram from the registry's connector tables", "Firmware built for your exact parts", "3D-printable enclosure files"],
+    includes: ["Every part with its supplier and price", "Wiring diagram from the registry's connector tables", planned("Firmware built for your exact parts"), planned("3D-printable enclosure files")],
     cta: { label: "Start a build →", href: "/" },
   },
   {
@@ -43,7 +48,7 @@ const KITS: readonly Plan[] = [
     price: "Parts + $29",
     per: "per kit, assembled",
     summary: "The same design, assembled, flashed and tested before it ships. Plug it in and it appears in your workspace.",
-    includes: ["Everything in Parts only", "Assembled and flashed", "Printed enclosure", "Pre-provisioned for your workspace"],
+    includes: ["Everything in Parts only", planned("Assembled and flashed"), planned("Printed enclosure"), planned("Pre-provisioned for your workspace")],
     cta: { label: "Start a build →", href: "/" },
   },
 ];
@@ -64,7 +69,7 @@ const CLOUD: readonly Plan[] = [
     price: "$9",
     per: "per month",
     summary: "For a workshop, a greenhouse or a small fleet.",
-    includes: ["Up to 25 devices", "1 year of readings", "Sensor questions, 2,000 a month", "Camera observations", "Rules that act on the device"],
+    includes: ["Up to 25 devices", "1 year of readings", "Sensor questions, 2,000 a month", planned("Camera observations"), planned("Rules that act on the device")],
     cta: { label: "Create an account →", href: "/signup" },
   },
   {
@@ -91,14 +96,21 @@ function PlanCard({ plan }: { plan: Plan }) {
         <p className="mt-1.5 font-mono text-[13px] text-muted">{plan.per}</p>
         <p className="mt-4 text-[15px] font-light leading-[1.5] text-muted">{plan.summary}</p>
         <ul className="mt-5 flex flex-1 flex-col gap-2 text-[15px] leading-[1.45]">
-          {plan.includes.map((line) => (
-            <li key={line} className="flex gap-2.5">
-              <span aria-hidden className="text-success">
-                ✓
-              </span>
-              <span>{line}</span>
-            </li>
-          ))}
+          {plan.includes.map((line) => {
+            const text = typeof line === "string" ? line : line.text;
+            const isPlanned = typeof line !== "string";
+            return (
+              <li key={text} className="flex gap-2.5">
+                <span aria-hidden className={isPlanned ? "text-faint" : "text-success"}>
+                  {isPlanned ? "○" : "✓"}
+                </span>
+                <span className={isPlanned ? "text-muted" : undefined}>
+                  {text}
+                  {isPlanned ? <span className="ml-2 font-mono text-[11px] uppercase tracking-[0.12em] text-faint">planned</span> : null}
+                </span>
+              </li>
+            );
+          })}
         </ul>
         <ButtonLink href={plan.cta.href} variant="dark" className="mt-7 rounded-[14px] px-6 py-3 text-[15px] font-medium">
           {plan.cta.label}
@@ -138,7 +150,8 @@ export default function PricingPage() {
         <p className="font-mono text-[13px] uppercase tracking-[0.18em] text-coral-deep">Introductory pricing</p>
         <p className="mt-2 text-[16px] font-light leading-[1.5] text-ink">
           These are the preview&apos;s planned prices, not a bill: nothing is charged today, and every build starts free. Part
-          prices come from the registry and change with suppliers.
+          prices come from the registry and change with suppliers. Lines marked <span className="font-mono text-[12px] uppercase tracking-[0.12em] text-faint">planned</span>{" "}
+          aren&apos;t available in the preview yet.
         </p>
       </aside>
 
@@ -153,8 +166,8 @@ export default function PricingPage() {
       <Section
         id="cloud"
         kicker="Cloud plans"
-        title="The cloud that closes the loop"
-        description="Readings, questions answered from your data, and rules that act back on the device. Plans differ in how many devices and how long readings are kept."
+        title="The cloud that watches your device"
+        description="Readings stored and plotted, and questions answered from your data. Plans differ in how many devices and how long readings are kept."
         plans={CLOUD}
       />
 

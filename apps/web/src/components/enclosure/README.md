@@ -2,7 +2,7 @@
 
 The 360° enclosure viewer — M5.5 in `docs/ASK-TO-ENCLOSURE.md` §6.
 
-- `EnclosurePreview.tsx` — the card (client, no three.js): Base / Lid / Exploded, Show parts, Reset view, and the stage's loading, error (service-unavailable style, Try again) and static-image states. Loads the 3D stage with `next/dynamic` and `ssr: false`. `preview` null renders a placeholder and fetches nothing; live mode passes the fixture marked `sample`, which the card labels as a sample enclosure (`fixture.ts`, docs/DEMO-ASSUMPTIONS.md).
+- `EnclosurePreview.tsx` — the card (client, no three.js): Base / Lid / Exploded, Show parts, Reset view, and the stage's loading, error (service-unavailable style, Try again) and static-image states. Loads the 3D stage with `next/dynamic` and `ssr: false`. `preview` null renders a placeholder and fetches nothing; until a build has a body, pages pass the fixture marked `sample`, which the card labels as a sample enclosure (`fixture.ts`, docs/DEMO-ASSUMPTIONS.md).
 - `EnclosureCanvas.tsx` — the 3D stage, the only component that imports three.js (via `scene.ts`). Focusable: arrow keys orbit, + / − zoom; OrbitControls handles mouse and touch.
 - `scene.ts` — renderer (started first: no WebGL 2 → `RendererUnavailableError`, before any download), abortable model fetch (`ModelLoadError`), GLTFLoader, lights, OrbitControls, views (`applyView`), keyboard orbit, and disposal that releases the WebGL context (`forceContextLoss`) and every geometry, material, texture and bitmap once (`disposeObject`). Expects GLB nodes `base`, `lid`, and optional `parts` with child meshes (GLTFLoader strips `/` from names, so parts are children rather than `parts/*` names).
 - `EnclosureFrame.tsx` — the white card and the view pills, shared by every state.

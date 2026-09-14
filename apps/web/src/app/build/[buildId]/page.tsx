@@ -6,7 +6,6 @@ import { ConversationView } from "@/components/build/ConversationView";
 import { enclosurePreviewFor } from "@/components/enclosure/fixture";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { transcriptFrom } from "@/lib/build-transcript";
-import { loadRuntimeConfig } from "@/lib/runtime-config";
 
 export const metadata: Metadata = { title: "Build" };
 
@@ -21,7 +20,7 @@ export default async function BuildPage({ params }: { params: Promise<{ buildId:
   return (
     <BuildConversation signedIn={getBuildSignedIn()}
       initial={transcriptFrom(build, messages)}
-      enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}
+      enclosurePreview={enclosurePreviewFor()}
     >
       <main className="flex flex-1 flex-col">
         <ConversationView active />

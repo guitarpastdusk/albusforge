@@ -26,4 +26,15 @@ describe("seededAsk", () => {
     expect(seededAsk("   ")).toBe("");
     expect(seededAsk("x".repeat(MAX_CLONE_ASK + 1))).toBe("");
   });
+
+  it("passes markup and control characters through as text for the input, never as HTML", () => {
+    // The seed only ever reaches a controlled <input value>, which React escapes; nothing here is interpreted.
+    expect(seededAsk("<script>alert(1)</script>")).toBe("<script>alert(1)</script>");
+    expect(seededAsk("line one\u0000\u0007 two")).toBe("line one\u0000\u0007 two");
+    expect(seededAsk(decodeURIComponent("%22%3E%3Cimg%20src%3Dx%3E"))).toBe('"><img src=x>');
+  });
+
+  it("an overlong URL seed is dropped even when it is mostly whitespace inside", () => {
+    expect(seededAsk(`a${" ".repeat(MAX_CLONE_ASK)}b`)).toBe("");
+  });
 });

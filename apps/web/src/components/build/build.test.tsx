@@ -301,14 +301,14 @@ describe("DesignReadyCard enclosure preview", () => {
     expect(html).not.toContain(".glb");
   });
 
-  it("live mode offers the fixture as a sample enclosure, and says so on the button", async () => {
+  it("without a body, offers the fixture as a sample enclosure and says so on the button; a body wins", async () => {
     const { enclosurePreviewFor, ENCLOSURE_FIXTURE } = await import("@/components/enclosure/fixture");
-    const live = enclosurePreviewFor("live");
-    expect(live.sample).toBe(true);
-    expect(live.glbUrl).toBe(ENCLOSURE_FIXTURE.glbUrl);
-    expect(live.description).toMatch(/^Sample enclosure\./);
-    expect(enclosurePreviewFor("mock").sample).toBeUndefined();
-    const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={live} />);
+    const sample = enclosurePreviewFor();
+    expect(sample.sample).toBe(true);
+    expect(sample.glbUrl).toBe(ENCLOSURE_FIXTURE.glbUrl);
+    expect(sample.description).toMatch(/^Sample enclosure\./);
+    expect(enclosurePreviewFor(ENCLOSURE_FIXTURE)).toBe(ENCLOSURE_FIXTURE);
+    const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={sample} />);
     expect(html).toContain("View a sample enclosure in 3D →");
   });
 });

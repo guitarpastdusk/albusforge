@@ -1,5 +1,3 @@
-import type { ApiMode } from "@/lib/runtime-config";
-
 /** What a 3D enclosure preview needs. Serializable, so a Server Component can pass it to the client. */
 export interface EnclosurePreviewData {
   /** The viewer model: a GLB with nodes `base`, `lid` and optional `parts` (docs/ASK-TO-ENCLOSURE.md §6). */
@@ -14,11 +12,11 @@ export interface EnclosurePreviewData {
 }
 
 /**
- * The checked-in fixture (scripts/make-enclosure-fixture.mjs). Mock mode shows
- * it as the build's preview. Live mode has no enclosure yet: the body endpoint
- * is the M5.5 contract (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and
- * doesn't exist, so the portal shows the same model labelled as a sample and
- * never requests one (docs/DEMO-ASSUMPTIONS.md).
+ * The checked-in fixture (scripts/make-enclosure-fixture.mjs). No build has an
+ * enclosure of its own yet: the body endpoint is the M5.5 contract
+ * (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and doesn't exist in gateway
+ * or the mocks, so the portal shows this model labelled as a sample and
+ * requests nothing (docs/DEMO-ASSUMPTIONS.md).
  */
 export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
   glbUrl: "/enclosure/fixture.glb",
@@ -28,13 +26,18 @@ export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
     "A rounded sensor enclosure, 90 × 60 × 35 mm with 1.6 mm walls: a base with a cable hole in the floor, and a lid with five vent slots.",
 };
 
-/** Live mode's stand-in: the fixture, said to be a sample. */
+/** The stand-in while no body exists: the fixture, said to be a sample. */
 export const ENCLOSURE_SAMPLE: EnclosurePreviewData = {
   ...ENCLOSURE_FIXTURE,
   sample: true,
   description: `Sample enclosure. ${ENCLOSURE_FIXTURE.description} The enclosure generated for this build will replace it.`,
 };
 
-export function enclosurePreviewFor(apiMode: ApiMode): EnclosurePreviewData {
-  return apiMode === "mock" ? ENCLOSURE_FIXTURE : ENCLOSURE_SAMPLE;
+/**
+ * A build's enclosure preview. `body` is what GET /v1/builds/:id/body will
+ * answer once it exists; until a caller has one, the labelled sample. The
+ * same in mock and live mode: the fixture is nobody's enclosure.
+ */
+export function enclosurePreviewFor(body: EnclosurePreviewData | null = null): EnclosurePreviewData {
+  return body ?? ENCLOSURE_SAMPLE;
 }

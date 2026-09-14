@@ -5,7 +5,6 @@ import { DeviceCarousel } from "@/components/carousel/DeviceCarousel";
 import { ChatStart } from "@/components/landing/ChatStart";
 import { enclosurePreviewFor } from "@/components/enclosure/fixture";
 import { seededAsk } from "@/lib/clone-ask";
-import { loadRuntimeConfig } from "@/lib/runtime-config";
 import { loadShowcaseCards } from "@/lib/showcase";
 
 /** `?ask=` seeds the input: the Marketplace's "Clone build" (lib/clone-ask.ts). */
@@ -16,7 +15,7 @@ export default async function LandingPage({ searchParams }: { searchParams: Prom
     <BuildConversation
       signedIn={getBuildSignedIn()}
       initialDraft={seededAsk(params.ask)}
-      enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}
+      enclosurePreview={enclosurePreviewFor()}
     >
       <main className="flex flex-1 flex-col">
         <WhenConversationEmpty>

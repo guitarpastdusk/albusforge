@@ -34,7 +34,7 @@ interface ConversationApi {
   /** Waiting for a reply and not yet overdue: typing dots, and no new send. */
   typing: boolean;
   signedIn: boolean | Promise<boolean>;
-  /** The device-ready card's 3D enclosure preview: the fixture in mock mode, a labelled sample in live mode, null to show none. */
+  /** The device-ready card's 3D enclosure preview: the build's body once one exists, the labelled sample until then, null to show none. */
   enclosurePreview: EnclosurePreviewData | null;
   /** The event stream's state, once a build exists; null before. The view says when replies may be delayed. */
   streamState: StreamState | null;

@@ -1,0 +1,42 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "P-006",
+  "version": "1.0.0",
+  "name": "Adafruit STEMMA Soil Sensor (seesaw capacitive moisture + temperature)",
+  "category": "physical",
+  "status": "active",
+  "successor": null,
+  "electrical": {
+    "interface": "i2c",
+    "connector": "stemma-i2c-ph-4pin-v1",
+    "voltage_range": [3.0, 5.0],
+    "current_draw_ma": { "idle": 1.5, "active": 5.0 },
+    "requires": ["bus.i2c"],
+    "conflicts": [],
+    "i2c_address": "0x36",
+    "logic_v": [3.0, 5.0]
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [95.0, 15.0, 4.0],
+    "mount": { "type": "cable-gland", "d_mm": 5 },
+    "exposure": "probe-external",
+    "environment_flags": ["temp:0..50C"]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-seesaw-soil",
+    "driver_version": "0.1.0",
+    "sdk_module": "sensors/soil",
+    "capabilities": ["read.soil_moisture_pct"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "soil_moisture.v1",
+    "default_widgets": ["line-chart"],
+    "alert_templates": ["out_of_range"]
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "adafruit", "sku": "4026", "url": "https://www.adafruit.com/product/4026" }],
+    "unit_cost_usd": 7.5
+  }
+}

@@ -18,16 +18,64 @@
  */
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createDb, type Db, dbConfigFromEnv, parts as partsTable } from "@albusforge/db";
+import { compatMatrix as compatTable, createDb, type Db, dbConfigFromEnv, parts as partsTable } from "@albusforge/db";
 import type { PartDefinition } from "@albusforge/schema";
+import { z } from "zod";
 import { GOLDEN_BUILDS } from "./golden-builds";
 import { loadRegistry } from "./lib/load";
+import { readFileSync } from "node:fs";
 import { formatIssues, validateRegistry } from "./lib/rules";
 
 export interface LoadResult {
   /** `id@version`, sorted. */
   inserted: string[];
   unchanged: string[];
+}
+
+/**
+ * A row of registry/compat-matrix.json: one driver build that is known to
+ * compile against a runtime on a brain. ARCHITECTURE.md §22 has CI generating
+ * these rows; until that matrix job exists the file is the seed the matcher's
+ * compatibility constraint (apps/matcher/src/constraints.ts) reads through
+ * registry.compat_matrix. Rows here are asserted, not produced by a compile;
+ * see docs/DEMO-ASSUMPTIONS.md.
+ */
+export const CompatRow = z.strictObject({
+  driver_pkg: z.string().regex(/^hsx-driver-[a-z0-9-]+$/, "expected hsx-driver-<name>"),
+  driver_ver: z.string().min(1),
+  runtime_ver: z.string().min(1),
+  brain_id: z.string().regex(/^[VPLCME]-\d{3}$/, "expected a part id like C-002"),
+  status: z.enum(["passed", "failed"]),
+});
+export type CompatRow = z.infer<typeof CompatRow>;
+
+/** Reads and validates registry/compat-matrix.json. */
+export function readCompatRows(root: string): CompatRow[] {
+  const file = path.join(root, "compat-matrix.json");
+  const parsed = z.array(CompatRow).safeParse(JSON.parse(readFileSync(file, "utf8")));
+  if (!parsed.success) {
+    throw new RegistryInvalidError(
+      parsed.error.issues.map((i) => `  compat-matrix.json\n    [schema] ${i.path.join(".")}: ${i.message}`).join("\n"),
+    );
+  }
+  return parsed.data;
+}
+
+/** Inserts the compat rows; an identical row already present is a no-op. */
+export async function loadCompat(db: Db, rows: readonly CompatRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const inserted = await db
+    .insert(compatTable)
+    .values(rows.map((r) => ({
+      driverPkg: r.driver_pkg,
+      driverVer: r.driver_ver,
+      runtimeVer: r.runtime_ver,
+      brainId: r.brain_id,
+      status: r.status,
+    })))
+    .onConflictDoNothing()
+    .returning({ driverPkg: compatTable.driverPkg });
+  return inserted.length;
 }
 
 /** An (id, version) already in the table with a different definition. */
@@ -129,10 +177,12 @@ async function main(): Promise<void> {
     parts: parts.length,
   });
 
+  const compat = readCompatRows(root);
   const { db, pool } = createDb(config, { max: 1 });
   try {
     const result = await loadParts(db, parts);
-    jsonLog("INFO", "registry load complete", { ...result });
+    const compatInserted = await loadCompat(db, compat);
+    jsonLog("INFO", "registry load complete", { ...result, compat_inserted: compatInserted });
   } finally {
     await pool.end();
   }

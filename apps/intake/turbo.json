@@ -1,11 +1,63 @@
 {
   "$schema": "https://turborepo.com/schema.json",
-  "extends": ["//"],
+  "extends": [
+    "//"
+  ],
   "tasks": {
-    // Route tests start Postgres with testcontainers. CI's default Docker
-    // socket needs none of these; Colima and remote Docker hosts do.
+    // The publication regression imports gateway/matcher source directly.
+    // Include its DB/schema/registry closure as well as intake defaults.
     "test": {
-      "passThroughEnv": ["DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH", "TESTCONTAINERS_*"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/gateway/src/**",
+        "$TURBO_ROOT$/apps/gateway/package.json",
+        "$TURBO_ROOT$/apps/gateway/tsconfig.json",
+        "$TURBO_ROOT$/apps/matcher/src/**",
+        "$TURBO_ROOT$/apps/matcher/package.json",
+        "$TURBO_ROOT$/apps/matcher/tsconfig.json",
+        "$TURBO_ROOT$/packages/db/src/**",
+        "$TURBO_ROOT$/packages/db/migrations/**",
+        "$TURBO_ROOT$/packages/db/package.json",
+        "$TURBO_ROOT$/packages/schema/src/**",
+        "$TURBO_ROOT$/packages/schema/package.json",
+        "$TURBO_ROOT$/packages/llm/src/**",
+        "$TURBO_ROOT$/packages/llm/package.json",
+        "$TURBO_ROOT$/registry/scripts/**",
+        "$TURBO_ROOT$/registry/parts/**",
+        "$TURBO_ROOT$/registry/connectors/**",
+        "$TURBO_ROOT$/registry/*.json",
+        "$TURBO_ROOT$/tsconfig.base.json"
+      ],
+      // Local Docker transports; CI uses the default socket.
+      "passThroughEnv": [
+        "DOCKER_HOST",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "TESTCONTAINERS_*"
+      ]
+    },
+    "typecheck": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/gateway/src/**",
+        "$TURBO_ROOT$/apps/gateway/package.json",
+        "$TURBO_ROOT$/apps/gateway/tsconfig.json",
+        "$TURBO_ROOT$/apps/matcher/src/**",
+        "$TURBO_ROOT$/apps/matcher/package.json",
+        "$TURBO_ROOT$/apps/matcher/tsconfig.json",
+        "$TURBO_ROOT$/packages/db/src/**",
+        "$TURBO_ROOT$/packages/db/migrations/**",
+        "$TURBO_ROOT$/packages/db/package.json",
+        "$TURBO_ROOT$/packages/schema/src/**",
+        "$TURBO_ROOT$/packages/schema/package.json",
+        "$TURBO_ROOT$/packages/llm/src/**",
+        "$TURBO_ROOT$/packages/llm/package.json",
+        "$TURBO_ROOT$/registry/scripts/**",
+        "$TURBO_ROOT$/registry/parts/**",
+        "$TURBO_ROOT$/registry/connectors/**",
+        "$TURBO_ROOT$/registry/*.json",
+        "$TURBO_ROOT$/tsconfig.base.json"
+      ]
     }
   }
 }

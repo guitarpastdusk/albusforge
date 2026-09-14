@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { getSession } from "@/lib/session";
+import { WorkspaceAdmission } from "@/components/shell/WorkspaceAdmission";
 
 /*
  * Signed-in screens: projects, live systems, device dashboards, usage.
@@ -15,6 +17,9 @@ import type { ReactNode } from "react";
  * no Domain attribute — so signing in on a tenant subdomain needs a redirect
  * handoff, not a parent-domain cookie (ADR 0007).
  */
-export default function AppLayout({ children }: { children: ReactNode }) {
-  return children;
+export default async function AppLayout({ children }: { children: ReactNode }) {
+  const session = await getSession();
+  // Presentation reconciliation only. Each page and mutation retains its own authorization.
+  if (!session) return children;
+  return <WorkspaceAdmission snapshot={{ userId: session.user.id, tenantId: session.tenant.id }}>{children}</WorkspaceAdmission>;
 }

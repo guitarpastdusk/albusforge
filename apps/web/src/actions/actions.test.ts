@@ -40,12 +40,12 @@ describe("runtime validation of Server Function arguments", () => {
   const UUID = "0f8fad5b-d9cb-469f-a165-70867728950e";
 
   it.each(NON_STRINGS)("startBuild(%j) returns the validation result", async (input) => {
-    await expect(startBuild(input, UUID)).resolves.toMatchObject({ ok: false, message: "Describe the device you want to start." });
+    await expect(startBuild(input, UUID, null)).resolves.toMatchObject({ ok: false, message: "Describe the device you want to start." });
     expect(sessionClient).not.toHaveBeenCalled();
   });
 
   it.each([undefined, null, "not-a-uuid", 42])("startBuild with client_message_id %j returns the validation result", async (clientId) => {
-    await expect(startBuild("A soil sensor", clientId)).resolves.toMatchObject({ ok: false, message: "Describe the device you want to start." });
+    await expect(startBuild("A soil sensor", clientId, null)).resolves.toMatchObject({ ok: false, message: "Describe the device you want to start." });
     expect(sessionClient).not.toHaveBeenCalled();
   });
 
@@ -142,7 +142,7 @@ describe("a turn gateway refuses before accepting it", () => {
   ])("%s: says the message wasn't sent (so the draft comes back) and logs nothing", async (_label, error, message) => {
     vi.mocked(loggedFailure).mockClear();
     vi.mocked(sessionClient).mockResolvedValue(refusingClient(error) as never);
-    for (const result of [await sendBuildMessage("bld_1", "One more bed", CLIENT_ID), await startBuild("A soil sensor", CLIENT_ID)]) {
+    for (const result of [await sendBuildMessage("bld_1", "One more bed", CLIENT_ID), await startBuild("A soil sensor", CLIENT_ID, null)]) {
       expect(result).toEqual({ ok: false, message: expect.stringMatching(message) });
     }
     expect(loggedFailure).not.toHaveBeenCalled();
@@ -163,18 +163,18 @@ describe("build conversation outcomes", () => {
     const client = { get: vi.fn().mockResolvedValue({ messages: [ASK] }), mutate: vi.fn().mockResolvedValue(CREATED), credentialChange: vi.fn() };
     vi.mocked(sessionClient).mockResolvedValue(client as never);
 
-    await expect(startBuild("A soil sensor", CLIENT_ID)).resolves.toEqual({
+    await expect(startBuild("A soil sensor", CLIENT_ID, null)).resolves.toEqual({
       ok: true,
       data: { buildId: "bld_1", messages: [ASK], ready: null, status: "asking", specVersion: null, spec: null, candidateParts: [] },
     });
-    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds", expect.anything(), { ask_text: "A soil sensor", client_message_id: CLIENT_ID });
+    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds", expect.anything(), { ask_text: "A soil sensor", client_message_id: CLIENT_ID, expected_tenant_id: null });
   });
 
   it("startBuild whose transcript read fails still returns the build, showing the ask (logged once, not a failed send)", async () => {
     const client = { get: vi.fn().mockRejectedValue(new TypeError("fetch failed")), mutate: vi.fn().mockResolvedValue(CREATED), credentialChange: vi.fn() };
     vi.mocked(sessionClient).mockResolvedValue(client as never);
 
-    const result = await startBuild("A soil sensor", CLIENT_ID);
+    const result = await startBuild("A soil sensor", CLIENT_ID, null);
     expect(result).toMatchObject({ ok: true, data: { buildId: "bld_1", messages: [{ id: `local-${CLIENT_ID}`, role: "user", text: "A soil sensor", client_message_id: CLIENT_ID }] } });
     expect(loggedFailure).toHaveBeenCalledTimes(1);
   });
@@ -208,4 +208,8 @@ it("forwards an explicit sensor channel/window through the server action", async
   vi.mocked(apiPost).mockResolvedValue({ message, queries: [] });
   expect(await askDevice("sensor", "Mean?", scope)).toEqual({ ok: true, data: message });
   expect(apiPost).toHaveBeenCalledWith("/v1/devices/sensor/ask", expect.anything(), { text: "Mean?", ...scope });
+});
+
+it("requires an explicit rendered workspace intent before attempting build creation", async () => {
+  await expect(startBuild("A soil sensor", CLIENT_ID)).resolves.toMatchObject({ ok: false, message: "Reload to confirm your workspace before starting a build." });
 });

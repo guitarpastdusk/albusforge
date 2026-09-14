@@ -7,10 +7,11 @@
  * code, it expired, it was wrong, or it was tried too often: the portal shows
  * "That code didn't work" for any 4xx, and nothing tells a guesser which.
  */
-import { Me, RequestCodeRequest, routes, VerifyCodeRequest, VerifyCodeResponse } from "@albusforge/schema";
+import { Me, RequestCodeRequest, routes, SetActiveTenantRequest, VerifyCodeRequest, VerifyCodeResponse } from "@albusforge/schema";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { type AuthStore, CODE_TTL_MS } from "./auth-store";
 import type { EmailSender } from "./email";
+import { assertSameOrigin } from "./mutation-origin";
 import { HttpError, parse } from "./http";
 import { clientIp, type InternalAuthVerifier, untrustingVerifier } from "./internal-auth";
 import type { Log } from "./log";
@@ -99,6 +100,27 @@ export function registerAuthRoutes(app: FastifyInstance, { log, auth }: { log: L
     // The anonymous cookie is cleared even when none arrived: the mock does the same, and a stale one is harmless either way.
     reply.header("set-cookie", [sessionSetCookie(result.sessionToken, sessionMaxAgeS), anonOwnerClearCookie()]);
     return reply.code(200).send(VerifyCodeResponse.parse(result.me));
+  });
+
+  app.put(routes.me.setActiveTenant.pattern, async (request, reply) => {
+    reply.header("cache-control", "private, no-store");
+    assertSameOrigin(request);
+    const body = parse(SetActiveTenantRequest, request.body, "request body");
+    let host = request.headers.host ?? "";
+    const internal = request.headers["x-albus-internal-auth"];
+    const original = request.headers["x-albus-original-host"];
+    if (typeof internal === "string" && internal.startsWith("Bearer ") && typeof original === "string"
+      && await verifier.verify(internal.slice(7).trim())) host = original;
+    const hostname = host.toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+    if (hostname.endsWith(".albusforge.ai") && hostname !== "staging.albusforge.ai") {
+      throw new HttpError(409, "HOST_SCOPED_WORKSPACE", "Switch workspaces from the main site");
+    }
+    const token = sessionTokenFromCookieHeader(request.headers.cookie);
+    if (!token) throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
+    const result = await store.switchTenant(token, body.tenant_id);
+    if (result === "unauthenticated") throw new HttpError(401, "UNAUTHENTICATED", "Sign in required");
+    if (result === "forbidden") throw new HttpError(403, "FORBIDDEN", "Workspace access unavailable");
+    return reply.code(204).send();
   });
 
   app.get(routes.me.get.pattern, async (request) => {

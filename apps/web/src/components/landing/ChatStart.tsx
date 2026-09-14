@@ -1,5 +1,6 @@
 "use client";
 
+import { useWorkspaceTransition } from "@/components/shell/WorkspaceBoundary";
 import { useConversation } from "@/components/build/BuildConversation";
 import { Button } from "@/components/ui";
 
@@ -11,7 +12,9 @@ const STARTERS = [
 
 /** The landing input and starter chips. Sending starts the conversation in place. */
 export function ChatStart() {
+  const workspace = useWorkspaceTransition();
   const { state, send, setDraft } = useConversation();
+  const checkingWorkspace = Boolean(workspace && (workspace.blocked || workspace.expectedTenant === undefined));
 
   return (
     <>
@@ -31,10 +34,12 @@ export function ChatStart() {
           placeholder="I want a sensor that tells me when my greenhouse soil is dry…"
           className="min-w-0 flex-1 bg-transparent py-3.5 text-[19px] text-ink outline-none"
         />
-        <Button type="submit" variant="coral" className="rounded-2xl px-[26px] py-[15px] text-[17px] font-semibold">
+        <Button disabled={checkingWorkspace} type="submit" variant="coral" className="rounded-2xl px-[26px] py-[15px] text-[17px] font-semibold">
           Start building
         </Button>
       </form>
+
+      {checkingWorkspace ? <p role="status" className="mt-4 text-muted">Checking workspace before starting a build…</p> : null}
 
       {/* The first send failed before the chat started: the draft is back in the input. */}
       {state.error ? (
@@ -48,6 +53,7 @@ export function ChatStart() {
           <button
             key={label}
             type="button"
+            disabled={checkingWorkspace}
             onClick={() => send(label)}
             className="rounded-full border border-hairline bg-white px-[18px] py-2 text-[14px] text-muted hover:border-coral hover:text-coral-deep"
           >

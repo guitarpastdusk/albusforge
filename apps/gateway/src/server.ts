@@ -89,7 +89,7 @@ async function main(): Promise<void> {
       streamLimits: config.sseStreamLimits,
     },
     auth: {
-      store: createAuthStore(db, { newSessionToken }),
+      store: createAuthStore(db, { newSessionToken, pool }),
       email,
       internalAuth: authConfig.internalAuth === null ? untrustingVerifier : googleInternalAuthVerifier(authConfig.internalAuth),
       trustedProxyHops: authConfig.trustedProxyHops,

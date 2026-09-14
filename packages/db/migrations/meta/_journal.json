@@ -43,6 +43,13 @@
       "when": 1789345492122,
       "tag": "0005_fleet_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789347666660,
+      "tag": "0006_build_plan_acceptance",
+      "breakpoints": true
     }
   ]
 }

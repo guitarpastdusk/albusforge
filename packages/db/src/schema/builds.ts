@@ -10,6 +10,8 @@ import {
   pgSchema,
   primaryKey,
   text,
+  timestamp,
+  uniqueIndex,
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -109,10 +111,16 @@ export const plans = buildsSchema.table(
     powerBudget: jsonb("power_budget").notNull(),
     bom: jsonb("bom").notNull(),
     solverLog: jsonb("solver_log"),
+    // Versioned immutable solver/evidence envelope; null identifies legacy rows.
+    metadata: jsonb("metadata"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedBy: uuid("accepted_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
     primaryKey({ columns: [t.buildId, t.version] }),
+    uniqueIndex("plans_one_accepted_spec_idx").on(t.buildId, t.specVersion).where(sql`${t.acceptedAt} IS NOT NULL`),
+    check("plans_acceptance_metadata_check", sql`${t.acceptedAt} IS NULL OR ${t.metadata} IS NOT NULL`),
     foreignKey({
       name: "plans_spec_fk",
       columns: [t.buildId, t.specVersion],

@@ -21,3 +21,5 @@ export * from "./build-plan";
 export * from "./device-provisioning";
 export * from "./firmware";
 export * from "./device-setup";
+
+export * from "./observations";

@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 # Build from the repo root:  docker build -f apps/cloudlink/Dockerfile .
 #
-# The server is one esbuild bundle (apps/cloudlink/package.json `build`), so the
-# runtime needs only Node and the bundled server; no node_modules.
+# JavaScript is bundled; sharp remains external because it loads platform-native
+# libvips binaries. Deploy production dependencies from the same locked install.
 
 FROM node:22-alpine AS base
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -21,6 +21,7 @@ COPY --from=manifests /repo ./
 RUN pnpm install --frozen-lockfile --filter cloudlink...
 COPY . .
 RUN pnpm --filter cloudlink build
+RUN pnpm --filter cloudlink deploy --legacy --prod /runtime
 
 FROM node:22-alpine AS run
 ENV NODE_ENV=production \
@@ -28,6 +29,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=build --chown=app:app /repo/apps/cloudlink/dist/server.js ./server.js
+COPY --from=build --chown=app:app /runtime/node_modules ./node_modules
 USER app
 EXPOSE 8080
 # Cloud Run sets PORT; SIGTERM reaches node directly (exec form), which drains and exits.

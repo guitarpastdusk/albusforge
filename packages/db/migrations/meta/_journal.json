@@ -57,6 +57,13 @@
       "when": 1789348008392,
       "tag": "0007_device_provisioning",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789363176382,
+      "tag": "0008_sensor_observations",
+      "breakpoints": true
     }
   ]
 }

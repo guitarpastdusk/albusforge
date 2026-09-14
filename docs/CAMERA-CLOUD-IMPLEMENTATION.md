@@ -1,6 +1,8 @@
 # Sensor cloud uploads: shared architecture and camera implementation
 
-Status: proposed, 2026-09-14. Nothing here claims that image upload is deployed.
+Status: implementation started, 2026-09-14. The first backend slice and remaining
+activation gates are recorded in [local mock testing](SENSOR-OBSERVATION-LOCAL-TESTING.md).
+Image upload is not deployed.
 The required cadence is **one capture every 15 minutes (900 seconds)**. This
 expands [the inventory and architecture assessment](CAMERA-CLOUD-PLAN.md).
 The camera is the first artifact-producing capability in the shared observation

@@ -41,10 +41,12 @@ export interface SampleReadings {
   cadence: string;
 }
 
-/** "60s" under a minute, "5 min" under an hour, "2 h" above. */
+/** Reads after "one row every": "30s", "minute", "5 min", "hour", "2 h". */
 export function cadenceOf(everySeconds: number): string {
   if (everySeconds < 60) return `${everySeconds}s`;
+  if (everySeconds === 60) return "minute";
   if (everySeconds < 3600) return `${everySeconds / 60} min`;
+  if (everySeconds === 3600) return "hour";
   return `${everySeconds / 3600} h`;
 }
 

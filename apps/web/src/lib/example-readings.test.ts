@@ -52,7 +52,10 @@ describe.each(EXAMPLE_BUILDS.map((build) => [build.id, build] as const))("%s sam
 describe("sample readings", () => {
   it("reads the cadence in the unit that fits", () => {
     expect(cadenceOf(30)).toBe("30s");
+    // A bare "1" reads badly after "one row every".
+    expect(cadenceOf(60)).toBe("minute");
     expect(cadenceOf(300)).toBe("5 min");
+    expect(cadenceOf(3600)).toBe("hour");
     expect(cadenceOf(7200)).toBe("2 h");
   });
 

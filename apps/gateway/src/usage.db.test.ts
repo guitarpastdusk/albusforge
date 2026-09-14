@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createDb, type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
+import { MemoryObservationStorage } from "@albusforge/storage/testing";
+import { buildApp as buildIngest } from "../../cloudlink/src/app";
 import { SESSION_COOKIE, UsageSummary } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import type { FastifyInstance } from "fastify";
@@ -55,6 +57,7 @@ it("returns a zero-valued current UTC month with exact strings and no invented s
   expect(usage.model.total).toEqual({ calls: "0", input_tokens: "0", output_tokens: "0", cache_read_tokens: "0", cache_creation_tokens: "0", cost_usd: "0.000000" });
   expect(usage.model.stages).toEqual([]);
   expect(usage.telemetry).toEqual({ readings_in: "0", payload_bytes: "0" });
+  expect(usage.images).toEqual({ accepted_count: "0", accepted_bytes: "0" });
   expect(response.body).not.toContain("bytes_stored");
   expect(response.body).not.toContain(f.token);
 });
@@ -118,4 +121,51 @@ it("reports device deletion semantics and recovers cleanly after a storage failu
   finally { await owner.query("GRANT SELECT ON builds.llm_calls TO albus_app"); }
   expect((await f.get()).statusCode).toBe(200);
   expect((await owner.query("SELECT 1 FROM pg_stat_activity WHERE datname='albus' AND state='idle in transaction'")).rowCount).toBe(0);
+});
+
+it("sums accepted image uploads exactly within the UTC month and session tenant", async () => {
+  const a = await fixture(), b = await fixture();
+  await handle.pool.query("INSERT INTO users.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'admin')", [b.tenant, a.user]);
+  const first = start.toISOString().slice(0,10), last = new Date(end.getTime()-1).toISOString().slice(0,10);
+  const previous = new Date(start.getTime()-1).toISOString().slice(0,10), next = end.toISOString().slice(0,10);
+  const put = (device: string, day: string, count: string, bytes: string) => handle.pool.query("INSERT INTO telemetry.observation_usage(device_id,day,accepted_count,accepted_bytes) VALUES($1,$2,$3,$4)", [device,day,count,bytes]);
+  await put(a.device,first,"9007199254740993","9007199254740994");
+  await put(a.device,last,"7","11");
+  await put(a.device,previous,"1000","1000");
+  await put(a.device,next,"1000","1000");
+  await put(b.device,first,"1000","1000");
+  const usage = UsageSummary.parse((await a.get()).json());
+  expect(usage.images).toEqual({ accepted_count: "9007199254741000", accepted_bytes: "9007199254741005" });
+  expect(usage.telemetry).toEqual({ readings_in: "0", payload_bytes: "0" });
+  expect(UsageSummary.parse((await a.get("/v1/usage", { "x-tenant-id": b.tenant })).json()).images).toEqual(usage.images);
+  expect(UsageSummary.parse((await b.get()).json()).images).toEqual({ accepted_count: "1000", accepted_bytes: "1000" });
+});
+
+it("retains accepted image accounting after revocation and removes it with device deletion", async () => {
+  const f = await fixture();
+  await handle.pool.query("INSERT INTO telemetry.observation_usage(device_id,day,accepted_count,accepted_bytes) VALUES($1,$2,96,1352448)", [f.device,start.toISOString().slice(0,10)]);
+  await handle.pool.query("UPDATE telemetry.devices SET revoked_at=now() WHERE id=$1", [f.device]);
+  expect(UsageSummary.parse((await f.get()).json()).images).toEqual({ accepted_count: "96", accepted_bytes: "1352448" });
+  await handle.pool.query("DELETE FROM telemetry.devices WHERE id=$1", [f.device]);
+  expect(UsageSummary.parse((await f.get()).json()).images).toEqual({ accepted_count: "0", accepted_bytes: "0" });
+});
+
+it("counts a real HTTP JPEG retry once and retains accepted bytes after media removal", async () => {
+  const f = await fixture(), bearer = randomBytes(32).toString("base64url"), id = randomUUID();
+  await handle.pool.query("UPDATE telemetry.devices SET token_hash=$2 WHERE id=$1", [f.device,createHash("sha256").update(bearer).digest("hex")]);
+  await handle.pool.query("INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,interval_s,max_bytes,max_width,max_height) VALUES($1,'camera','image','jpeg.v1','test-camera',1,900,1048576,320,240)", [f.device]);
+  // Generated solid-color 320×240 JPEG; no private camera photograph.
+  const jpeg = Buffer.from("/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCADwAUADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAb/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCcAX6EAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf/2Q==", "base64");
+  const headers = { authorization: `Bearer ${bearer}`, "content-type": "image/jpeg", "x-capability-id": "camera", "x-observation-id": id,
+    "x-payload-schema": "jpeg.v1", "x-captured-at": String(Math.floor(Date.now()/1000)), "x-content-sha256": createHash("sha256").update(jpeg).digest("hex") };
+  const ingest = buildIngest({ pool: handle.pool, observations: { store: new MemoryObservationStorage() }, log: () => {} });
+  try {
+    const origin = await ingest.listen({ host: "127.0.0.1", port: 0 });
+    const send = async () => { const reply = await fetch(`${origin}/ingest/v2/devices/${f.device}/observations`, { method: "POST", headers, body: new Uint8Array(jpeg), signal: AbortSignal.timeout(10_000) });await reply.text();return reply.status; };
+    expect(await send()).toBe(201);expect(await send()).toBe(200);
+    const expected = { accepted_count: "1", accepted_bytes: String(jpeg.length) };
+    expect(UsageSummary.parse((await f.get()).json()).images).toEqual(expected);
+    await handle.pool.query("DELETE FROM telemetry.observation_images WHERE device_id=$1", [f.device]);
+    expect(UsageSummary.parse((await f.get()).json()).images).toEqual(expected);
+  } finally { await ingest.close(); }
 });

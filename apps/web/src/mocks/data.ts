@@ -586,6 +586,7 @@ export function usage(): Usage & UsageSummary {
       stages: [{ stage: "intake", calls: "12", input_tokens: "12000", output_tokens: "2400", cache_read_tokens: "3000", cache_creation_tokens: "1000", cost_usd: "0.123456" }],
     },
     telemetry: { readings_in: "31200", payload_bytes: "48300000" },
+    images: { accepted_count: "2880", accepted_bytes: "40573440" },
     tiers: {
       tier2: { model_calls: 1_840, tokens_in: 1_212_000, tokens_out: 96_400 },
       tier3: { model_calls: 37, tokens_in: 412_500, tokens_out: 28_900 },

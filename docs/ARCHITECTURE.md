@@ -876,6 +876,16 @@ One VPC per environment, one `/24` subnet in `us-central1`. **Direct VPC egress*
 
 > **The rule that keeps prod honest:** CI builds one image per app, tags it with the commit SHA, deploys that digest to staging, and promotion re-points traffic at the same digest. **Never build twice.**
 
+### 12.3.1 Who applies Terraform
+
+Deploys are automated; **applies are not**. `infra/env` is applied by hand, so exactly one agent or person owns that at any time. Two owners do not collide — the GCS state lock prevents that — they *contradict*, each applying a coherent configuration that quietly undoes the other's.
+
+- **Current owner: Claude session `albusforge-44`.** Codex thread `01a09b73` (sensor/telemetry rollout) held it before 2026-09-14 and remains the fallback if the current owner becomes unavailable. Handover is a message, not a rebuild: the rollout var-files, plan/evidence workflow and `docs/SENSOR-INFRA.md` stay in place.
+- **Always apply from merged `main`**, never a local branch, and **always pass the environment's var-file**: `-var-file=rollout-staging.tfvars.json` or `-var-file=rollout-prod.tfvars.json`. The defaults are not the deployed configuration. Without the var-file a plan will pause both telemetry schedulers, disable the telemetry and sensor alert policies, and revoke the `ask` service's access to the Anthropic key — and a plan run without it *looks* like alarming drift when nothing is wrong.
+- **Never leave configuration applied but uncommitted.** It is invisible to the next owner, and their next apply reverts it. PRs #51 and #67 exist only to close that gap after it happened.
+- **Check for a held lock before planning**: `gs://albusforge-ci-tfstate/env/*.tflock`. A lock means someone is mid-apply; wait rather than passing `-lock=false` for anything that writes.
+- Per [ADR 0005](adr/0005-ci-owns-images-terraform-owns-shape.md), disable and drain the deploy workflows before an apply that touches a service, and **re-run any deploys that were skipped while they were off** — merges landing in that window are silently not deployed.
+
 ### 12.4 LLM access and cost accounting
 
 `packages/llm` wraps the model API with retries, JSON mode and a cost log. Two viable paths, abstracted from day one behind `LLM_PROVIDER=anthropic|vertex` with the model id from `LLM_MODEL`:

@@ -107,7 +107,7 @@ describe("real route contracts", () => {
     );
     expect(mocked.session).toHaveBeenCalledWith("/live");
     expect(mocked.get.mock.calls[0]?.[0]).toBe(
-      "/v1/telemetry/devices?limit=50",
+      "/v1/telemetry/devices?limit=50&presentation=1",
     );
     expect(html).toContain(`href="/live/${id}"`);
     expect(html).toContain("Next page");
@@ -138,7 +138,7 @@ describe("real route contracts", () => {
       }),
     );
     expect(mocked.get.mock.calls.map((c) => c[0])).toEqual([
-      `/v1/telemetry/devices/${id}`,
+      `/v1/telemetry/devices/${id}?presentation=1`,
       `/v1/telemetry/devices/${id}/latest`,
       expect.stringContaining(`/v1/telemetry/devices/${id}/series?`),
     ]);
@@ -267,4 +267,16 @@ it("preserves a valid selected window while correcting incompatible resolution",
   expect(
     Date.parse(corrected.query!.to) - Date.parse(corrected.query!.from),
   ).toBe(7 * 86400000);
+});
+
+it("preserves filters on pagination but starts a new filter submission without a cursor", async () => {
+  mocked.get.mockResolvedValue({ devices: [{ ...device, display_name: "Fridge" }], next_after: id });
+  document.body.innerHTML = renderToStaticMarkup(await FleetPage({ searchParams: Promise.resolve({ q: "Fridge", status: "offline", after: id }) }));
+  expect(mocked.get.mock.calls[0]?.[0]).toContain("q=Fridge&status=offline&after=");
+  const form = document.querySelector('input[type="search"]')?.closest("form");
+  expect(form?.querySelector('[name="after"]')).toBeNull();
+  expect(document.querySelector('nav[aria-label="Fleet pages"] a')?.getAttribute("href")).toBe("/live?q=Fridge&status=offline");
+  expect(document.querySelector('nav[aria-label="Fleet pages"] a:last-child')?.getAttribute("href")).toContain("q=Fridge&status=offline&after=");
+  expect(document.body.textContent).toContain("Fridge");
+  expect(document.body.textContent).toContain("not fleet totals");
 });

@@ -36,6 +36,13 @@
       "when": 1789333389023,
       "tag": "0004_sensor_ask",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789345492122,
+      "tag": "0005_fleet_metadata",
+      "breakpoints": true
     }
   ]
 }

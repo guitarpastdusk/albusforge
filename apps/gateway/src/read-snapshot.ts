@@ -2,7 +2,14 @@ import { createClientDb, type Db } from "@albusforge/db";
 import type { Pool, PoolClient } from "pg";
 
 /** Own every phase of a short read lease, including BEGIN and transport errors. */
-export async function readSnapshot<T>(pool: Pool, read: (db: Db) => Promise<T>): Promise<T> {
+export const readSnapshot = <T>(pool: Pool, read: (db: Db) => Promise<T>): Promise<T> =>
+  managedTransaction(pool, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", read);
+
+/** Mutation callers own their row locks; transport/cleanup ownership is shared. */
+export const writeTransaction = <T>(pool: Pool, write: (db: Db, client: PoolClient) => Promise<T>): Promise<T> =>
+  managedTransaction(pool, "BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE", write);
+
+async function managedTransaction<T>(pool: Pool, begin: string, read: (db: Db, client: PoolClient) => Promise<T>): Promise<T> {
   let connectionError: Error | undefined;
   const onError = (error: Error) => { connectionError = error; };
   // Install before resolving the checkout promise: the pool's idle listener
@@ -19,8 +26,8 @@ export async function readSnapshot<T>(pool: Pool, read: (db: Db) => Promise<T>):
   let clean = false;
   try {
     if (connectionError) throw connectionError;
-    await scoped.client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    const result = await read(scoped.db);
+    await scoped.client.query(begin);
+    const result = await read(scoped.db, scoped.client);
     if (connectionError) throw connectionError;
     await scoped.client.query("COMMIT");
     // Fence the handle and verify clean protocol state before pool reuse.

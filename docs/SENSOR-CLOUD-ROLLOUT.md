@@ -2,7 +2,28 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active production progress and notification update — 2026-09-14, 00:48 UTC
+## Active production activation update — 2026-09-14, 01:02 UTC
+
+All six production runtime promotions succeeded at source `03f40c1a2cfc3304fe7637e88d37e5c4347f7a9e`:
+
+| Release | Successful workflow |
+| --- | --- |
+| Gateway/schema | [34793233220](https://github.com/guitarpastdusk/albusforge/actions/runs/34793233220) |
+| Cloudlink | [34793442684](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442684) |
+| Ask | [34793442633](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442633) |
+| Intake | [34793866253](https://github.com/guitarpastdusk/albusforge/actions/runs/34793866253) |
+| Telemetry jobs | [34793865162](https://github.com/guitarpastdusk/albusforge/actions/runs/34793865162) |
+| Web | [34794045944](https://github.com/guitarpastdusk/albusforge/actions/runs/34794045944) |
+
+The replacement intake/telemetry runs and web release were independently checked for successful completion at that SHA. Root applied production model activation and schedule activation; both schedules and five dependent alerts were enabled. The committed production input matches the applied private configuration: model enabled, `claude-haiku-4-5`, schedules enabled and SQL alert threshold 320. Final active-state convergence and automatic schedule acceptance are still pending.
+
+Production provider request `c158d87a-454e-4848-868e-66acf7a03182` passed SQL/log verification through `registry-load-g6z2m`: `claude-haiku-4-5-20251001`, 341 input tokens, 9 output tokens, $0.000386 recorded cost. Together with the earlier staging request, these are two verified acceptance calls totaling $0.000772, not total account spend. Production browser acceptance covered nine views with zero page errors and zero additional questions. Fixture-cleanup job execution is still in progress and must be verified before closeout.
+
+**Unresolved GitHub run records:** initial telemetry run `34793442644` and intake run `34793442663` show queued with zero jobs. Root's cancel and force-cancel attempts returned 409 indicating they were not queued for cancellation; replacement releases were dispatched serially and succeeded. These inconsistent orphan run records have not been cleared. They are an operational limitation requiring follow-up, not evidence that all workflow queues are drained. Future infrastructure windows must still inspect complete histories and resolve or explicitly account for these records alongside actual job execution state.
+
+Keep this PR draft until automatic schedule observation, fixture cleanup and final convergence are recorded and independently reviewed. Physical devices and backend telemetry SSE remain outside this acceptance; no new hardware claim follows from simulator/provider/browser success.
+
+## Earlier production progress and notification update — 2026-09-14, 00:48 UTC
 
 The user-authorized synthetic notification test in staging passed both OPEN and CLOSED/recovery observation. The user explicitly confirmed receipt of both emails at 00:47:01 UTC. Temporary alert-policy and metric cleanup was completed and both resources verified absent with 404; metric cleanup recovered at 00:44:34 UTC. The private evidence record `monitoring-probe-6da5fddd0d4841edbc47db33b5a48ff0.json` records the observation, cleanup recovery and recipient confirmation without publishing the notification address. This validates that synthetic incident/recovery delivery path, not every production alert condition.
 

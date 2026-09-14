@@ -50,7 +50,7 @@ Mounting an API key requires a secret version to exist; both keys have one. ADR 
 
 ## Sensor rollout configuration
 
-`rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. Staging now records the applied activation: model enabled with `claude-haiku-4-5`, schedules enabled, SQL connection alert threshold 37. Production remains at initial deployment settings: model disabled, schedules paused, threshold 320. Earlier disabled staging settings are preserved in the rollout ledger and git history. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
+`rollout-staging.tfvars.json` and `rollout-prod.tfvars.json` are nonsecret, explicitly selected deployment inputs. Both environments now record their applied activation: model enabled with `claude-haiku-4-5` and schedules enabled, with SQL connection alert thresholds 37 for staging and 320 for production. Earlier disabled settings are preserved in the rollout ledger and git history. They are not auto-loaded: include the matching file on every plan so a later apply cannot silently restore the generic threshold. The private base `terraform.tfvars` remains local and ignored.
 
 Before these commands, complete the [ADR 0005 exclusion window](../../docs/adr/0005-ci-owns-images-terraform-owns-shape.md): disable all affected deployment/promotion workflows, drain their complete paginated run histories and any already-started database/telemetry job executions, and pause affected schedules. Keep the window through apply. Plans made before the drain are inspection evidence only and must not be applied.
 

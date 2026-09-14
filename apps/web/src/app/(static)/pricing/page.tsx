@@ -182,7 +182,10 @@ export default function PricingPage() {
           </div>
           <div>
             <dt className="font-medium text-ink">Can I use my own hardware?</dt>
-            <dd className="mt-1">Yes. If your board and sensors are in the registry, the same firmware and cloud work with them at no kit cost.</dd>
+            <dd className="mt-1">
+              Planned. Once a board and its sensors have an approved profile in the registry, the same firmware and cloud
+              will work with them at no kit cost. In the preview, only the reviewed kits are supported.
+            </dd>
           </div>
           <div>
             <dt className="font-medium text-ink">What happens to my data?</dt>

@@ -12,11 +12,9 @@ export interface EnclosurePreviewData {
 }
 
 /**
- * The checked-in fixture (scripts/make-enclosure-fixture.mjs). No build has an
- * enclosure of its own yet: the body endpoint is the M5.5 contract
- * (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and doesn't exist in gateway
- * or the mocks, so the portal shows this model labelled as a sample and
- * requests nothing (docs/DEMO-ASSUMPTIONS.md).
+ * The checked-in fixture (scripts/make-enclosure-fixture.mjs). While a build
+ * has no body of its own (GET /v1/builds/:id/body answers 501 or 404), the
+ * portal shows this model labelled as a sample (docs/DEMO-ASSUMPTIONS.md).
  */
 export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
   glbUrl: "/enclosure/fixture.glb",
@@ -33,11 +31,8 @@ export const ENCLOSURE_SAMPLE: EnclosurePreviewData = {
   description: `Sample enclosure. ${ENCLOSURE_FIXTURE.description} The enclosure generated for this build will replace it.`,
 };
 
-/**
- * A build's enclosure preview. `body` is what GET /v1/builds/:id/body will
- * answer once it exists; until a caller has one, the labelled sample. The
- * same in mock and live mode: the fixture is nobody's enclosure.
+/*
+ * Which one a build shows is decided in BuildConversation (useEnclosureBody):
+ * the sample until GET /v1/builds/:id/body answers with the build's own
+ * enclosure (actions/enclosure.ts); 501 and 404 keep the sample.
  */
-export function enclosurePreviewFor(body: EnclosurePreviewData | null = null): EnclosurePreviewData {
-  return body ?? ENCLOSURE_SAMPLE;
-}

@@ -2,9 +2,11 @@
 
 import { BUILD_EVENT, BuildUpdatedEvent, MessageCreatedEvent } from "@albusforge/schema";
 import { createContext, useContext, useReducer, useState, type ReactNode } from "react";
+import type { ActionResult } from "@/lib/action-result";
 import { useWorkspaceTransition } from "@/components/shell/WorkspaceBoundary";
 import { refreshBuild, sendBuildMessage, startBuild } from "@/actions/builds";
-import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
+import { loadEnclosureBody } from "@/actions/enclosure";
+import { ENCLOSURE_SAMPLE, type EnclosurePreviewData } from "@/components/enclosure/fixture";
 import { useEventStream, type StreamState } from "@/lib/sse/useEventStream";
 import {
   clientMessageIdFor,
@@ -19,6 +21,7 @@ import {
 } from "./conversation";
 import { useReplyWatchdog } from "./useReplyWatchdog";
 import { useBuildRefresh } from "./useBuildRefresh";
+import { useEnclosureBody } from "./useEnclosureBody";
 
 const ACTIONS: ConversationActions = { startBuild, sendBuildMessage, refreshBuild };
 
@@ -34,7 +37,7 @@ interface ConversationApi {
   /** Waiting for a reply and not yet overdue: typing dots, and no new send. */
   typing: boolean;
   signedIn: boolean | Promise<boolean>;
-  /** The device-ready card's 3D enclosure preview: the build's body once one exists, the labelled sample until then, null to show none. */
+  /** The device-ready card's 3D enclosure preview: the build's body (GET /v1/builds/:id/body) once it has one, the labelled sample until then, null to show none. */
   enclosurePreview: EnclosurePreviewData | null;
   /** The event stream's state, once a build exists; null before. The view says when replies may be delayed. */
   streamState: StreamState | null;
@@ -68,14 +71,18 @@ export function BuildConversation({
   initial,
   initialDraft = "",
   signedIn = false,
-  enclosurePreview = null,
+  enclosurePreview: fallbackPreview = ENCLOSURE_SAMPLE,
+  loadBody = loadEnclosureBody,
   children,
 }: {
   initial?: BuildTranscript;
   /** Text waiting in the input before the first send: a Marketplace clone (lib/clone-ask.ts). */
   initialDraft?: string;
   signedIn?: boolean | Promise<boolean>;
+  /** What the card shows until the build has a body: the labelled sample by default, null for no preview. */
   enclosurePreview?: EnclosurePreviewData | null;
+  /** Reads the build's body once the card is due; tests substitute it. */
+  loadBody?: (buildId: string) => Promise<ActionResult<EnclosurePreviewData | null>>;
   children: ReactNode;
 }) {
   const workspace = useWorkspaceTransition();
@@ -83,6 +90,7 @@ export function BuildConversation({
   const typing = isTyping(state);
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const { buildId } = state;
+  const enclosurePreview = useEnclosureBody(buildId, state.ready !== null, fallbackPreview, loadBody);
   const requestRefresh = useBuildRefresh(ACTIONS, dispatch);
 
   const send = (text: string): boolean => {

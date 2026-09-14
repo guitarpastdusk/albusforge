@@ -3,7 +3,6 @@ import { BuildDetail, MessageList, routes } from "@albusforge/schema";
 import type { Metadata } from "next";
 import { BuildConversation } from "@/components/build/BuildConversation";
 import { ConversationView } from "@/components/build/ConversationView";
-import { enclosurePreviewFor } from "@/components/enclosure/fixture";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { transcriptFrom } from "@/lib/build-transcript";
 
@@ -18,10 +17,7 @@ export default async function BuildPage({ params }: { params: Promise<{ buildId:
   ]);
 
   return (
-    <BuildConversation signedIn={getBuildSignedIn()}
-      initial={transcriptFrom(build, messages)}
-      enclosurePreview={enclosurePreviewFor()}
-    >
+    <BuildConversation signedIn={getBuildSignedIn()} initial={transcriptFrom(build, messages)}>
       <main className="flex flex-1 flex-col">
         <ConversationView active />
       </main>

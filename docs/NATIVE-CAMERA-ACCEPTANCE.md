@@ -69,8 +69,8 @@ pass/fail summary with artifact identity.
 
 Run fault tests separately from the uninterrupted 24-hour cadence window. Back up
 any existing card contents before power-cut tests; FAT/controller behavior must
-be measured on the physical card. The runtime only uses its own two spool
-folders and never formats the card.
+be measured on the physical card. The runtime uses its two spool folders and
+root ownership marker, and never formats the card. Preserve all three together.
 
 1. **45-minute cloud outage with LAN intact.** Start a separate two-hour recorder
    run. Block this board's upstream Internet access while preserving LAN access;
@@ -124,3 +124,21 @@ Native profile approval requires reviewed physical results, a successful receive
 and tenant-read audit, the uninterrupted cadence evidence, and explicit disposition
 of every failed or untested case. An elapsed timer, a visible picture, or a green
 compiler job alone is insufficient.
+
+### Reprovisioning and card ownership
+
+Use a private, backed-up test card for this separate acceptance window. Queue a
+synthetic/test capture for the original staging identity, then reboot with a
+rotated token for the same device, endpoint and camera profile: ownership should
+remain valid and the stable queued observation ID should upload once. A firmware
+rebuild with the same identity must also preserve ownership.
+
+Reprovision to a different device UUID or observation origin while preserving the
+card. Confirm `storage_ready=false` and `spool_owner_mismatch`, no queued upload
+or record cleanup, and working local preview/setup. Restore the original
+configuration to recover its queue. Test a copied legacy card without a marker,
+a truncated marker and a failed marker flush: these must preserve existing files
+and remain blocked rather than infer a new owner. Host tests simulate all marker
+truncation lengths and injected short-write/fsync failures; physical FAT and card
+controller behavior still needs this separate evidence. Never remove or rewrite
+ownership metadata to adopt private photographs into another device identity.

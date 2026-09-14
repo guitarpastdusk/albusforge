@@ -23,6 +23,7 @@
 #include "mbedtls/sha256.h"
 #include "nvs_flash.h"
 #include "observation-spool.h"
+#include "observation-owner.h"
 #include "sdmmc_cmd.h"
 #include <errno.h>
 #include <math.h>
@@ -43,12 +44,25 @@ static EventGroupHandle_t events;
 static SemaphoreHandle_t camera_lock, spool_lock;
 static char claimed[37];
 static const char *device_id, *observation_url, *token;
+static obs_owner_identity spool_owner;
+static obs_owner_status owner_status = OBS_OWNER_UNBOUND;
 static unsigned dropped_count, corrupt_count, quarantine_dropped,
     quarantine_count;
 static size_t queued_count, queued_bytes;
 static int64_t last_capture, last_successful_upload;
 static int last_http_status;
 static const char *last_error = "none";
+/* Caller holds spool_lock (or no tasks exist yet). Never cache across card I/O. */
+static bool owner_valid(void) {
+  owner_status = obs_owner_check("/sdcard", &spool_owner, false);
+  if (owner_status != OBS_OWNER_OK) {
+    xEventGroupClearBits(events, STORAGE_READY);
+    last_error = obs_owner_reason(owner_status);
+    ESP_LOGE("camera", "SD spool ownership rejected; files preserved");
+    return false;
+  }
+  return true;
+}
 static void error_state(const char *error) {
   xSemaphoreTake(spool_lock, portMAX_DELAY);
   last_error = error;
@@ -150,13 +164,13 @@ static esp_err_t health(httpd_req_t *request) {
            "\"queued_count\":%zu,\"queued_bytes\":%zu,\"last_capture\":%lld,"
            "\"last_successful_upload\":%lld,\"last_error\":\"%s\",\"last_http_"
            "status\":%d,\"dropped\":%u,\"corrupt\":%u,\"quarantined\":%u,"
-           "\"quarantine_dropped\":%u}",
+           "\"quarantine_dropped\":%u,\"spool_owner\":\"%s\"}",
            bits & CLOCK_READY ? "true" : "false",
            bits & STORAGE_READY ? "true" : "false",
            bits & AUTH_PAUSED ? "true" : "false", queued_count, queued_bytes,
            (long long)last_capture, (long long)last_successful_upload,
            last_error, last_http_status, dropped_count, corrupt_count,
-           quarantine_count, quarantine_dropped);
+           quarantine_count, quarantine_dropped, obs_owner_reason(owner_status));
   xSemaphoreGive(spool_lock);
   httpd_resp_set_type(request, "application/json");
   httpd_resp_set_hdr(request, "Cache-Control", "no-store");
@@ -211,22 +225,7 @@ static bool mount_sd(void) {
   sdmmc_card_t *card = NULL;
   if (esp_vfs_fat_sdmmc_mount("/sdcard", &host, &slot, &mount, &card) != ESP_OK)
     return false;
-  if (mkdir(SPOOL, 0700) != 0 && errno != EEXIST)
-    return false;
-  if (mkdir(QUARANTINE, 0700) != 0 && errno != EEXIST)
-    return false;
-  /* Test write/fsync before enabling capture; never format a user's card. */
-  char path[] = SPOOL "/.write-check";
-  FILE *file = fopen(path, "wb");
-  if (!file)
-    return false;
-  bool ok = fwrite("1", 1, 1, file) == 1 && fflush(file) == 0 &&
-            fsync(fileno(file)) == 0;
-  if (fclose(file))
-    ok = false;
-  if (unlink(path))
-    ok = false;
-  return ok;
+  return true;
 }
 static void scan_account(const obs_spool_stats *stats) {
   queued_count = stats->count;
@@ -266,9 +265,12 @@ static void capture_task(void *arg) {
     digest(bytes, length, record.sha256);
     xSemaphoreTake(spool_lock, portMAX_DELAY);
     obs_record oldest;
-    obs_spool_stats stats;
-    bool ok = obs_spool_scan(SPOOL, captured, claimed, length, &oldest, &stats);
-    scan_account(&stats);
+    obs_spool_stats stats = {0};
+    bool ok = owner_valid();
+    if (ok) {
+      ok = obs_spool_scan(SPOOL, captured, claimed, length, &oldest, &stats);
+      scan_account(&stats);
+    }
     if (ok)
       ok = obs_spool_put(SPOOL, &record, bytes);
     if (ok) {
@@ -279,7 +281,8 @@ static void capture_task(void *arg) {
     }
     if (!ok) {
       xEventGroupClearBits(events, STORAGE_READY);
-      last_error = "sd_unavailable";
+      if (owner_status == OBS_OWNER_OK)
+        last_error = "sd_unavailable";
       ESP_LOGE("camera", "SD spool unavailable; capture paused");
     }
     xSemaphoreGive(spool_lock);
@@ -343,11 +346,14 @@ static void upload_task(void *arg) {
       continue;
     }
     obs_record record = {0};
-    obs_spool_stats stats;
+    obs_spool_stats stats = {0};
     unsigned char *bytes = NULL;
     xSemaphoreTake(spool_lock, portMAX_DELAY);
-    bool ok = obs_spool_scan(SPOOL, time(NULL), NULL, 0, &record, &stats);
-    scan_account(&stats);
+    bool ok = owner_valid();
+    if (ok) {
+      ok = obs_spool_scan(SPOOL, time(NULL), NULL, 0, &record, &stats);
+      scan_account(&stats);
+    }
     obs_spool_stats qstats = {0};
     if (ok)
       ok = obs_quarantine_scan(QUARANTINE, time(NULL), &qstats);
@@ -368,11 +374,13 @@ static void upload_task(void *arg) {
     digest(bytes, record.bytes, actual);
     if (strcmp(actual, record.sha256)) {
       xSemaphoreTake(spool_lock, portMAX_DELAY);
-      if (!obs_spool_remove(SPOOL, record.id))
-        xEventGroupClearBits(events, STORAGE_READY);
+      if (owner_valid()) {
+        if (!obs_spool_remove(SPOOL, record.id))
+          xEventGroupClearBits(events, STORAGE_READY);
+        corrupt_count++;
+        last_error = "payload_corrupt";
+      }
       claimed[0] = 0;
-      corrupt_count++;
-      last_error = "payload_corrupt";
       xSemaphoreGive(spool_lock);
       free(bytes);
       continue;
@@ -412,6 +420,11 @@ static void upload_task(void *arg) {
             : OBS_RETRY;
     xSemaphoreTake(spool_lock, portMAX_DELAY);
     last_http_status = status;
+    if (!owner_valid()) {
+      claimed[0] = 0;
+      xSemaphoreGive(spool_lock);
+      continue;
+    }
     if (action == OBS_ACK) {
       last_successful_upload = time(NULL);
       last_error = "none";
@@ -544,10 +557,20 @@ void hsx_camera_run(void) {
   if (!events || !camera_lock || !spool_lock)
     fail_closed();
   camera_init();
+  spool_owner = (obs_owner_identity){.device_id = device_id,
+      .observation_url = observation_url, .capability_id = id,
+      .payload_schema = schema, .profile_id = cap_profile, .profile_version = 1};
   if (mount_sd()) {
+    owner_status = obs_owner_check("/sdcard", &spool_owner, true);
     obs_record oldest;
     obs_spool_stats initial = {0}, quarantine = {0};
-    if (obs_spool_scan(SPOOL, 0, NULL, 0, &oldest, &initial) &&
+    if (owner_status != OBS_OWNER_OK) {
+      last_error = obs_owner_reason(owner_status);
+      ESP_LOGE("camera", "SD spool ownership rejected; local preview only");
+    } else if ((mkdir(SPOOL, 0700) == 0 || errno == EEXIST) &&
+        (mkdir(QUARANTINE, 0700) == 0 || errno == EEXIST) &&
+        obs_owner_write_probe("/sdcard", &spool_owner) &&
+        obs_spool_scan(SPOOL, 0, NULL, 0, &oldest, &initial) &&
         obs_quarantine_scan(QUARANTINE, 0, &quarantine)) {
       scan_account(&initial);
       quarantine_count = quarantine.count;

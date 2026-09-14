@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -146,8 +147,10 @@ class EvidenceRecorder(unittest.TestCase):
 
     def test_real_loopback_polling_stores_no_picture_or_unknown_secret_fields(self):
         picture = b"\xff\xd8private-camera-pixels\xff\xd9"
+        requests = []
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
+                requests.append(self.path)
                 body = json.dumps(health(token="must-never-be-recorded")).encode() if self.path == "/health" else picture
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
@@ -160,9 +163,27 @@ class EvidenceRecorder(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as folder:
                 output = Path(folder) / "evidence"
-                result = recorder.record(f"http://127.0.0.1:{server.server_port}", output, 0.1, 1)
+                # Control only this recorder's schedule: a loaded runner can
+                # spend the entire old 100ms window fsyncing run.json before
+                # its first poll. HTTP requests and filesystem writes stay real;
+                # separate tests exercise actual socket/total-read deadlines.
+                elapsed = [0.0]
+                def advance(seconds):
+                    elapsed[0] += seconds
+                clock = SimpleNamespace(monotonic=lambda: elapsed[0],
+                                        time=time.time, sleep=advance)
+                real_sample = recorder.sample
+                def poll_real_http(*args):
+                    # Real I/O retains both monotonic and SIGALRM deadlines.
+                    with patch.object(recorder, "time", time):
+                        return real_sample(*args)
+                with patch.object(recorder, "time", clock), patch.object(recorder, "sample", side_effect=poll_real_http):
+                    result = recorder.record(f"http://127.0.0.1:{server.server_port}", output, 0.1, 1)
                 self.assertFalse(result["completed_24h"])
+                self.assertEqual(result["polls"], 1)
+                self.assertEqual(result["health_polls_ok"], 1)
                 self.assertEqual(result["snapshot_polls_ok"], 1)
+                self.assertEqual(requests, ["/health", "/snapshot"])
                 data = (output / "observations.jsonl").read_bytes()
                 self.assertNotIn(b"private-camera-pixels", data)
                 self.assertNotIn(b"must-never-be-recorded", data)

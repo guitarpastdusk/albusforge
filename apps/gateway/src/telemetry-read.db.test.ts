@@ -596,3 +596,14 @@ it("refuses a metadata edit whose ancestor session is revoked", async () => {
   );
   expect((await rename(f, "must not save")).statusCode).toBe(401);
 });
+
+it("binds shared authorized writes to the tenant captured by the rendering page", async () => {
+  const { withAuthorizedWrite } = await import("./authorized-write");
+  const f = await fixture();
+  await owner.query("UPDATE users.tenant_members SET role='admin' WHERE tenant_id=$1 AND user_id=$2", [f.tenant, f.user]);
+  let calls = 0;
+  await expect(withAuthorizedWrite(handle.pool, f.cookie, "localhost", randomUUID(), async () => { calls++; })).rejects.toMatchObject({ statusCode: 409 });
+  expect(calls).toBe(0);
+  const tenant = await withAuthorizedWrite(handle.pool, f.cookie, "localhost", f.tenant, async (_client, identity) => identity.tenantId);
+  expect(tenant).toBe(f.tenant);
+});

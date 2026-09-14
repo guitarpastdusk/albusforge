@@ -18,8 +18,10 @@ const CONNECTION_CODES = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EH
 /**
  * SQLSTATEs: 57014 query_canceled (statement_timeout), 57P01–57P03 server
  * shutting down or not accepting connections, 53300 too many connections.
+ * 40P01/40001/55P03 abort a bounded operation under contention; callers reload
+ * and retry the whole authorized operation, never resume a partial transaction.
  */
-const UNAVAILABLE_SQLSTATES = new Set(["57014", "57P01", "57P02", "57P03", "53300"]);
+const UNAVAILABLE_SQLSTATES = new Set(["57014", "57P01", "57P02", "57P03", "53300", "40P01", "40001", "55P03"]);
 
 /** Checks the error and its `cause` chain: Drizzle wraps pg errors in DrizzleQueryError. */
 export function isDatabaseUnavailable(error: unknown): boolean {

@@ -702,3 +702,73 @@ describe("usage attribution across a sign-up (ADR 0009)", () => {
     ]);
   });
 });
+
+it("publishes a new spec only after admitted plan acceptance releases the build lock", async () => {
+  const { createHash, randomBytes, randomUUID } = await import("node:crypto");
+  const { SESSION_COOKIE } = await import("@albusforge/schema");
+  const { fixture } = await import("../../matcher/src/fixtures");
+  const { createBuildPlanStore } = await import("../../gateway/src/build-plan-store");
+  const input = fixture();
+  const tenant = randomUUID(), user = randomUUID(), token = randomBytes(32).toString("base64url");
+  await handle.pool.query("INSERT INTO users.tenants(id,name) VALUES($1,'acceptance test')", [tenant]);
+  await handle.pool.query("INSERT INTO users.users(id,email) VALUES($1,$2)", [user, `${user}@example.test`]);
+  await handle.pool.query("INSERT INTO users.tenant_members(tenant_id,user_id,role) VALUES($1,$2,'admin')", [tenant,user]);
+  await handle.pool.query("INSERT INTO users.sessions(token_hash,user_id,active_tenant_id,expires_at) VALUES($1,$2,$3,now()+interval '1 hour')", [createHash("sha256").update(token).digest("hex"),user,tenant]);
+  const buildId = await newBuild("Change this temperature monitor", {tenantId:tenant});
+  const spec = {...emptySpec(),settled:true,capabilities:input.spec.capabilities,sense:{what:["temperature"],interval_s:input.spec.interval_s},connect:{transport:input.spec.transport,experience:[]},power:{source:input.spec.power_source},open_questions:[]};
+  await handle.pool.query("INSERT INTO builds.specs(build_id,version,data,confidence) VALUES($1,1,$2,1)", [buildId,JSON.stringify(spec)]);
+  const planning = createDb(appConfig, {max:2,statementTimeoutMs:4000});
+  let release!:()=>void;
+  const gate = new Promise<void>(resolve=>{release=resolve;});
+  try {
+    for (const part of input.parts) await handle.pool.query("UPDATE registry.parts SET status='active',definition=$3 WHERE id=$1 AND version=$2", [part.id,part.version,JSON.stringify(part)]);
+    for (const row of input.compat) await handle.pool.query("INSERT INTO registry.compat_matrix(driver_pkg,driver_ver,runtime_ver,brain_id,status) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", [row.driver_pkg,row.driver_ver,row.runtime_ver,row.brain_id,row.status]);
+    const store=createBuildPlanStore(planning.pool,{schema_version:1,runtime:input.spec.runtime,profiles:input.profiles,connectors:input.connectors});
+    const cookie=`${SESSION_COOKIE}=${token}`, body={expected_tenant_id:tenant,spec_version:1};
+    const solved=await store.solve(cookie,"localhost",buildId,body);
+    expect(solved.status).toBe("solved");
+    let releaseModel!:()=>void, modelEntered!:()=>void;
+    const modelGate=new Promise<void>(resolve=>{releaseModel=resolve;});
+    const modelRunning=new Promise<void>(resolve=>{modelEntered=resolve;});
+    const {deps}=setup([async()=>{modelEntered();await modelGate;return goldenTurn("fridge-monitor",1);}]);
+    // Start before acceptance, after the turn's initial status UPDATE. Metering
+    // is inert here so the schedule isolates final spec publication.
+    const bind = deps.bindDb;
+    deps.bindDb = db => ({...bind(db),meter:createMeter({insert:async()=>{},write:()=>{},project:undefined})});
+    const turn=handleTurn(deps,buildId);
+    await modelRunning;
+    let entered!:()=>void;const locked=new Promise<void>(resolve=>{entered=resolve;});
+    planning.pool.once("acquire",client=>{
+      const original=client.query;
+      client.query=((...args:unknown[])=>{
+        if(typeof args[0]==="string"&&args[0].startsWith("SELECT * FROM builds.plans")){
+          client.query=original;entered();return gate.then(()=>Reflect.apply(original,client,args));
+        }
+        return Reflect.apply(original,client,args);
+      }) as typeof client.query;
+    });
+    const accepting=store.accept(cookie,"localhost",buildId,solved.plans[0]!.version,body);
+    await locked;
+    releaseModel();
+    let waiting=false;
+    for(let i=0;i<150;i++){
+      waiting=Boolean((await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FOR UPDATE%' AND query LIKE '%builds%'")).rowCount);
+      if(waiting)break;await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    expect(waiting).toBe(true);
+    expect((await specsOf(buildId)).map(row=>row.version)).toEqual([1]);
+    expect((await handle.pool.query("SELECT 1 FROM builds.build_messages WHERE build_id=$1 AND role='assistant'",[buildId])).rowCount).toBe(0);
+    release();
+    expect((await accepting).accepted_at).not.toBeNull();
+    await turn;
+    expect((await specsOf(buildId)).at(-1)?.version).toBe(2);
+    const page=await store.list(cookie,"localhost",buildId);
+    expect(page.current_spec_version).toBe(2);
+    expect(page.plans[0]!.spec_version).toBe(1);
+  } finally {
+    release();await planning.pool.end();
+    await handle.pool.query("DELETE FROM registry.compat_matrix");
+    await handle.pool.query("DELETE FROM registry.parts");
+    await loadParts(handle.db,readValidatedParts(REGISTRY_ROOT));
+  }
+});

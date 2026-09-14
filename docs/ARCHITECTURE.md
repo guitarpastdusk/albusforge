@@ -327,7 +327,7 @@ Six schemas in one Postgres 16 cluster: `users`, `registry`, `builds`, `orders`,
 builds(id, user_id, status, ask_text, created_at, updated_at)
   status: asking|specifying|planning|coding|bodying|ready|ordered
 specs(build_id, version, data, confidence, open_questions)
-plans(build_id, version, part_versions, wiring_graph, power_budget, bom, solver_log)
+plans(build_id, version, spec_version, part_versions, wiring_graph, power_budget, bom, solver_log, metadata, accepted_at, accepted_by)
 code_bundles(build_id, version, storage_ref, compile_status, compile_log)
 bodies(build_id, version, step_ref, stl_refs, lint_report, serial)
 
@@ -495,6 +495,8 @@ Projects, Usage and device telemetry now have segment-specific loading and recov
 
 **Build-event authorization snapshots:** each gateway SSE poll resolves the session and tenant membership, checks build ownership, and reads state/messages inside one short PostgreSQL `REPEATABLE READ READ ONLY` transaction. It commits before writing events or waiting for socket backpressure. An admitted batch may finish after access is revoked; messages committed after that snapshot cannot enter it, and the next poll closes after revocation, expiry, membership removal or ownership loss. The poll owns its lease explicitly from BEGIN through bounded cleanup, handles checked-out socket errors, and discards uncertain connections; no stream-lifetime transaction or extra pool is introduced. See [`BUILD-EVENT-SECURITY.md`](BUILD-EVENT-SECURITY.md).
 
+**Trusted build plans (B3):** the project plan page calls gateway plan list/generate/accept endpoints backed by the existing `builds.plans` table. Shared versioned schemas retain exact spec revision, pinned BOM/wiring/power, runtime, immutable registry/profile/compatibility snapshots and canonical input digest. Managed family/member authorization and intended-tenant admission precede the build lock; intake publication takes the same build lock before child writes. Acceptance is idempotent for one version per spec and becomes historical after a newer spec. The pure matcher runs with bounded local inputs; source-controlled production assembly profiles remain empty and all registry parts remain drafts, so no synthetic fixture enables production plans. Firmware/provisioning consume current accepted plans with independent eligibility checks. See [`BUILD-PLANS.md`](BUILD-PLANS.md).
+
 **Same-host workspace switching:** `PUT /v1/me/active-tenant` changes only the caller’s session after current family validity and locked target membership checks. A managed write lease covers startup, transport errors and cleanup. The account header shows workspace/role and offers switching only for multiple memberships on the main host. Switching first unmounts tenant content/streams, coordinates other tabs, then opens Projects with a full document navigation; uncertain outcomes stay hidden until reconciliation. Protected content and the independently streamed Header reconcile their rendered user/tenant against a fresh session before admitting tenant components or new-build actions, including switches missed before hydration. New-build requests bind an explicit expected tenant; gateway rejects mismatches before side effects and pins the admitted owner, preventing silent retargeting after a cross-tab switch. Deploy this gateway check before the web. Host-only cookies and family revocation are preserved; cross-subdomain session handoff remains separate. See [`WORKSPACE-SWITCHING.md`](WORKSPACE-SWITCHING.md).
 
 **Email-code recovery UI:** signup/signin support changing email without dropping the guarded destination, local 30-second resend pacing, and separately tracked request/verify cooldowns derived from sanitized backend `Retry-After`. Local pacing does not block verification or sending to an edited address; backend limits persist through email changes because they can be per IP. Wrong/expired/exhausted codes remain intentionally indistinguishable. Delivery/network failures preserve input and offer retry; signup success no longer asserts a specific saved build. See [`AUTH-RECOVERY-UI.md`](AUTH-RECOVERY-UI.md).
@@ -551,7 +553,7 @@ A **sixth constraint is implied by the compliance block** (§9): generation rest
 
 ### 7.3 Codegen and the compile gate
 
-B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations; trusted plan acceptance, firmware generation and production credential handoff are assigned work, not completed capabilities. That ledger separates software verification from the required registry and physical hardware evidence.
+B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations. B3 now produces and accepts versioned plans through a trusted server path, while production hardware eligibility still awaits reviewed registry/profile evidence. Firmware generation and production credential handoff remain separate workstreams until their dedicated implementations land. That ledger separates software verification from the required registry and physical hardware evidence.
 
 Invariants:
 

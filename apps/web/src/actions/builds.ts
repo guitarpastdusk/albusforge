@@ -54,6 +54,7 @@ function refusedTurn(error: unknown): { ok: false; message: string } | null {
   if (error.status === 429) {
     return { ok: false, message: `That’s a lot of messages at once. Your message wasn’t sent: ${waitFor(retryAfterSeconds(error))}, then send it again.` };
   }
+  if (error.status === 409 && error.code === "WORKSPACE_CHANGED") return { ok: false, message: "Your workspace changed. Reload before starting a build; nothing was sent." };
   if (error.status === 409 && error.code === "TURN_IN_PROGRESS") {
     return { ok: false, message: "Still working on the last reply. Your message wasn’t sent: send it again once the reply arrives." };
   }
@@ -61,10 +62,11 @@ function refusedTurn(error: unknown): { ok: false; message: string } | null {
 }
 
 /** POST /v1/builds: the ask becomes the first message. Returns the build and its transcript so far. */
-export async function startBuild(askText: unknown, clientMessageId: unknown): Promise<ActionResult<BuildTranscript>> {
+export async function startBuild(askText: unknown, clientMessageId: unknown, expectedTenantId?: unknown): Promise<ActionResult<BuildTranscript>> {
   try {
+    if (!z.uuid().nullable().safeParse(expectedTenantId).success) return { ok: false, message: "Reload to confirm your workspace before starting a build." };
     const clientId = ClientMessageId.safeParse(clientMessageId);
-    const parsed = CreateBuildRequest.safeParse({ ask_text: askText, client_message_id: clientMessageId });
+    const parsed = CreateBuildRequest.safeParse({ ask_text: askText, client_message_id: clientMessageId, expected_tenant_id: expectedTenantId });
     if (!clientId.success || !parsed.success) return { ok: false, message: "Describe the device you want to start." };
 
     const client = await sessionClient();

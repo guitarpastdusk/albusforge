@@ -2,6 +2,7 @@
 
 import { BUILD_EVENT, BuildUpdatedEvent, MessageCreatedEvent } from "@albusforge/schema";
 import { createContext, useContext, useReducer, type ReactNode } from "react";
+import { useWorkspaceTransition } from "@/components/shell/WorkspaceBoundary";
 import { refreshBuild, sendBuildMessage, startBuild } from "@/actions/builds";
 import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
 import { useEventStream } from "@/lib/sse/useEventStream";
@@ -72,6 +73,7 @@ export function BuildConversation({
   enclosurePreview?: EnclosurePreviewData | null;
   children: ReactNode;
 }) {
+  const workspace = useWorkspaceTransition();
   const [state, dispatch] = useReducer(conversationReducer, initial, initConversation);
   const typing = isTyping(state);
   const { buildId } = state;
@@ -79,11 +81,11 @@ export function BuildConversation({
 
   const send = (text: string): boolean => {
     const trimmed = text.trim();
-    if (!trimmed || state.sending || typing) return false;
+    if (!trimmed || state.sending || typing || (workspace && (workspace.blocked || workspace.expectedTenant === undefined))) return false;
 
     const clientMessageId = clientMessageIdFor(state.unsent, trimmed, () => crypto.randomUUID());
     dispatch({ type: "sent", text: trimmed, at: new Date().toISOString(), clientMessageId });
-    void runSend(buildId, trimmed, clientMessageId, ACTIONS, dispatch).then((transcript) => {
+    void runSend(buildId, trimmed, clientMessageId, { ...ACTIONS, startBuild: (text, id) => startBuild(text, id, workspace?.expectedTenant) }, dispatch).then((transcript) => {
       if (!buildId && transcript) window.history.replaceState(null, "", `/build/${encodeURIComponent(transcript.buildId)}`);
     });
     return true;

@@ -3,7 +3,7 @@
  * read the session, sign out, and claim anonymous builds on the way. Codes
  * are captured from a recording email adapter; nothing leaves localhost.
  */
-import { buildMessages, builds, createDb, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, users } from "@albusforge/db";
+import { buildMessages, builds, createDb, type DbConfig, emailCodes, llmCalls, sessions, tenantMembers, tenants, users } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -51,7 +51,7 @@ function makeApp(overrides: Partial<AuthOptions> = {}, chat: Partial<ChatOptions
     ping: async () => void (await handle.pool.query("SELECT 1")),
     log,
     chat: { store: createChatStore(handle.db, handle.pool), turns: createTurnScheduler({ intake: null, log }), includeDrafts: false, ...chat },
-    auth: { store: createAuthStore(handle.db, { newSessionToken }), email, ...overrides },
+    auth: { store: createAuthStore(handle.db, { newSessionToken, pool: handle.pool }), email, ...overrides },
   });
   apps.push(app);
   return app;
@@ -188,7 +188,7 @@ describe("POST /v1/auth/code", () => {
   });
 
   it("serializes concurrent requests for one email, so exactly one code stays live", async () => {
-    const store = createAuthStore(handle.db, { newSessionToken });
+    const store = createAuthStore(handle.db, { newSessionToken, pool: handle.pool });
     const address = freshEmail();
     const issued = await Promise.all(Array.from({ length: 6 }, () => store.issueCode(address)));
     const rows = await handle.db.select().from(emailCodes).where(eq(emailCodes.email, normalizeEmail(address)));
@@ -616,6 +616,93 @@ describe("a session that loses access", () => {
       run: async () => void (await handle.db.delete(tenantMembers).where(eq(tenantMembers.userId, removed.me.user.id))),
     });
     expect(dropped.closed).toBe(true);
+  });
+});
+
+describe("PUT /v1/me/active-tenant", () => {
+  const switchTo = (app: FastifyInstance, cookie: string, tenantId: string, headers: Record<string, string> = {}) => app.inject({
+    method: "PUT", url: "/v1/me/active-tenant", headers: { host: "localhost", origin: "http://localhost", cookie, ...headers }, payload: { tenant_id: tenantId },
+  });
+  const targetFor = async (userId: string) => {
+    const [target] = await handle.db.insert(tenants).values({ name: "Team workspace" }).returning();
+    await handle.db.insert(tenantMembers).values({ tenantId: target!.id, userId, role: "viewer" });
+    return target!.id;
+  };
+  it("switches only the calling session and preserves its cookie and family", async () => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());
+    const independent = await signIn(app, signedIn.me.user.email);
+    const target = await targetFor(signedIn.me.user.id);
+    const response = await switchTo(app, signedIn.cookie, target);
+    expect(response.statusCode).toBe(204);expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(Me.parse((await me(app, signedIn.cookie)).json()).tenant).toMatchObject({ id: target, role: "viewer" });
+    const row = (await handle.db.select().from(sessions).where(eq(sessions.tokenHash, hashSessionToken(signedIn.token))))[0]!;
+    expect(row.parentSessionId).toBeNull();expect(row.revokedAt).toBeNull();
+    expect(Me.parse((await me(app, independent.cookie)).json()).tenant.id).toBe(signedIn.me.tenant.id);
+    expect((await switchTo(app, signedIn.cookie, target)).statusCode).toBe(204);
+  });
+  it("rejects foreign targets and forged credentials, while allowing recovery from removed active membership", async () => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());const other = await signIn(app, freshEmail());
+    expect((await switchTo(app, signedIn.cookie, other.me.tenant.id)).statusCode).toBe(403);
+    expect((await switchTo(app, "__Host-albus_session=forged", other.me.tenant.id)).statusCode).toBe(401);
+    expect((await switchTo(app, signedIn.cookie, "bad-id")).statusCode).toBe(400);
+    const target = await targetFor(signedIn.me.user.id);
+    await handle.db.delete(tenantMembers).where(eq(tenantMembers.tenantId, signedIn.me.tenant.id));
+    expect((await switchTo(app, signedIn.cookie, target)).statusCode).toBe(204);
+    expect(Me.parse((await me(app, signedIn.cookie)).json()).tenant.id).toBe(target);
+  });
+  it("rejects cross-origin and tenant-host switching", async () => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());
+    const target = await targetFor(signedIn.me.user.id);
+    expect((await switchTo(app, signedIn.cookie, target, { origin: "https://evil.example" })).statusCode).toBe(403);
+    expect((await switchTo(app, signedIn.cookie, target, { host: "team.albusforge.ai", origin: "https://team.albusforge.ai" })).statusCode).toBe(409);
+    expect(Me.parse((await me(app, signedIn.cookie)).json()).tenant.id).toBe(signedIn.me.tenant.id);
+  });
+  it.each(["revocation", "membership"] as const)("rechecks %s after waiting for its row lock", async (loss) => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());const target = await targetFor(signedIn.me.user.id);
+    const blocker = await handle.pool.connect();let response: ReturnType<typeof switchTo> | undefined;
+    try {
+      await blocker.query("BEGIN");const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      if (loss === "revocation") await blocker.query("UPDATE users.sessions SET revoked_at=now() WHERE token_hash=$1", [hashSessionToken(signedIn.token)]);
+      else await blocker.query("DELETE FROM users.tenant_members WHERE tenant_id=$1 AND user_id=$2", [target, signedIn.me.user.id]);
+      response = switchTo(app, signedIn.cookie, target);
+      await expect.poll(async () => (await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))", [pid])).rowCount, { timeout: 5000 }).toBe(1);
+      await blocker.query("COMMIT");
+      expect((await response).statusCode).toBe(loss === "revocation" ? 401 : 403);
+      expect((await handle.db.select().from(sessions).where(eq(sessions.tokenHash, hashSessionToken(signedIn.token))))[0]!.activeTenantId).toBe(signedIn.me.tenant.id);
+    } finally { await blocker.query("ROLLBACK");blocker.release();await response; }
+  });
+  it("rechecks actual session expiry after a membership lock wait", async () => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());const target = await targetFor(signedIn.me.user.id);
+    const blocker = await handle.pool.connect();let response: ReturnType<typeof switchTo> | undefined;
+    try {
+      await blocker.query("BEGIN");const pid = (await blocker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await blocker.query("SELECT 1 FROM users.tenant_members WHERE tenant_id=$1 FOR UPDATE", [target]);
+      await handle.pool.query("UPDATE users.sessions SET expires_at=clock_timestamp()+interval '3 seconds' WHERE token_hash=$1", [hashSessionToken(signedIn.token)]);
+      response = switchTo(app, signedIn.cookie, target);
+      await expect.poll(async () => (await handle.pool.query("SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))", [pid])).rowCount, { timeout: 5000 }).toBe(1);
+      await expect.poll(async () => (await handle.pool.query("SELECT expires_at <= clock_timestamp() AS expired FROM users.sessions WHERE token_hash=$1", [hashSessionToken(signedIn.token)])).rows[0].expired, { timeout: 5000 }).toBe(true);
+      await blocker.query("COMMIT");expect((await response).statusCode).toBe(401);
+    } finally { await blocker.query("ROLLBACK");blocker.release();await response; }
+  });
+  it("preserves child-session lineage and family sign-out after switching", async () => {
+    const app = makeApp();const signedIn = await signIn(app, freshEmail());const target = await targetFor(signedIn.me.user.id);
+    const parent = (await handle.db.select().from(sessions).where(eq(sessions.tokenHash, hashSessionToken(signedIn.token))))[0]!;
+    const token = newSessionToken();const cookie = `__Host-albus_session=${token}`;
+    await handle.db.insert(sessions).values({ tokenHash: hashSessionToken(token), userId: parent.userId, activeTenantId: parent.activeTenantId, parentSessionId: parent.id, expiresAt: parent.expiresAt });
+    expect((await switchTo(app, cookie, target)).statusCode).toBe(204);
+    expect((await handle.db.select().from(sessions).where(eq(sessions.tokenHash, hashSessionToken(token))))[0]!.parentSessionId).toBe(parent.id);
+    expect((await app.inject({ method: "POST", url: "/v1/auth/signout", headers: { cookie: signedIn.cookie } })).statusCode).toBe(204);
+    expect((await switchTo(app, cookie, signedIn.me.tenant.id)).statusCode).toBe(401);
+  });
+  it("closes an old build stream after switching without emitting later messages", async () => {
+    const app = makeApp({}, { sse: { pollMs: 20, maxMs: 10_000 } });await app.listen({ port: 0, host: "127.0.0.1" });
+    const signedIn = await signIn(app, freshEmail());const target = await targetFor(signedIn.me.user.id);
+    const buildId = CreatedBuild.parse((await app.inject({ method: "POST", url: "/v1/builds", headers: { cookie: signedIn.cookie }, payload: { ask_text: "Workspace A" } })).json()).id;
+    const stream = await readUntilClosed(`http://127.0.0.1:${(app.server.address() as AddressInfo).port}/v1/builds/${buildId}/events`, signedIn.cookie, { afterEvents: 1, run: async () => {
+      expect((await switchTo(app, signedIn.cookie, target)).statusCode).toBe(204);
+      await handle.db.insert(buildMessages).values({ buildId, role: "assistant", text: "Private old-workspace message" });
+    } });
+    expect(stream.closed).toBe(true);expect(stream.text).not.toContain("Private old-workspace message");
   });
 });
 

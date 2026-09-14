@@ -9,6 +9,7 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DeviceChat } from "@/components/devices/DeviceChat";
+import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
 import { apiGet, orNotFound } from "@/lib/api/server";
@@ -33,7 +34,10 @@ export default async function DevicePage({
   const me = await requireSession(`/live/${encodeURIComponent(deviceId)}`);
   if (!TelemetryDeviceParams.safeParse({ id: deviceId }).success) notFound();
   const detail = await orNotFound(
-    apiGet(routes.telemetry.device.path(deviceId), TelemetryDeviceDetail),
+    apiGet(
+      `${routes.telemetry.device.path(deviceId)}?presentation=1`,
+      TelemetryDeviceDetail,
+    ),
   );
   const latest = await orNotFound(
     apiGet(routes.telemetry.latest.path(deviceId), TelemetryLatest),
@@ -65,25 +69,65 @@ export default async function DevicePage({
     }
   }
   const { device } = detail;
-  const input = "min-w-0 w-full max-w-full border border-current/20 rounded-lg px-3 py-2 bg-transparent";
+  const input =
+    "min-w-0 w-full max-w-full border border-current/20 rounded-lg px-3 py-2 bg-transparent";
   return (
     <PageContainer>
       <Link href="/live" className="text-muted">
         ← Live systems
       </Link>
       <h1 className="text-3xl font-semibold mt-5 break-all">
-        Device {device.id}
+        {device.display_name ?? `Device ${device.id}`}
       </h1>
+      {device.display_name && (
+        <p className="mt-2 text-sm text-muted break-all">
+          Device ID: {device.id}
+        </p>
+      )}
+      <Link
+        href={`/setup?device=${device.id}`}
+        className="inline-block mt-3 text-coral-deep underline"
+      >
+        Check device setup
+      </Link>
+      {detail.permissions?.edit_metadata ? (
+        <DeviceNameEditor
+          key={`${device.id}:${device.metadata_version}`}
+          id={device.id}
+          name={device.display_name ?? null}
+          version={device.metadata_version ?? 0}
+        />
+      ) : (
+        <p className="mt-3 text-sm text-muted">
+          Device labels can be edited by workspace operators and admins.
+        </p>
+      )}
       <p className="mt-3">
         {device.revoked_at
           ? "Credential revoked"
-          : device.status.replace("_", " ")}{" "}
+          : device.status === "never_seen"
+            ? "Awaiting first upload"
+            : device.status === "online"
+              ? "Online"
+              : "Offline"}{" "}
         · Last packet: {device.last_seen_at ?? "never"}
       </p>
       <p className="text-muted mt-2">
         Snapshot on page load. Refresh to see new uploads; sample times below
         may differ from packet arrival.
       </p>
+      <p className="mt-2 text-sm text-muted">
+        Expected upload interval: {device.next_s} seconds. Offline means no
+        recent packet within {Math.max(60, device.next_s * 3)} seconds.{" "}
+        {device.revoked_at
+          ? "The credential is revoked; new uploads are blocked, but stored readings remain available."
+          : "Status is a current connectivity estimate, not a historical alert."}
+      </p>
+      {!device.health && (
+        <p className="mt-2 text-sm text-muted">
+          No device health packet has been recorded.
+        </p>
+      )}
       {device.health && (
         <p className="mt-3">
           Health: {device.health.health.join(", ") || "No faults reported"}
@@ -210,7 +254,11 @@ export default async function DevicePage({
           key={`${me.tenant.id}:${deviceId}`}
           deviceId={deviceId}
           greeting="Choose a channel and time window, then ask about its stored readings."
-          channels={channels.map((key) => ({ key, label: key, unit: detail.channels[key]!.unit }))}
+          channels={channels.map((key) => ({
+            key,
+            label: key,
+            unit: detail.channels[key]!.unit,
+          }))}
         />
       </section>
     </PageContainer>

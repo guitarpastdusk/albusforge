@@ -640,6 +640,8 @@ M6c read API (merged PR #44) adds gateway `/v1/telemetry/devices` list/detail/la
 
 The portal now uses those read endpoints for a minimal stored-telemetry monitor at `/live` and `/live/:deviceId`: session-bound fleet pagination, latest provisioned channels/health and selectable bounded UTC history. Timestamp-positioned dots and sample tables preserve gaps, zero values and exact sequence identity; expiry, excessive point counts and pending rollups are explicit. This is refresh-based UI, without fabricated build metadata, Ask/rules or production SSE. See [`TELEMETRY-UI.md`](TELEMETRY-UI.md).
 
+Fleet management extends this monitor with literal name/UUID search, current-status filters and bounded cursor pages, plus versioned display-name edits for operators/admins. Opt-in `presentation=1` preserves legacy strict read payloads; migration 0005 adds presentation fields and the tenant/cursor index. Mutations use same-origin Server Actions and a managed PostgreSQL write lease with current session/membership locks and compare-and-swap conflict handling. Packet receipt, sample timestamps and missing health remain distinct; no historical availability is inferred. See [`FLEET-MANAGEMENT.md`](FLEET-MANAGEMENT.md).
+
 ### 7.7 Marketplace
 
 - **Publish** requires a build in `ready` state (compiled and linted). Creates an immutable `build_snapshot`, then a listing. The story is written and confirmed at publish time and stored on the snapshot; the private chat transcript is never readable through a listing (PORTAL.md §3). MVP sets `status:"live"` with no review queue but still sets `safety_class` from the same `policy.ts` categories intake uses.

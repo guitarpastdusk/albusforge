@@ -1,5 +1,39 @@
 {
   "schema_version": 1,
-  "runtime": null,
-  "profiles": []
+  "runtime": "0.1.0",
+  "profiles": [
+    {
+      "id": "freenove-esp32s3-n16r8-i2c-usb-v1",
+      "version": "1.0.0",
+      "evidence": "Bench bring-up of a Freenove ESP32-S3-WROOM CAM (N16R8) on 2026-09-13/14: chip identified as ESP32-S3 rev 0.2 with 16 MiB flash and 8 MiB PSRAM, full flash backup MD5-verified, an ESP-IDF 5.5.5 image flashed over serial with hash verified, Wi-Fi joined at -63 dBm and an OTA update accepted (hardware/freenove/README.md and its logs). Sensor I2C is on GPIO47 (SDA) and GPIO21 (SCL) because GPIO8 and GPIO9 are camera data pins D2 and D1 on this board. ESTIMATED, NOT MEASURED: regulator efficiency, quiescent draw and the usable battery fraction - see docs/DEMO-ASSUMPTIONS.md.",
+      "brain": { "id": "C-002", "version": "1.0.0" },
+      "source": { "id": "E-005", "version": "1.1.0" },
+      "source_connector": "usb-c-v1",
+      "brain_input": "primary",
+      "regulator_efficiency": 0.85,
+      "quiescent_source_ma": 12,
+      "battery_usable_fraction": 0.8,
+      "ports": [
+        {
+          "id": "qt-i2c",
+          "interface": "i2c",
+          "connector": "hsx-i2c-4pin-v1",
+          "rail": "brain",
+          "max_current_ma": 100,
+          "resources": ["GPIO47", "GPIO21"],
+          "capacity": 8
+        },
+        {
+          "id": "ph-i2c",
+          "interface": "i2c",
+          "connector": "stemma-i2c-ph-4pin-v1",
+          "rail": "brain",
+          "max_current_ma": 100,
+          "resources": ["GPIO47", "GPIO21"],
+          "capacity": 8
+        }
+      ],
+      "activity": []
+    }
+  ]
 }

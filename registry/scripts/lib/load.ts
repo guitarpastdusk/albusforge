@@ -42,8 +42,24 @@ export function loadRegistry(root: string = REGISTRY_ROOT): RawRegistry {
     .filter((f) => f.endsWith(".json"))
     .sort();
 
+  // A part id may have more than one live version (a draft that is already
+  // loaded into registry.parts, plus the promoted version a build pins).
+  // `part.json` is the base version; `versions/<semver>.json` holds any other.
+  // Part versions are immutable once loaded (scripts/load.ts), so promoting a
+  // part means adding a file here, never editing the loaded one.
+  const partFiles = partDirs.flatMap((dir) => {
+    const versionsDir = path.join(root, "parts", dir, "versions");
+    const extra = existsSync(versionsDir)
+      ? readdirSync(versionsDir)
+          .filter((f) => f.endsWith(".json"))
+          .sort()
+          .map((f) => `parts/${dir}/versions/${f}`)
+      : [];
+    return [`parts/${dir}/part.json`, ...extra].map((rel) => readJson(root, rel, dir));
+  });
+
   return {
-    parts: partDirs.map((dir) => readJson(root, `parts/${dir}/part.json`, dir)),
+    parts: partFiles,
     connectors: connectorFiles.map((f) => readJson(root, `connectors/${f}`, f.slice(0, -".json".length))),
     i2cShared: readJson(root, "i2c-shared.json", "i2c-shared"),
     knownIssues: readJson(root, "known-issues.json", "known-issues"),

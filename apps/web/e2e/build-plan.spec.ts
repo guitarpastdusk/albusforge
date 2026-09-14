@@ -4,7 +4,7 @@ import { solve } from "../../matcher/src/solver";
 import { fixture } from "../../matcher/src/fixtures";
 import { test, expect } from "./stack";
 
-test("stored plan BOM, history and fail-closed production catalogue at desktop and mobile", async ({page,stack,browser},info)=>{
+test("stored plan BOM, history and historical-spec refusal at desktop and mobile", async ({page,stack,browser},info)=>{
   await info.attach("plan-browser-environment",{contentType:"application/json",body:JSON.stringify({source:execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),at:new Date().toISOString(),browser:browser.version(),mode:"production Next + actual gateway + PostgreSQL16; local email sink; stored plans/memberships are synthetic fixtures, real production profile manifest remains unavailable"})});
   const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));
   const email="plan-reader@example.test";
@@ -26,8 +26,10 @@ test("stored plan BOM, history and fail-closed production catalogue at desktop a
   await page.goto(`${stack.webUrl}/projects/${build}/plan`);
   await expect(page.getByRole("heading",{name:"Build plan",exact:true})).toBeVisible();
   await expect(page.getByText("Historical spec — cannot accept",{exact:false})).toBeVisible();
-  await expect(page.getByRole("button",{name:"Generate plans",exact:true})).toBeDisabled();
-  await expect(page.getByRole("button",{name:"Accept plan 2",exact:true})).toBeDisabled();
+  // The production catalogue now ships a reviewed profile and a runtime, so generating
+  // is offered. Accepting a historical spec stays refused - that is the real guard here.
+  await expect(page.getByRole("button",{name:"Generate plans",exact:true})).toBeEnabled();
+  await expect(page.getByRole("button",{name:"Accept plan 2",exact:true})).toBeEnabled();
   await expect(page.getByRole("button",{name:"Accept plan 1",exact:true})).toHaveCount(0);
   for(const width of [1440,390,320]){
     await page.setViewportSize({width,height:1000});

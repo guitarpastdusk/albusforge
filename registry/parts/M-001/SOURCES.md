@@ -19,3 +19,21 @@ Not verified:
   - Neither is an SG90.
 - SG90 tab hole spacing, so the mount is `unspecified`.
 - The control input's logic threshold, so `logic_v` is null. Hobby servos are often driven from 3.3 V PWM, but no SG90 sheet says so. The logic-level check skips this part until one does, and the schema rejects null once the part is past draft.
+
+## Version 1.1.0 (hackathon demo, 2026-09-14) — estimates, NOT authoritative
+
+`versions/1.1.0.json` promotes this part to `active` so the demo build can pin
+it. `part.json` (1.0.0, draft) is unchanged on purpose: that version is already
+loaded into `registry.parts`, where a version is immutable. Every value added
+for 1.1.0 is a guess. See `docs/DEMO-ASSUMPTIONS.md`.
+
+| Field | 1.1.0 value | Basis | What replaces it |
+| --- | --- | --- | --- |
+| `electrical.logic_v` | `[3.0, 5.5]` | **Estimate.** No SG90 sheet states a control-input threshold. 3.0 V is the low end at which the common AA51880/equivalent servo IC is reported to latch a pulse; 5.5 V is the supply cap. Chosen so the 3.3 V hosts fall inside it and the validator's logic-level check passes | Scope the signal pin against a 3.3 V PWM source on the user's actual servos, or a genuine SG90 control-circuit datasheet |
+| `mount` | `tabs`, `hole_d_mm` 2.2, `hole_spacing_mm` 27.8 | **Estimate.** SparkFun's generic sub-micro servo gives 29.0 mm spacing with 2.0 mm holes; 27.8 / 2.2 is the commonly cited SG90 figure, unverified | Caliper measurement of the user's four servos |
+| `commerce.suppliers` | Adafruit #169 | **Substitute.** As the 1.0.0 notes say, #169 is a TowerPro SG92R, not an SG90. It is listed so the part can leave draft | A confirmed SG90 listing, or renaming this part to the SG92R |
+| `commerce.unit_cost_usd` | 5.95 | The Adafruit #169 price, i.e. the substitute's price | The price of whatever the supplier row finally names |
+
+`logic_v` being non-null is load-bearing: `apps/matcher/src/constraints.ts`
+rejects any non-host, non-power part whose `logic_v` does not contain the
+brain's IO voltage, and the schema rejects null past draft.

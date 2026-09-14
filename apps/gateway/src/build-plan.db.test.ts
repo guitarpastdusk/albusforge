@@ -55,10 +55,22 @@ it("persists real solver outputs with exact immutable evidence, accepts idempote
   expect((await f.post(`/${plans[1]!.version}/accept`)).statusCode).toBe(409);
   expect((await handle.pool.query("SELECT accepted_by FROM builds.plans WHERE build_id=$1 AND accepted_at IS NOT NULL",[f.build])).rows).toEqual([{accepted_by:f.user}]);
 });
-it("keeps the real production profile manifest unavailable and rejects arbitrary browser solver inputs",async()=>{
+it("serves the real production profile manifest and rejects arbitrary browser solver inputs",async()=>{
   const f=await owner();
+  // The shipped registry/assembly-profiles.json now carries a reviewed runtime and profile,
+  // so the default catalogue is available and a plan request reaches the solver instead of
+  // being short-circuited as "unavailable".
   const production=buildApp({parts:{latest:async()=>[]},ping:async()=>{},log:()=>{},telemetryPool:handle.pool});
-  try{const response=await production.inject({method:"POST",url:`/v1/builds/${f.build}/plans`,headers:f.headers,payload:{expected_tenant_id:f.tenant,spec_version:1}});expect(response.json().status).toBe("unavailable");}finally{await production.close();}
+  try{
+    const list=await production.inject({url:`/v1/builds/${f.build}/plans`,headers:f.headers});
+    expect(list.statusCode,list.body).toBe(200);expect(list.json().catalogue_available).toBe(true);
+    const response=await production.inject({method:"POST",url:`/v1/builds/${f.build}/plans`,headers:f.headers,payload:{expected_tenant_id:f.tenant,spec_version:1}});
+    expect(response.statusCode,response.body).toBe(200);
+    expect(response.json().status).not.toBe("unavailable");
+    expect(["solved","infeasible","search_limit"]).toContain(response.json().status);
+  }finally{await production.close();}
+  // Security: solver inputs come from the server's trusted catalogue and registry rows only.
+  // A browser-supplied `parts` array must still be refused outright.
   expect((await f.post("",{parts:input.parts})).statusCode).toBe(400);
   await handle.pool.query("UPDATE registry.parts SET status='draft'");
   expect((await f.post()).json().status).not.toBe("solved");

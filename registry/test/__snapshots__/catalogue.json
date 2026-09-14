@@ -11,63 +11,72 @@
       "capability": "bus.i2c",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "bus.spi",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "bus.uart",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "gpio.adc",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "gpio.digital",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "gpio.pwm",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "net.ble",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "net.wifi",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
       "capability": "power.3v3",
       "unit": null,
       "parts": [
-        "C-001"
+        "C-001",
+        "C-002"
       ]
     },
     {
@@ -144,7 +153,8 @@
       "capability": "read.soil_moisture_pct",
       "unit": "%",
       "parts": [
-        "P-005"
+        "P-005",
+        "P-006"
       ]
     },
     {
@@ -242,6 +252,37 @@
       ]
     },
     {
+      "id": "C-002",
+      "version": "1.0.0",
+      "name": "Freenove ESP32-S3-WROOM CAM (N16R8, 16 MB flash / 8 MB PSRAM, GC0308)",
+      "category": "communication",
+      "provides": [
+        "bus.i2c",
+        "bus.spi",
+        "bus.uart",
+        "gpio.adc",
+        "gpio.digital",
+        "gpio.pwm",
+        "net.ble",
+        "net.wifi",
+        "power.3v3"
+      ],
+      "requires": [],
+      "voltage_range": [
+        4.13,
+        5.5
+      ],
+      "current_draw_ma": {
+        "idle": 0.02,
+        "active": 500
+      },
+      "exposure": "window",
+      "environment_flags": [
+        "needs-line-of-sight",
+        "rf-radiator"
+      ]
+    },
+    {
       "id": "E-001",
       "version": "1.0.0",
       "name": "18650 Li-ion Battery, 2200 mAh",
@@ -287,7 +328,7 @@
     },
     {
       "id": "E-005",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "name": "USB-C 5.1 V 3 A Power Supply",
       "category": "energy",
       "provides": [
@@ -333,7 +374,7 @@
     },
     {
       "id": "M-001",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "name": "SG90 Micro Servo",
       "category": "motion",
       "provides": [
@@ -359,7 +400,7 @@
     },
     {
       "id": "P-001",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "name": "BME280 Temperature, Humidity and Pressure Sensor",
       "category": "physical",
       "provides": [
@@ -457,6 +498,30 @@
       "environment_flags": []
     },
     {
+      "id": "P-006",
+      "version": "1.0.0",
+      "name": "Adafruit STEMMA Soil Sensor (seesaw capacitive moisture + temperature)",
+      "category": "physical",
+      "provides": [
+        "read.soil_moisture_pct"
+      ],
+      "requires": [
+        "bus.i2c"
+      ],
+      "voltage_range": [
+        3,
+        5
+      ],
+      "current_draw_ma": {
+        "idle": 1.5,
+        "active": 5
+      },
+      "exposure": "probe-external",
+      "environment_flags": [
+        "temp:0..50C"
+      ]
+    },
+    {
       "id": "V-004",
       "version": "1.0.0",
       "name": "HC-SR04 Ultrasonic Distance Sensor",
@@ -483,7 +548,7 @@
     },
     {
       "id": "V-005",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "name": "BH1750 Ambient Light Sensor",
       "category": "visual",
       "provides": [

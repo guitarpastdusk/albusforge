@@ -1,1 +1,60 @@
-[]
+[
+  {
+    "id": "freenove-light-climate",
+    "version": "1.0.0",
+    "assembly_profile": { "id": "freenove-esp32s3-n16r8-i2c-usb-v1", "version": "1.0.0" },
+    "runtime": "0.1.0",
+    "part_versions": [
+      { "id": "C-002", "version": "1.0.0" },
+      { "id": "E-005", "version": "1.1.0" },
+      { "id": "P-001", "version": "1.1.0" },
+      { "id": "V-005", "version": "1.1.0" }
+    ],
+    "firmware_profile_id": "freenove-esp32s3-n16r8-i2c-usb-v1",
+    "health_sources": [
+      { "part": { "id": "C-002", "version": "1.0.0" }, "telemetry_schema": "device_health.v1" }
+    ],
+    "channels": [
+      { "key": "illuminance", "range": { "unit": "lux", "min": 0, "max": 65535 }, "part": { "id": "V-005", "version": "1.1.0" }, "telemetry_schema": "illuminance.v1" },
+      { "key": "temperature", "range": { "unit": "degC", "min": -40, "max": 85 }, "part": { "id": "P-001", "version": "1.1.0" }, "telemetry_schema": "climate.v1" },
+      { "key": "humidity", "range": { "unit": "%RH", "min": 0, "max": 100 }, "part": { "id": "P-001", "version": "1.1.0" }, "telemetry_schema": "climate.v1" },
+      { "key": "pressure", "range": { "unit": "hPa", "min": 300, "max": 1100 }, "part": { "id": "P-001", "version": "1.1.0" }, "telemetry_schema": "climate.v1" }
+    ]
+  },
+  {
+    "id": "freenove-light",
+    "version": "1.0.0",
+    "assembly_profile": { "id": "freenove-esp32s3-n16r8-i2c-usb-v1", "version": "1.0.0" },
+    "runtime": "0.1.0",
+    "part_versions": [
+      { "id": "C-002", "version": "1.0.0" },
+      { "id": "E-005", "version": "1.1.0" },
+      { "id": "V-005", "version": "1.1.0" }
+    ],
+    "firmware_profile_id": "freenove-esp32s3-n16r8-i2c-usb-v1",
+    "health_sources": [
+      { "part": { "id": "C-002", "version": "1.0.0" }, "telemetry_schema": "device_health.v1" }
+    ],
+    "channels": [
+      { "key": "illuminance", "range": { "unit": "lux", "min": 0, "max": 65535 }, "part": { "id": "V-005", "version": "1.1.0" }, "telemetry_schema": "illuminance.v1" }
+    ]
+  },
+  {
+    "id": "freenove-soil",
+    "version": "1.0.0",
+    "assembly_profile": { "id": "freenove-esp32s3-n16r8-i2c-usb-v1", "version": "1.0.0" },
+    "runtime": "0.1.0",
+    "part_versions": [
+      { "id": "C-002", "version": "1.0.0" },
+      { "id": "E-005", "version": "1.1.0" },
+      { "id": "P-006", "version": "1.0.0" }
+    ],
+    "firmware_profile_id": "freenove-esp32s3-n16r8-i2c-usb-v1",
+    "health_sources": [
+      { "part": { "id": "C-002", "version": "1.0.0" }, "telemetry_schema": "device_health.v1" }
+    ],
+    "channels": [
+      { "key": "soil_moisture", "range": { "unit": "raw", "min": 0, "max": 4095 }, "part": { "id": "P-006", "version": "1.0.0" }, "telemetry_schema": "soil_moisture.v1" }
+    ]
+  }
+]

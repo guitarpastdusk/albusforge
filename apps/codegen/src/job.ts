@@ -91,6 +91,7 @@ async function runClaimed(options: JobOptions, signal: AbortSignal, publicationC
       plan_version: row.plan_version,
       code_version: row.version,
       interval_s: job.interval_s,
+      numeric: candidate.candidate.numeric,
     }, signal);
     signal.throwIfAborted();
     if (

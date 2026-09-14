@@ -1,0 +1,15 @@
+{
+  "$schema": "../schemas/connector.schema.json",
+  "id": "stemma-i2c-ph-4pin-v1",
+  "version": "1.0.0",
+  "name": "Adafruit STEMMA I2C, JST PH pinout",
+  "housing": "JST PH 2.0 mm, 4-pin",
+  "pins": [
+    { "n": 1, "name": "GND", "role": "ground" },
+    { "n": 2, "name": "VCC", "role": "power" },
+    { "n": 3, "name": "SDA", "role": "sda" },
+    { "n": 4, "name": "SCL", "role": "scl" }
+  ],
+  "interfaces": ["i2c"],
+  "max_voltage": 5.5
+}

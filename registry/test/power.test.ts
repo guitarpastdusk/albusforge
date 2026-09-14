@@ -76,11 +76,23 @@ describe("golden-build power paths on the committed registry", () => {
 
   it("refuses the cell straight onto C-001's 3V3 pin", () => {
     const direct = { ...build("fridge-monitor"), power: { supply: "power.battery", brain_input: "3v3-pin" } };
-    expect(checkPowerPath(direct, live)).toEqual({ ok: false, problems: ["E-001 (2.5–4.2 V) can't feed C-001 3v3-pin (3–3.6 V)"] });
+    expect(checkPowerPath(direct, live)).toEqual({
+      ok: false,
+      problems: [
+        "E-001 (2.5–4.2 V) can't feed C-001 3v3-pin (3–3.6 V)",
+        "E-001 (2.5–4.2 V) can't feed C-002 3v3-pin (3–3.6 V)",
+      ],
+    });
   });
 
   it("can't find a safe window for the 5 V-only HC-SR04 on the 5.1 V ± 5 % supply", () => {
     const ranging = { ...build("presence-alert"), requires: ["read.distance_cm"] };
-    expect(checkPowerPath(ranging, live)).toEqual({ ok: false, problems: ["no part providing read.distance_cm runs from E-005 or C-001's rail"] });
+    expect(checkPowerPath(ranging, live)).toEqual({
+      ok: false,
+      problems: [
+        "no part providing read.distance_cm runs from E-005 or C-001's rail",
+        "no part providing read.distance_cm runs from E-005 or C-002's rail",
+      ],
+    });
   });
 });

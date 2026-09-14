@@ -3,12 +3,15 @@ import { REGISTRY_ROOT } from "@albusforge/registry/load";
 import { CandidatePart } from "@albusforge/schema";
 import { describe, expect, it } from "vitest";
 import { matchCandidates, specCapabilities } from "./candidates";
+import { latestPerId } from "./parts";
 
 const registry = readValidatedParts(REGISTRY_ROOT);
 
 describe("matchCandidates", () => {
   it("returns parts whose capabilities intersect the spec's, sorted by id, with what matched", () => {
-    const shuffled = [...registry].reverse();
+    // The route feeds matchCandidates the store's latest-per-id rows, so several ids
+    // now shipping both a 1.0.0 draft and a promoted 1.1.0 collapse to one row each.
+    const shuffled = [...latestPerId(registry)].reverse();
     const found = matchCandidates(shuffled, ["read.temperature_c", "read.humidity_pct", "power.battery", "read.unknown_x"]);
     expect(found.map((p) => [p.id, p.matched_capabilities])).toEqual([
       ["E-001", ["power.battery"]],

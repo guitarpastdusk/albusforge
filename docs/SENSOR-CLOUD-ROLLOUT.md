@@ -2,7 +2,21 @@
 
 This is the implementation and rollout ledger for the user-authorized single-sensor chatbot work on 2026-09-13. A user selects one of their sensors, selects its channel and time window, and asks questions about its stored measurements. The first slice uses a small hosted language model for bounded intent interpretation and deterministic queries/rendering for numerical evidence.
 
-## Active staging closeout update — 2026-09-14, 00:36 UTC
+## Active production progress and notification update — 2026-09-14, 00:48 UTC
+
+The user-authorized synthetic notification test in staging passed both OPEN and CLOSED/recovery observation. The user explicitly confirmed receipt of both emails at 00:47:01 UTC. Temporary alert-policy and metric cleanup was completed and both resources verified absent with 404; metric cleanup recovered at 00:44:34 UTC. The private evidence record `monitoring-probe-6da5fddd0d4841edbc47db33b5a48ff0.json` records the observation, cleanup recovery and recipient confirmation without publishing the notification address. This validates that synthetic incident/recovery delivery path, not every production alert condition.
+
+Production infrastructure now has a no-change convergence plan. The following promotions completed successfully at source `03f40c1a2cfc3304fe7637e88d37e5c4347f7a9e`, independently checked against GitHub:
+
+| Production release | Successful workflow |
+| --- | --- |
+| Gateway/schema | [34793233220](https://github.com/guitarpastdusk/albusforge/actions/runs/34793233220) |
+| Cloudlink | [34793442684](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442684) |
+| Ask | [34793442633](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442633) |
+
+At root's handoff, telemetry [34793442644](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442644) and intake [34793442663](https://github.com/guitarpastdusk/albusforge/actions/runs/34793442663) were queued. Root reports production synthetic fixture provisioning and ingestion passed. Production reads, provider/model activation, schedules and remaining release/cleanup evidence are still pending; this update does not close production acceptance. The production variable file remains at its disabled model/schedule settings until an applied activation is recorded.
+
+## Earlier staging closeout update — 2026-09-14, 00:36 UTC
 
 Staging active configuration produced a no-change Terraform plan after activation. Root confirmed pipeline fixture credentials revoked/deleted; the earlier quota credentials were separately removed and cleanup verified. The provider SQL/log audit remains the single request `520e1c51-286e-45b1-9173-95208454e904`, recorded cost $0.000386; no additional provider call is implied by this update.
 

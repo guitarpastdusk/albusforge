@@ -443,3 +443,8 @@ jobs:
           python3 -m unittest discover -s firmware/tools -p 'test_*.py'
       - name: Build dedicated worker image
         run: docker build -f apps/codegen/Dockerfile -t fwbuild:ci .
+      - name: Prove packaged native camera compiles without network
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --memory 4g --cpus 2 --pids-limit 256 --tmpfs /tmp:rw,size=2g \
+            fwbuild:ci sh -c 'cp -a /app/firmware/esp32s3-camera /tmp/camera && cd /tmp/camera && idf.py -B /tmp/camera-build build'

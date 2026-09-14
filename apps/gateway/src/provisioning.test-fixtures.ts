@@ -45,7 +45,7 @@ export async function seedProvisioningFixture(pool: Pool, tenantId: string, user
     channels: Object.fromEntries(model.profile.channels.map(channel => [channel.key, channel.range])),
     files: ["bootloader.bin", "partition-table.bin", "albusforge.bin"].map(path => ({ path: path as "bootloader.bin", sha256: "b".repeat(64), size: 100 })),
     flash: { chip: "esp32s3", config_offset: 36864, config_size: 24576 } };
-  const firmware: FirmwarePassedRecord = { schema_version: 1, candidate_id: "synthetic", manifest,
+  const firmware: FirmwarePassedRecord = { schema_version: 1, candidate_id: manifest.profile_id, manifest,
     manifest_digest: createHash("sha256").update(serializeFirmwareManifest(manifest)).digest("hex"),
     compiler: { image_digest: `espressif/idf@sha256:${"c".repeat(64)}`, idf_version: "5.5.3" }, source_sha256: "d".repeat(64),
     instruction: "Synthetic software fixture", diagnostics: "Synthetic record; not actual compiler/hardware acceptance" };

@@ -1,6 +1,6 @@
 import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { syntheticPlanFixture } from "../../codegen/src/testing";
+import { syntheticPlanFixture, syntheticCameraPlanFixture, syntheticCameraApproval } from "../../codegen/src/testing";
 import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import {
@@ -10,6 +10,8 @@ import {
   serializeFirmwareManifest,
 } from "@albusforge/schema";
 import { runOne } from "@albusforge/codegen/worker";
+import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "../../codegen/src/camera-candidate";
+import type { CameraPlanApproval } from "@albusforge/codegen/accepted-candidate";
 import { renderApp, CANDIDATE, CHANNELS } from "@albusforge/codegen/candidate";
 import {
   sha256,
@@ -42,6 +44,7 @@ const artifacts = {
     return bytes;
   },
 };
+const firmwareOptions = { enabled: true, artifacts, cameraApprovals: [] as CameraPlanApproval[] };
 beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({
@@ -77,20 +80,21 @@ beforeAll(async () => {
     parts: { latest: async () => [] },
     ping: async () => {},
     telemetryPool: handle.pool,
-    firmware: { enabled: true, artifacts },
+    firmware: firmwareOptions,
     log: () => {},
   });
 });
 beforeEach(async () => {
   await handle.pool.query("DELETE FROM builds.builds");
   objects.clear();
+  firmwareOptions.cameraApprovals = [];
 });
 afterAll(async () => {
   await app?.close();
   await closeTestPool(handle?.pool);
   await container?.stop();
 });
-async function fixture(role = "operator") {
+async function fixture(role = "operator", camera = false) {
   const tenant = randomUUID(),
     user = randomUUID(),
     build = randomUUID(),
@@ -116,7 +120,8 @@ async function fixture(role = "operator") {
     "INSERT INTO builds.builds(id,tenant_id,ask_text) VALUES($1,$2,'synthetic firmware test')",
     [build, tenant],
   );
-  const { spec, parts, wiring, metadata } = syntheticPlanFixture();
+  const fixtureData = camera ? syntheticCameraPlanFixture() : syntheticPlanFixture();
+  const { spec, parts, wiring, metadata } = fixtureData;
   const pin = (id: string) => ({ id, version: "1.0.0" });
   await handle.pool.query(
     "INSERT INTO builds.specs(build_id,version,data,confidence) VALUES($1,1,$2,1)",
@@ -172,6 +177,7 @@ async function fixture(role = "operator") {
     post,
     get,
     requestId,
+    cameraApproval: camera ? syntheticCameraApproval(fixtureData as ReturnType<typeof syntheticCameraPlanFixture>) : null,
     spec,
     metadata,
   };
@@ -406,24 +412,25 @@ it("refuses publication when a newer spec arrives during compilation", async () 
     ).statusCode,
   ).toBe(404);
 });
-it("concurrent workers claim each queued version once", async () => {
+it("concurrent workers admit one active compiler and later claim each queued version once", async () => {
   const a = await fixture(),
     b = await fixture();
   await a.post();
   await b.post();
   const calls: string[] = [];
-  await Promise.all(
-    [1, 2, 3].map(() =>
-      runOne({
-        pool: handle.pool,
-        artifacts,
-        compile: async (input) => {
-          calls.push(input.build_id);
-          return compiled(input);
-        },
-      }),
-    ),
-  );
+  let entered!: () => void, release!: () => void;
+  const claimed = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const first = runOne({pool:handle.pool,artifacts,compile:async(input)=>{
+    calls.push(input.build_id); entered(); await held; return compiled(input);
+  }});
+  await claimed;
+  try {
+    const contenders = await Promise.all([1,2].map(()=>runOne({pool:handle.pool,artifacts,compile:compiled})));
+    expect(contenders).toEqual([false,false]);
+    expect(calls).toHaveLength(1);
+  } finally { release(); await first; }
+  await runOne({pool:handle.pool,artifacts,compile:async(input)=>{calls.push(input.build_id);return compiled(input);}});
   expect(calls.sort()).toEqual([a.build, b.build].sort());
   expect(new Set(calls).size).toBe(2);
 });
@@ -518,7 +525,7 @@ it("checks accepted spec after a blocked publication obtains the build lock", as
   }
 });
 
-it("fences a superseded worker lease without overwriting its successful replacement", async () => {
+it("fences a superseded row lease and recovers it after admission becomes available", async () => {
   const f = await fixture();
   await f.post();
   let release!: () => void, entered!: () => void;
@@ -540,12 +547,14 @@ it("fences a superseded worker lease without overwriting its successful replacem
   await claimed;
   try {
     await handle.pool.query(
-      "UPDATE builds.code_bundles SET updated_at=now()-interval '16 minutes' WHERE build_id=$1",
-      [f.build],
+      "UPDATE builds.code_bundles SET updated_at=now()-interval '16 minutes',compile_log=jsonb_set(compile_log,'{lease}',to_jsonb($2::text)) WHERE build_id=$1",
+      [f.build, randomUUID()],
     );
-    await runOne({ pool: handle.pool, artifacts, compile: compiled });
+    expect(await runOne({ pool: handle.pool, artifacts, compile: compiled })).toBe(false);
     release();
     await original;
+    expect((await handle.pool.query("SELECT status FROM builds.code_bundles WHERE build_id=$1",[f.build])).rows[0].status).toBe("running");
+    await runOne({ pool: handle.pool, artifacts, compile: compiled });
     expect(
       FirmwarePage.parse((await f.get()).json()).versions[0],
     ).toMatchObject({ status: "passed", attempts: 2 });
@@ -604,4 +613,73 @@ it.each([60, 120, 30])("provisions compiled cadence %i against an accepted 60-se
     await provisioning.close();
     await handle.pool.query("DELETE FROM telemetry.devices WHERE tenant_id=$1", [f.tenant]);
   }
+});
+
+async function cameraCompiled(input:CompileInput):Promise<Compiled> {
+  const result=await compiled(input);
+  result.manifest=FirmwareManifest.parse({...result.manifest,profile_id:CAMERA_CANDIDATE,runtime:CAMERA_RUNTIME,channels:{},capabilities:CAMERA_CAPABILITIES});
+  result.manifestBytes=serializeFirmwareManifest(result.manifest);result.manifest_digest=sha256(result.manifestBytes);
+  result.source=renderCameraApp(input.interval_s);result.source_sha256=sha256(result.source);
+  return result;
+}
+it("keeps camera plans gated, dispatches approved native candidates and renders current/previous source with fixed cadence",async()=>{
+  const f=await fixture("operator",true);
+  expect((await f.post()).statusCode).toBe(422);
+  firmwareOptions.cameraApprovals=[f.cameraApproval!];
+  expect((await f.post()).statusCode).toBe(202);
+  await runOne({pool:handle.pool,artifacts,cameraApprovals:firmwareOptions.cameraApprovals,compile:async()=>{throw Error('wrong numeric compiler');},compileCamera:cameraCompiled});
+  const page=FirmwarePage.parse((await f.get()).json());
+  expect(page.versions[0]).toMatchObject({status:'passed',interval_s:900,source:renderCameraApp(900),manifest:{profile_id:CAMERA_CANDIDATE,channels:{},capabilities:CAMERA_CAPABILITIES}});
+  expect((await f.post({request_id:randomUUID(),based_on:1,instruction:'Set interval to 1800 seconds'})).statusCode).toBe(400);
+  expect((await f.post({request_id:randomUUID(),based_on:1,instruction:'Set interval to 900 seconds'})).statusCode).toBe(202);
+  expect(FirmwarePage.parse((await f.get()).json()).versions[0]?.previous_source).toBe(renderCameraApp(900));
+});
+it.each(['interval','approval','manifest','capabilities','source','files','publication'] as const)("rejects camera %s tampering before publishing artifacts",async(kind)=>{
+  const f=await fixture("operator",true);firmwareOptions.cameraApprovals=[f.cameraApproval!];
+  expect((await f.post()).statusCode).toBe(202);
+  if(kind==='interval')await handle.pool.query("UPDATE builds.code_bundles SET compile_log=jsonb_set(compile_log,'{job,interval_s}','1800') WHERE build_id=$1",[f.build]);
+  await runOne({pool:handle.pool,artifacts,cameraApprovals:kind==='approval'?[]:firmwareOptions.cameraApprovals,compile:compiled,compileCamera:async(input)=>{
+    const result=await cameraCompiled(input);
+    if(kind==='manifest')result.manifest.runtime='0.1.0';
+    if(kind==='capabilities')result.manifest.capabilities![0]!.interval_s=1800;
+    if(kind==='source')result.source=renderApp(900);
+    if(kind==='files')result.files.set('albusforge.bin',Buffer.from('changed'));
+    if(kind==='publication')await handle.pool.query("UPDATE builds.plans SET accepted_at=NULL WHERE build_id=$1",[f.build]);
+    return result;
+  }});
+  const row=(await handle.pool.query('SELECT status,storage_ref FROM builds.code_bundles WHERE build_id=$1',[f.build])).rows[0];
+  expect(row.status).toBe('failed');expect(row.storage_ref).toBeNull();
+});
+
+it("losing the dedicated advisory session aborts compilation and prevents publication",async()=>{
+  const f=await fixture();await f.post();let cancelled=false;
+  await runOne({pool:handle.pool,artifacts,compile:async(input,signal)=>{
+    const owner=(await handle.pool.query("SELECT pid FROM pg_locks WHERE locktype='advisory' AND classid=284713 AND objid=1 AND granted")).rows[0]?.pid;
+    expect(owner).toBeTypeOf('number');
+    // Same restricted role can terminate its own backend; no owner role needed.
+    await handle.pool.query('SELECT pg_terminate_backend($1)',[owner]);
+    await new Promise<void>(resolve=>{if(signal?.aborted)resolve();else signal?.addEventListener('abort',()=>resolve(),{once:true});});
+    cancelled=signal?.aborted===true;
+    return compiled(input);
+  }});
+  expect(cancelled).toBe(true);
+  const row=(await handle.pool.query('SELECT status,storage_ref FROM builds.code_bundles WHERE build_id=$1',[f.build])).rows[0];
+  expect(row.status).toBe('failed');expect(row.storage_ref).toBeNull();expect(objects.size).toBe(0);
+});
+
+it("destroys an uncertain publication transaction before writing failure state on another connection",async()=>{
+  const f=await fixture();await f.post();
+  const owner=await handle.pool.connect();
+  const pid=(await owner.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+  const ordinary=owner.query.bind(owner);
+  owner.query=((...args:unknown[])=>{
+    if(args[0]==='COMMIT')return Promise.reject(Error('simulated transport uncertainty before commit'));
+    return Reflect.apply(ordinary,owner,args);
+  }) as typeof owner.query;
+  const runnerPool={connect:async()=>owner,query:handle.pool.query.bind(handle.pool)} as unknown as pg.Pool;
+  const outcomes:string[]=[];
+  await runOne({pool:runnerPool,artifacts,compile:compiled,observe:outcome=>outcomes.push(outcome)});
+  expect(outcomes).toEqual(['failed']);
+  expect((await handle.pool.query('SELECT status FROM builds.code_bundles WHERE build_id=$1',[f.build])).rows[0].status).toBe('failed');
+  expect((await handle.pool.query('SELECT count(*)::int AS n FROM pg_stat_activity WHERE pid=$1',[pid])).rows[0].n).toBe(0);
 });

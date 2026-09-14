@@ -34,7 +34,9 @@ async function command(
   args: string[],
   cwd: string,
   timeout = 600_000,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const environment = Object.fromEntries(
       Object.entries(process.env).filter(
@@ -61,26 +63,27 @@ async function command(
       detached: true,
     });
     let log = "";
-    const timer = setTimeout(() => {
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        /* Process already exited. */
-      }
-      reject(new Error("Compile deadline exceeded"));
-    }, timeout);
+    let failure: Error | undefined;
+    const stop = (error: Error) => {
+      failure ??= error;
+      try { process.kill(-child.pid!, "SIGKILL"); } catch { /* Already exited. */ }
+    };
+    const abort = () => stop(new Error("Compile lease ownership lost"));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = setTimeout(() => stop(new Error("Compile deadline exceeded")), timeout);
     const collect = (data: Buffer) => {
       log = (log + data.toString()).slice(-20000);
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
-    child.on("error", (error) => {
+    child.on("error", (error) => { failure ??= error; });
+    // Ownership is retained until pipes/process close, including cancellation.
+    child.on("close", (code) => {
       clearTimeout(timer);
-      reject(error);
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(log);
+      signal?.removeEventListener("abort", abort);
+      if (failure) reject(failure);
+      else if (code === 0) resolve(log);
       else reject(new Error(`Compile failed: ${log}`));
     });
   });
@@ -91,7 +94,9 @@ async function compileProfile(
   templateRoot: string,
   mode: "docker" | "idf",
   camera: boolean,
+  signal?: AbortSignal,
 ): Promise<Compiled> {
+  signal?.throwIfAborted();
   input = z
     .strictObject({
       build_id: z.uuid(),
@@ -156,7 +161,8 @@ async function compileProfile(
             "-c",
             "idf.py -B /tmp/idf-build build && mkdir -p /project/build/bootloader /project/build/partition_table && cp /tmp/idf-build/bootloader/bootloader.bin /project/build/bootloader/ && cp /tmp/idf-build/partition_table/partition-table.bin /project/build/partition_table/ && cp /tmp/idf-build/albusforge.bin /project/build/",
           ];
-    const diagnostics = await command(args, workspace);
+    const diagnostics = await command(args, workspace, 600_000, signal);
+    signal?.throwIfAborted();
     const files = new Map<string, Buffer>();
     for (const [name, path] of [
       ["bootloader.bin", "bootloader/bootloader.bin"],
@@ -193,6 +199,7 @@ async function compileProfile(
       ["python3", join(templateRoot, "../tools/bundle.py"), download],
       workspace,
       30000,
+      signal,
     );
     const bundle = await readFile(join(download, "firmware.zip"));
     return {
@@ -216,14 +223,14 @@ async function compileProfile(
   }
 }
 
-/** The existing worker remains numeric-only and uses the original template. */
-export function compile(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker"): Promise<Compiled> {
-  return compileProfile(input, templateRoot, mode, false);
+/** Existing numeric candidate, retaining the original template and editable interval. */
+export function compile(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker", signal?: AbortSignal): Promise<Compiled> {
+  return compileProfile(input, templateRoot, mode, false, signal);
 }
-/** Explicit local candidate build; does not make a camera plan production-approved.
+/** Native camera compiler; the accepted-plan worker separately enforces approval.
  * Resolve pinned managed_components using the committed lock before an offline
  * Docker build, or supply them in the dedicated compiler image for IDF mode. */
-export function compileCameraCandidate(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker"): Promise<Compiled> {
+export function compileCameraCandidate(input: CompileInput, templateRoot: string, mode: "docker" | "idf" = "docker", signal?: AbortSignal): Promise<Compiled> {
   renderCameraApp(input.interval_s);
-  return compileProfile(input, templateRoot, mode, true);
+  return compileProfile(input, templateRoot, mode, true, signal);
 }

@@ -7,7 +7,7 @@ import {
   FirmwareRetryRequest,
 } from "@albusforge/schema";
 import { decodePlan } from "@albusforge/codegen/plan";
-import { editInterval, renderApp } from "@albusforge/codegen/candidate";
+import { editCandidate, renderCandidate, candidateManifestMatches, type CameraPlanApproval } from "@albusforge/codegen/accepted-candidate";
 import type { ArtifactStore } from "@albusforge/codegen/artifacts";
 import type { FastifyInstance } from "fastify";
 import type { Pool, PoolClient } from "pg";
@@ -33,6 +33,7 @@ const fileParams = versionParams.extend({
 export interface FirmwareOptions {
   artifacts?: ArtifactStore;
   enabled: boolean;
+  cameraApprovals?: readonly CameraPlanApproval[];
   dispatch?: () => Promise<void>;
 }
 async function owned(
@@ -47,7 +48,7 @@ async function owned(
   );
   if (!row.rowCount) throw new HttpError(404, "NOT_FOUND", "Build not found");
 }
-async function accepted(client: PoolClient, id: string, version: number) {
+async function accepted(client: PoolClient, id: string, version: number, approvals: readonly CameraPlanApproval[] = []) {
   const row = (
     await client.query(
       `SELECT p.*,s.data AS spec_data FROM builds.plans p JOIN builds.specs s ON s.build_id=p.build_id AND s.version=p.spec_version
@@ -62,7 +63,7 @@ async function accepted(client: PoolClient, id: string, version: number) {
       "Accept the current plan before compiling firmware",
     );
   try {
-    return decodePlan(row);
+    return decodePlan(row, approvals);
   } catch {
     throw new HttpError(
       422,
@@ -99,7 +100,7 @@ export function registerFirmwareRoutes(
           let available = options.enabled && !!options.artifacts;
           if (current)
             try {
-              await accepted(client, id, current);
+              await accepted(client, id, current, options.cameraApprovals);
             } catch {
               available = false;
             }
@@ -109,6 +110,17 @@ export function registerFirmwareRoutes(
               [id],
             )
           ).rows;
+          const sourcePlans = new Map<number, ReturnType<typeof decodePlan>>();
+          if (rows.length) for (const row of (await client.query(
+            "SELECT p.*,s.data AS spec_data FROM builds.plans p JOIN builds.specs s ON s.build_id=p.build_id AND s.version=p.spec_version WHERE p.build_id=$1 AND p.version=ANY($2::int[])",
+            [id, [...new Set(rows.map(row => row.plan_version))]],
+          )).rows) {
+            try { sourcePlans.set(row.version, decodePlan(row, options.cameraApprovals)); } catch { /* Unapproved profiles have no renderable source. */ }
+          }
+          const sourceFor = (version: number, interval: number) => {
+            const plan = sourcePlans.get(version);
+            try { return plan ? renderCandidate(plan.candidate, interval) : null; } catch { return null; }
+          };
           return FirmwarePage.parse({
             build_id: id,
             tenant_id: identity.tenantId,
@@ -127,6 +139,9 @@ export function registerFirmwareRoutes(
                   "ARTIFACT_UNAVAILABLE",
                   "Stored firmware metadata is unavailable",
                 );
+              const candidate = sourcePlans.get(row.plan_version)?.candidate;
+              if (passed?.success && (passed.data.candidate_id !== passed.data.manifest.profile_id || (candidate && !candidateManifestMatches(candidate, passed.data.manifest))))
+                throw new HttpError(503, "ARTIFACT_UNAVAILABLE", "Stored firmware candidate identity is unavailable");
               const prior =
                 job.success && job.data.based_on
                   ? rows.find((other) => other.version === job.data.based_on)
@@ -141,9 +156,9 @@ export function registerFirmwareRoutes(
                 current: row.plan_version === current,
                 interval_s: job.success ? job.data.interval_s : null,
                 attempts: job.success ? job.data.attempts : 0,
-                source: job.success ? renderApp(job.data.interval_s) : null,
+                source: job.success ? sourceFor(row.plan_version, job.data.interval_s) : null,
                 previous_source: priorJob.success
-                  ? renderApp(priorJob.data.interval_s)
+                  ? sourceFor(prior.plan_version, priorJob.data.interval_s)
                   : null,
                 error:
                   typeof row.compile_log?.error === "string"
@@ -181,7 +196,7 @@ export function registerFirmwareRoutes(
               "Firmware compilation is not configured",
             );
 
-          const plan = await accepted(client, id, body.plan_version);
+          const plan = await accepted(client, id, body.plan_version, options.cameraApprovals);
           const previous = (
             await client.query(
               "SELECT * FROM builds.code_bundles WHERE build_id=$1 ORDER BY version DESC",
@@ -245,12 +260,12 @@ export function registerFirmwareRoutes(
           let interval = plan.interval_s;
           if (body.instruction)
             try {
-              interval = editInterval(body.instruction);
+              interval = editCandidate(plan.candidate, body.instruction);
             } catch {
               throw new HttpError(
                 400,
                 "UNSUPPORTED_EDIT",
-                "Use: Set interval to N seconds (10–86400 seconds)",
+                plan.candidate.kind === "camera" ? "Camera capture interval must remain 900 seconds" : "Use: Set interval to N seconds (10–86400 seconds)",
               );
             }
           if (interval < plan.interval_s)
@@ -305,7 +320,7 @@ export function registerFirmwareRoutes(
           ).rows[0];
           if (!row)
             throw new HttpError(404, "NOT_FOUND", "Firmware version not found");
-          await accepted(client, id, row.plan_version);
+          await accepted(client, id, row.plan_version, options.cameraApprovals);
           const job = FirmwareJobRequest.safeParse(row.compile_log?.job);
           if (row.status !== "failed" || !job.success || job.data.attempts >= 3)
             throw new HttpError(

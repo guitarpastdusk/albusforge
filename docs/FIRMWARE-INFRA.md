@@ -75,3 +75,41 @@ Rollback disables new queued builds and pauses the schedule through committed
 Terraform values. Preserve passed artifact objects and database references.
 Existing immutable downloads remain authorized through gateway. Do not delete
 buckets or weaken accepted-plan validation as a rollback mechanism.
+
+## Private device configuration handoff
+
+The empty Secret Manager `device-handoff-keys` resource supplies the existing
+AES-256-GCM one-time configuration handoff, separate from credential-free compiled
+artifacts. `device_provisioning_enabled=false` omits both the gateway secret mount
+(and its accessor binding) and `DEVICE_INGEST_URL`; existing read/revoke operations
+remain available. Enabling adds the keyring mount and the same environment's
+`https://DOMAIN/ingest/v1` endpoint together. Approved provisioning profiles are
+still the reviewed, currently empty, checked-in registry file. This flag does not
+activate a hardware profile or change camera cadence.
+
+After the coordinator creates the empty secret, seed its value outside Terraform
+through a private operator process before enabling the mount. The JSON format is
+`{"active":"key-id","keys":{"key-id":"<canonical 32-byte base64url key>"}}`.
+Generate a fresh cryptographically random 32-byte key; send it to Secret Manager
+through stdin or a protected temporary file, never command arguments, source,
+Terraform variables/state, terminal output or PR evidence. Pin the environment
+explicitly and verify only the created secret version metadata. No key or secret
+version is created by these source definitions.
+
+Set the nonsecret `device_handoff_key_version` to the seeded numeric Secret
+Manager version before enabling handoffs. Terraform pins that version rather
+than `latest`, so key changes require a reviewed configuration change and gateway
+revision. The keyring supports one to four keys. No private key enters the var-file.
+
+For uninterrupted rotation, first publish a keyring containing both keys with
+the old key still active. Commit its version, have the coordinator apply it and
+drain every old-only gateway instance. Then publish a keyring with the new key
+active and both decryption keys retained; commit/apply that version. Keep the old
+key until old-active revisions drain plus the final ten-minute handoff window.
+Only then publish/roll a version that removes it. Switching active in the first
+rollout can send an encrypted handoff to an old instance that cannot decrypt it.
+Creating a secret version alone does not refresh existing environment values.
+Follow the coordinator's workflow drain and shape-change procedure for each apply.
+Reissue expired or deliberately invalidated handoffs through the authorized
+application flow. See [device provisioning](DEVICE-PROVISIONING.md) for binding,
+once-only download, replacement and revocation semantics.

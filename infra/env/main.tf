@@ -40,11 +40,11 @@ module "gateway" {
     OBSERVATION_READS_ENABLED       = var.observation_reads_enabled ? "1" : "0"
     CAMERA_IMAGES_BUCKET            = google_storage_bucket.observations.name
     OBSERVATION_STORAGE_WORKER_PATH = "/app/storage-worker.cjs"
-  }, local.firmware_gateway_env)
-  secret_env = {
+  }, local.firmware_gateway_env, local.device_provisioning_env)
+  secret_env = merge({
     DB_PASSWORD    = { secret = module.sql.app_password_secret }
     RESEND_API_KEY = { secret = google_secret_manager_secret.external["resend-api-key"].id }
-  }
+  }, local.device_provisioning_secrets)
 }
 
 # The portal. Serves the apex and every tenant subdomain (docs/adr/0007).

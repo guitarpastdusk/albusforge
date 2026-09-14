@@ -48,3 +48,28 @@ run "reject_unpinned_camera_approval" {
   }
   expect_failures = [var.camera_plan_approvals]
 }
+
+run "private_handoff_is_inert_without_seeded_key" {
+  command = plan
+  assert {
+    condition     = !var.device_provisioning_enabled && length(local.device_provisioning_env) == 0 && length(local.device_provisioning_secrets) == 0
+    error_message = "Empty key metadata must not activate enrollment or mount a missing secret version."
+  }
+}
+run "handoff_enable_binds_same_environment" {
+  command = plan
+  variables {
+    device_provisioning_enabled = true
+    device_handoff_key_version  = "1"
+  }
+  assert {
+    condition     = local.device_provisioning_env.DEVICE_INGEST_URL == "https://${local.domain}/ingest/v1" && contains(keys(local.device_provisioning_secrets), "DEVICE_HANDOFF_KEYS") && length(var.camera_plan_approvals) == 0
+    error_message = "The private keyring and same-environment HTTPS endpoint must activate together without approving hardware."
+  }
+}
+
+run "handoff_requires_seeded_version" {
+  command = plan
+  variables { device_provisioning_enabled = true }
+  expect_failures = [var.device_provisioning_enabled]
+}

@@ -10,7 +10,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ObservationGallery } from "@/components/telemetry/ObservationGallery";
 import { AwaitingReadings } from "@/components/telemetry/AwaitingReadings";
-import { DeviceChat } from "@/components/devices/DeviceChat";
+import { DeviceConsole } from "@/components/devices/DeviceConsole";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
@@ -142,11 +142,15 @@ export default async function DevicePage({
             ` · Signal ${device.health.rssi} dBm`}
         </p>
       )}
+      {/* Data on the left, the conversation beside it: the person can read a
+          plot and ask about what they are looking at without losing either. */}
+      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start">
+        <div className="min-w-0">
       {detail.capabilities && <ObservationGallery deviceId={deviceId} capabilities={detail.capabilities} search={search} />}
       {channels.length === 0 && <AwaitingReadings deviceId={device.id} revoked={Boolean(device.revoked_at)} />}
       {channels.length > 0 && <>
       <h2 className="text-xl font-semibold mt-8">Latest readings</h2>
-      <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+      <ul className="grid sm:grid-cols-2 gap-4 mt-4">
         {channels.map((channel) => {
           const sample = latest.readings.find((r) => r.channel === channel);
           return (
@@ -257,19 +261,15 @@ export default async function DevicePage({
           </>
         )}
       </section>
-      <section className="mt-10 max-w-2xl" aria-label="Sensor questions">
-        <DeviceChat
+      </>}
+        </div>
+        <DeviceConsole
           key={`${me.tenant.id}:${deviceId}`}
           deviceId={deviceId}
-          greeting="Choose a channel and time window, then ask about its stored readings."
-          channels={channels.map((key) => ({
-            key,
-            label: key,
-            unit: detail.channels[key]!.unit,
-          }))}
+          deviceName={device.display_name ?? "this device"}
+          channelCount={channels.length}
         />
-      </section>
-      </>}
+      </div>
     </PageContainer>
   );
 }

@@ -19,6 +19,7 @@ import { googleInternalAuthVerifier, untrustingVerifier } from "./internal-auth"
 import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
 import { httpSensorAskClient } from "./sensor-ask";
+import { httpDeviceChatClient } from "./device-converse";
 import { RateLimiter } from "./rate-limit";
 import { newSessionToken } from "./session-cookie";
 
@@ -80,6 +81,7 @@ async function main(): Promise<void> {
     deviceProvisioning: config.deviceProvisioning,
     firmware: firmwareOptionsFromEnv(process.env),
     sensorAsk: config.sensorAsk.url ? httpSensorAskClient(config.sensorAsk.url, config.sensorAsk.auth === "google" ? googleIdTokenAuth(config.sensorAsk.url) : async () => undefined) : null,
+    deviceChat: config.sensorAsk.url ? httpDeviceChatClient(config.sensorAsk.url, config.sensorAsk.auth === "google" ? googleIdTokenAuth(config.sensorAsk.url) : async () => undefined) : null,
     parts: createPartsStore(db),
     ping: async () => {
       await pool.query("SELECT 1");

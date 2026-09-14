@@ -77,6 +77,8 @@ export const routes = {
     dashboard: byId("GET", "/v1/devices/:id/dashboard"),
     series: byId("GET", "/v1/devices/:id/series"),
     ask: byId("POST", "/v1/devices/:id/ask"),
+    /** Body DeviceConverseInput → DeviceConverseResponse. Multi-turn; the model reads through tools. */
+    chat: byId("POST", "/v1/devices/:id/chat"),
     actions: {
       /** Body SetActionEnabledRequest → DeviceAction. Operator or admin; audited; applied at the device's next check-in. */
       setEnabled: byIdAndChild("PATCH", "/v1/devices/:id/actions/:actionId", ":actionId"),

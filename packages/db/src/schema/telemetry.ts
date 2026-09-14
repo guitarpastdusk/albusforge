@@ -6,6 +6,8 @@ export const telemetrySchema = pgSchema("telemetry");
 export const telemetryDevices = telemetrySchema.table("devices", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  displayName: text("display_name"),
+  metadataVersion: integer("metadata_version").notNull().default(0),
   tokenHash: text("token_hash").notNull().unique(),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   channels: jsonb("channels").notNull(),
@@ -16,7 +18,7 @@ export const telemetryDevices = telemetrySchema.table("devices", {
   lastSeq: bigint("last_seq", { mode: "number" }),
   status: jsonb("status"),
   createdAt: createdAt(),
-}, (t) => [index("devices_tenant_idx").on(t.tenantId)]);
+}, (t) => [index("devices_tenant_idx").on(t.tenantId), index("devices_tenant_cursor_idx").on(t.tenantId, t.id)]);
 export const telemetryPackets = telemetrySchema.table("packets", {
   deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id, { onDelete: "cascade" }),
   seq: bigint("seq", { mode: "number" }).notNull(),

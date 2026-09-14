@@ -345,3 +345,254 @@ it("binds Ask identity to the session and releases the database before invoking 
     expect(result.json().queries[0].input.device_id).toBe(a.device);
   } finally { await serviceApp.close(); }
 });
+
+const rename = (
+  f: Awaited<ReturnType<typeof fixture>>,
+  display_name: string | null,
+  expected_version = 0,
+  headers: Record<string, string> = {},
+) =>
+  app.inject({
+    method: "PATCH",
+    url: `${f.root}/metadata`,
+    headers: { cookie: f.cookie, origin: "http://localhost", ...headers },
+    payload: { display_name, expected_version },
+  });
+
+it("keeps legacy strict projections unchanged and opts into presentation/role fields", async () => {
+  const f = await fixture();
+  const legacy = (await f.get(f.root)).json();
+  expect(Object.keys(legacy).sort()).toEqual(["channels", "device"]);
+  expect(Object.keys(legacy.device).sort()).toEqual([
+    "health",
+    "id",
+    "last_seen_at",
+    "next_s",
+    "revoked_at",
+    "status",
+  ]);
+  expect((await f.get(`${f.root}?presentation=1`)).json()).toMatchObject({
+    device: { display_name: null, metadata_version: 0 },
+    permissions: { edit_metadata: false },
+  });
+  expect(
+    (await f.get("/v1/telemetry/devices")).json().devices[0],
+  ).not.toHaveProperty("display_name");
+});
+
+it("allows operator/admin labels, refuses viewers, scopes devices and protects immutable data", async () => {
+  const f = await fixture(),
+    other = await fixture();
+  expect((await rename(f, "Fridge")).statusCode).toBe(403);
+  for (const role of ["operator", "admin"]) {
+    await handle.pool.query(
+      "UPDATE users.tenant_members SET role=$1 WHERE tenant_id=$2 AND user_id=$3",
+      [role, f.tenant, f.user],
+    );
+    const before = (
+      await handle.pool.query(
+        "SELECT source,channels,token_hash FROM telemetry.devices WHERE id=$1",
+        [f.device],
+      )
+    ).rows[0];
+    const version = (await f.get(`${f.root}?presentation=1`)).json().device
+      .metadata_version;
+    const response = await rename(f, `  ${role} label  `, version);
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      display_name: `${role} label`,
+      version: version + 1,
+    });
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(
+      (
+        await handle.pool.query(
+          "SELECT source,channels,token_hash FROM telemetry.devices WHERE id=$1",
+          [f.device],
+        )
+      ).rows[0],
+    ).toEqual(before);
+  }
+  expect((await rename({ ...f, root: other.root }, "foreign")).statusCode).toBe(
+    404,
+  );
+  expect((await rename(f, "x".repeat(81), 2)).statusCode).toBe(400);
+  expect((await rename(f, null, 2)).json()).toMatchObject({
+    display_name: null,
+    version: 3,
+  });
+  expect(
+    (
+      await app.inject({
+        method: "PATCH",
+        url: `${f.root}/metadata`,
+        headers: { cookie: f.cookie, origin: "http://localhost" },
+        payload: { display_name: "bad", expected_version: 3, channels: {} },
+      })
+    ).statusCode,
+  ).toBe(400);
+});
+
+it("requires same-origin session credentials and refuses expired/revoked ancestry", async () => {
+  const f = await fixture();
+  await handle.pool.query(
+    "UPDATE users.tenant_members SET role='admin' WHERE tenant_id=$1",
+    [f.tenant],
+  );
+  for (const origin of ["", "null", "https://evil.test"])
+    expect((await rename(f, "bad", 0, { origin })).statusCode).toBe(403);
+  expect((await rename(f, "bad", 0, { cookie: "" })).statusCode).toBe(401);
+  await handle.pool.query(
+    "UPDATE users.sessions SET expires_at=now()-interval '1 second' WHERE id=$1",
+    [f.session],
+  );
+  expect((await rename(f, "bad")).statusCode).toBe(401);
+  await handle.pool.query(
+    "UPDATE users.sessions SET expires_at=now()+interval '1 day',revoked_at=now() WHERE id=$1",
+    [f.session],
+  );
+  expect((await rename(f, "bad")).statusCode).toBe(401);
+  expect((await f.get("/v1/telemetry/devices")).statusCode).toBe(401);
+});
+
+it("keeps concurrent name edits optimistic: one commit and one conflict", async () => {
+  const f = await fixture();
+  await handle.pool.query(
+    "UPDATE users.tenant_members SET role='operator' WHERE tenant_id=$1",
+    [f.tenant],
+  );
+  const results = await Promise.all([rename(f, "first"), rename(f, "second")]);
+  expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+  const saved = (await f.get(`${f.root}?presentation=1`)).json().device;
+  expect(saved.metadata_version).toBe(1);
+  expect(["first", "second"]).toContain(saved.display_name);
+});
+
+it("searches names/UUIDs literally with scoped filtered cursor pages and revoked precedence", async () => {
+  const f = await fixture(),
+    foreign = await fixture();
+  await handle.pool.query(
+    "UPDATE telemetry.devices SET display_name='Fridge %_match' WHERE id=ANY($1::uuid[])",
+    [[f.device, foreign.device]],
+  );
+  const second = randomUUID();
+  await handle.pool.query(
+    "INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source,display_name,revoked_at) SELECT $1,tenant_id,$2,channels,source,'Fridge backup',now() FROM telemetry.devices WHERE id=$3",
+    [second, randomUUID(), f.device],
+  );
+  const query = (q: string) =>
+    f.get(`/v1/telemetry/devices?presentation=1&${q}`);
+  expect(
+    (await query(`q=${encodeURIComponent("%_")}`))
+      .json()
+      .devices.map((d: { id: string }) => d.id),
+  ).toEqual([f.device]);
+  const first = (await query("q=FRIDGE&limit=1")).json();
+  expect(first.devices).toHaveLength(1);
+  expect(first.next_after).toBeTruthy();
+  const next = (
+    await query(`q=FRIDGE&limit=1&after=${first.next_after}`)
+  ).json();
+  expect(next.devices).toHaveLength(1);
+  expect(next.next_after).toBeNull();
+  expect(next.devices[0].id).not.toBe(first.devices[0].id);
+  expect(
+    (await query("status=revoked"))
+      .json()
+      .devices.map((d: { id: string }) => d.id),
+  ).toEqual([second]);
+  expect(
+    (await query("status=never_seen"))
+      .json()
+      .devices.map((d: { id: string }) => d.id),
+  ).toEqual([f.device]);
+  expect((await query(`q=${f.device}`)).json().devices).toHaveLength(1);
+  expect((await query("q=no-match")).json().devices).toEqual([]);
+});
+
+it("observes revocation and role downgrade committed ahead of blocked metadata admission", async () => {
+  for (const gate of ["session", "membership"] as const) {
+    const f = await fixture();
+    await handle.pool.query(
+      "UPDATE users.tenant_members SET role='admin' WHERE tenant_id=$1",
+      [f.tenant],
+    );
+    const blocker = await owner.connect();
+    let pending: ReturnType<typeof rename> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      if (gate === "session")
+        await blocker.query(
+          "SELECT 1 FROM users.sessions WHERE id=$1 FOR UPDATE",
+          [f.session],
+        );
+      else
+        await blocker.query(
+          "SELECT 1 FROM users.tenant_members WHERE tenant_id=$1 AND user_id=$2 FOR UPDATE",
+          [f.tenant, f.user],
+        );
+      pending = rename(f, "must not save");
+      void pending.then(() => undefined);
+      // Observe the actual lock wait instead of assuming setup finished in a sleep.
+      let waiting = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const rows = await handle.pool.query(
+          "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE $1",
+          [
+            gate === "session"
+              ? "%FOR SHARE OF s%"
+              : "%tenant_members%FOR SHARE%",
+          ],
+        );
+        if (rows.rowCount) {
+          waiting = true;
+          break;
+        }
+        await delay(20);
+      }
+      expect(waiting).toBe(true);
+      if (gate === "session")
+        await blocker.query(
+          "UPDATE users.sessions SET revoked_at=now() WHERE id=$1",
+          [f.session],
+        );
+      else
+        await blocker.query(
+          "UPDATE users.tenant_members SET role='viewer' WHERE tenant_id=$1 AND user_id=$2",
+          [f.tenant, f.user],
+        );
+      await blocker.query("COMMIT");
+      expect((await pending).statusCode).toBe(gate === "session" ? 401 : 403);
+      expect(
+        (
+          await owner.query(
+            "SELECT display_name,metadata_version FROM telemetry.devices WHERE id=$1",
+            [f.device],
+          )
+        ).rows[0],
+      ).toEqual({ display_name: null, metadata_version: 0 });
+    } finally {
+      await blocker.query("ROLLBACK");
+      blocker.release();
+      await pending;
+    }
+  }
+});
+
+it("refuses a metadata edit whose ancestor session is revoked", async () => {
+  const f = await fixture(),
+    parent = randomUUID();
+  await handle.pool.query(
+    "UPDATE users.tenant_members SET role='admin' WHERE tenant_id=$1",
+    [f.tenant],
+  );
+  await handle.pool.query(
+    "INSERT INTO users.sessions(id,token_hash,user_id,active_tenant_id,expires_at,revoked_at) VALUES($1,$2,$3,$4,now()+interval '1 day',now())",
+    [parent, randomUUID(), f.user, f.tenant],
+  );
+  await handle.pool.query(
+    "UPDATE users.sessions SET parent_session_id=$1 WHERE id=$2",
+    [parent, f.session],
+  );
+  expect((await rename(f, "must not save")).statusCode).toBe(401);
+});

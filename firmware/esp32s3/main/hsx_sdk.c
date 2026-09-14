@@ -4,7 +4,7 @@
 #include "hsx-profile.h"
 #include "hsx-build.h"
 #include "hsx-wire.h"
-#include "bh1750.h"
+#include "hsx-sensors.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,7 +77,7 @@ void hsx_run(unsigned interval_s) {
   xEventGroupWaitBits(connected,BIT0,pdFALSE,pdTRUE,portMAX_DELAY);
   esp_sntp_config_t ntp=ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");ESP_ERROR_CHECK(esp_netif_sntp_init(&ntp));
   while(esp_netif_sntp_sync_wait(pdMS_TO_TICKS(30000))!=ESP_OK)vTaskDelay(pdMS_TO_TICKS(1000));
-  if(bh1750_init(HSX_SDA,HSX_SCL)!=ESP_OK)fail_closed();
+  if(hsx_sensors_init()!=ESP_OK)fail_closed();
   char authorization[51];snprintf(authorization,sizeof authorization,"Bearer %s",token);
   for(;;) {
     xEventGroupWaitBits(connected,BIT0,pdFALSE,pdTRUE,portMAX_DELAY);
@@ -85,10 +85,11 @@ void hsx_run(unsigned interval_s) {
     char *packet=pending?strdup(pending):NULL;
     if(pending&&!packet)fail_closed();
     if(!packet) {
-      float lux;time_t now=time(NULL);
-      if(now<1700000000||bh1750_read(&lux)!=ESP_OK||!isfinite(lux)) {vTaskDelay(pdMS_TO_TICKS(1000));continue;}
+      hsx_reading_t readings[HSX_MAX_READINGS];size_t readings_count=0;time_t now=time(NULL);
+      // A sensor fault or an implausible value skips the sample; it never invents one.
+      if(now<1700000000||hsx_sensors_read(readings,HSX_MAX_READINGS,&readings_count)!=ESP_OK) {vTaskDelay(pdMS_TO_TICKS(1000));continue;}
       if(seq>=9007199254740991ULL)fail_closed();
-      packet=malloc(1024);if(!packet||hsx_encode_packet(packet,1024,dev,seq,now,lux,esp_timer_get_time()/1000000)<0)fail_closed();
+      packet=malloc(1024);if(!packet||hsx_encode_readings(packet,1024,dev,seq,now,readings,readings_count,esp_timer_get_time()/1000000)<0)fail_closed();
       // One persisted value binds the reservation to its packet; NVS is not a multi-key transaction.
       cJSON_Delete(state);state=cJSON_CreateObject();
       cJSON_AddStringToObject(state,"packet",packet);cJSON_AddNumberToObject(state,"next_seq",(double)(seq+1));

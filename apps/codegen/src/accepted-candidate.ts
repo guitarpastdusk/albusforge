@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { BuildPlanMetadata, BuildPlanV1, type Spec, type FirmwareManifest } from '@albusforge/schema';
-import { CANDIDATE, CHANNELS, candidateInterval, renderApp, editInterval } from './candidate';
+import { NUMERIC_CANDIDATES, selectNumericCandidate, renderApp, editInterval, type NumericSelection } from './candidate';
 import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from './camera-candidate';
 const Pin=z.strictObject({id:z.string().min(1).max(120),version:z.string().min(1).max(40)});
 const Digest=z.string().regex(/^[a-f0-9]{64}$/);
@@ -28,10 +28,15 @@ export interface AcceptedCandidate {
   id:string; kind:'numeric'|'camera'; runtime:string; interval_s:number;
   template:'esp32s3'|'esp32s3-camera';
   channels:FirmwareManifest['channels']; capabilities:FirmwareManifest['capabilities'];
+  /** Board wiring and sensor set the numeric compiler builds for. */
+  numeric?:NumericSelection;
 }
 const pins=(values:readonly {id:string;version:string}[])=>values.map(v=>`${v.id}@${v.version}`).sort().join('|');
 export function resolveAcceptedCandidate(plan:BuildPlanV1,metadata:BuildPlanMetadata,spec:Spec,approvals:readonly CameraPlanApproval[]=[]):AcceptedCandidate {
-  if(plan.profile.id===CANDIDATE) return {id:CANDIDATE,kind:'numeric',runtime:'0.1.0',interval_s:candidateInterval(plan,metadata,spec),template:'esp32s3',channels:CHANNELS,capabilities:undefined};
+  if(NUMERIC_CANDIDATES.some(c=>c.id===plan.profile.id)) {
+    const numeric=selectNumericCandidate(plan,metadata,spec);
+    return {id:numeric.candidate.id,kind:'numeric',runtime:numeric.candidate.runtime,interval_s:numeric.interval_s,template:'esp32s3',channels:numeric.channels,capabilities:undefined,numeric};
+  }
   const evidence=metadata.evidence;
   const matches=approvals.map(a=>CameraPlanApproval.parse(a)).filter(a=>a.assembly_profile.id===plan.profile.id&&a.assembly_profile.version===plan.profile.version&&pins(a.part_versions)===pins(plan.part_versions));
   const approval=matches[0];

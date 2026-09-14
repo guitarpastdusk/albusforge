@@ -9,7 +9,7 @@ import {
   serializeFirmwareManifest,
 } from "@albusforge/schema";
 
-import { COMPILER_IMAGE, CANDIDATE, CHANNELS, renderApp } from "./candidate";
+import { COMPILER_IMAGE, CANDIDATE, CHANNELS, RUNTIME, numericProfileHeader, renderApp, type NumericSelection } from "./candidate";
 import { CAMERA_CANDIDATE, CAMERA_RUNTIME, CAMERA_CAPABILITIES, renderCameraApp } from "./camera-candidate";
 export { editInterval, renderApp } from "./candidate";
 export const sha256 = (bytes: Uint8Array | string) =>
@@ -19,6 +19,9 @@ export interface CompileInput {
   plan_version: number;
   code_version: number;
   interval_s: number;
+  /** Board/sensor selection for the numeric template. Absent means the
+   * committed ESP32-S3-DevKitC-1 candidate the template already carries. */
+  numeric?: NumericSelection;
 }
 export interface Compiled {
   manifest: FirmwareManifest;
@@ -97,14 +100,23 @@ async function compileProfile(
   signal?: AbortSignal,
 ): Promise<Compiled> {
   signal?.throwIfAborted();
-  input = z
-    .strictObject({
-      build_id: z.uuid(),
-      plan_version: z.number().int().positive(),
-      code_version: z.number().int().positive(),
-      interval_s: z.number().int().min(10).max(86400),
-    })
-    .parse(input);
+  const numeric = camera ? undefined : input.numeric;
+  input = {
+    ...z
+      .strictObject({
+        build_id: z.uuid(),
+        plan_version: z.number().int().positive(),
+        code_version: z.number().int().positive(),
+        interval_s: z.number().int().min(10).max(86400),
+      })
+      .parse({
+        build_id: input.build_id,
+        plan_version: input.plan_version,
+        code_version: input.code_version,
+        interval_s: input.interval_s,
+      }),
+    numeric,
+  };
   templateRoot = resolve(templateRoot);
   const workRoot =
     process.env.FIRMWARE_WORK_DIR ??
@@ -122,6 +134,12 @@ async function compileProfile(
         !/(?:^|\/)(?:build|sdkconfig|sdkconfig.old)$/.test(path),
     });
     await writeFile(join(workspace, "main/app.cpp"), source);
+    // Board identity is written from the validated candidate, never from a plan string.
+    if (numeric)
+      await writeFile(
+        join(workspace, "main/include/hsx-profile.h"),
+        numericProfileHeader(numeric),
+      );
     await writeFile(
       join(workspace, "main/include/hsx-build.h"),
       `#pragma once\n#define HSX_BUILD_ID ${JSON.stringify(input.build_id)}\n#define HSX_PLAN_VERSION ${input.plan_version}\n#define HSX_CODE_VERSION ${input.code_version}\n`,
@@ -175,9 +193,9 @@ async function compileProfile(
       build_id: input.build_id,
       plan_version: input.plan_version,
       code_version: input.code_version,
-      profile_id: camera ? CAMERA_CANDIDATE : CANDIDATE,
-      runtime: camera ? CAMERA_RUNTIME : "0.1.0",
-      channels: camera ? {} : CHANNELS,
+      profile_id: camera ? CAMERA_CANDIDATE : (numeric?.candidate.id ?? CANDIDATE),
+      runtime: camera ? CAMERA_RUNTIME : (numeric?.candidate.runtime ?? RUNTIME),
+      channels: camera ? {} : (numeric?.channels ?? CHANNELS),
       ...(camera ? { capabilities: CAMERA_CAPABILITIES } : {}),
       files: [...files].map(([path, bytes]) => ({
         path,

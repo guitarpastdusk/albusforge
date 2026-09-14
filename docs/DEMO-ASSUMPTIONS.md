@@ -248,3 +248,36 @@ Ordered by how much damage the guess does if left in place.
    STEP files.
 6. **Get sign-off on the `versions/` layout** (section 0) and on whether
    `M-001` is an SG90 or an SG92R.
+
+---
+
+# Demo assumptions, guesses and stubs
+
+Everything here was introduced to keep the hackathon demo moving. Each row is a
+thing that is **not** established fact, and what would replace it.
+
+## Firmware and codegen (Freenove sensor path)
+
+Owner: firmware/codegen slice (branch `demo/fw`). Nothing in this section
+touches `registry/`, `registry/assembly-profiles.json`,
+`registry/provisioning-profiles.json`, `apps/gateway` or `apps/web`.
+
+| File | What is a guess, stub or mock | Why | What replaces it |
+| --- | --- | --- | --- |
+| `apps/codegen/src/candidate.ts` (`FREENOVE_CANDIDATE`) | Nothing any more: `C-002@1.0.0`, `E-005@1.1.0`, `V-005@1.1.0`, `P-001@1.1.0`, `P-006@1.0.0` were confirmed by the registry agent | Was a guess while the promotion was in flight | Already resolved. Every version still lives only in this one constant, so a later promotion is a one-line edit per candidate |
+| `apps/codegen/src/candidate.ts` (`FREENOVE_CANDIDATE.id`) | The new profile id `freenove-esp32s3-n16r8-i2c-usb-v1` at profile version `1.0.0` | A second board profile was added rather than editing the DevKitC one, whose GPIO8/9 wiring is still correct for its own board | The id in the hand-written `registry/assembly-profiles.json` row, if it differs |
+| `apps/codegen/src/candidate.ts` (`SENSORS.seesaw_soil`) | Driver package `hsx-driver-seesaw-soil@0.1.0` — predicted, then confirmed by the registry agent | P-006 is not on this branch, so its `software.driver_pkg`/`driver_version` could not be read | Already resolved. Codegen still requires the evidence part row and a passed compat row to agree with this constant, so a mismatch fails closed rather than compiling the wrong driver |
+| `apps/codegen/src/candidate.ts` (`FREENOVE_CANDIDATE.peripherals[P-006].connectors`) | P-006 is accepted on either `stemma-i2c-ph-4pin-v1` or `hsx-i2c-4pin-v1` | The seesaw board ships a JST PH STEMMA lead; a STEMMA-to-QT cable carries the same four signals. The assembly profile therefore needs a port with whichever connector the wiring edge names, on the same `GPIO47,GPIO21` resources | A decision on which cable is actually used on the bench, then dropping the other entry |
+| `apps/codegen/src/candidate.ts` (`SENSORS.*.channels`) | Channel ranges `temperature -40..85 degC`, `humidity 0..100 %RH`, `pressure 300..1100 hPa`, `soil_moisture 0..4095 raw` | Taken from datasheet operating ranges, not from a product decision about plausible values | Ranges agreed with the cloud/telemetry owner. They are enforced on-device: an out-of-range value skips the sample rather than being clamped or published |
+| `firmware/esp32s3/main/seesaw_soil.c` | The whole driver is written from the Adafruit seesaw protocol docs and **has never been run against the hardware**. The accepted hardware-id list (`0x55`, `0x84`, `0x86`) and the 20 ms request/read settle time are best guesses | No bench time before the demo | One bench session with the physical sensor. It is not a stub: it performs real I2C traffic and returns an error (never a number) when the exchange fails |
+| `firmware/esp32s3/main/seesaw_soil.c` | Soil moisture is published as the raw capacitive count, not a percentage | The sensor ships with no factory calibration and no wet/dry reference was taken | Two-point calibration (dry air, saturated soil) recorded per unit, then a `%` channel |
+| `firmware/esp32s3/main/seesaw_soil.c` | The seesaw's own temperature channel is not exposed | It would collide with the BME280 `temperature` channel key | A distinct channel key (e.g. `soil_temperature`) if the demo needs it |
+| `firmware/esp32s3/main/bme280.c` | Address probe `0x77` then `0x76` | Both are factory strap options for the same part; which one this unit uses is unknown | Nothing — the probe is the correct behaviour; only the assumption that exactly one of the two answers is untested here |
+| `firmware/esp32s3/main/bme280.c` | Fixed-point compensation was verified against the Bosch datasheet reference vector on the host (25.08 degC / 100653 Pa), **not** against the physical part | No hardware in the loop | A reading compared with a known-good reference instrument |
+| `firmware/esp32s3/main/bh1750.c` | Address fixed at `0x23` (ADDR pin low) | The 0x5C strap option is not wired into the driver | An address field on the peripheral option if a board straps it high |
+| `firmware/esp32s3/main/include/hsx-profile.h` | The committed header stays the DevKitC candidate (`GPIO8/9`, BH1750 only) | A local `idf.py build` of the template must still work; the real board identity is written by `apps/codegen/src/compiler.ts` from the validated candidate at compile time | Nothing; this is deliberate. Note that it means a plain template build is *not* the Freenove firmware |
+| `firmware/esp32s3/` (whole template) | **No ESP-IDF build was run.** The new sources were checked with `cc -std=c11 -Wall -Wextra -Werror -fsyntax-only` against stub ESP-IDF headers, plus the real host test for the wire encoder | No IDF toolchain or Docker image available in this worktree | `pnpm --filter gateway exec vitest run src/firmware.db.test.ts -t 'real isolated worker'`, or the CI `firmware-compile` job |
+| `firmware/esp32s3/main/hsx_wire.c` + `include/hsx-wire.h` | The `synthetic` flag on a reading, which forces `"synthetic:<channel>"` into `st.health` | Reserved so that a future stubbed driver cannot be mistaken for a measurement | Nothing. **No shipped driver sets it today**: every published value is a real sensor read |
+| `apps/codegen/src/testing.ts` (`syntheticFreenovePlanFixture`) | `C-002` and `P-006` part definitions are synthesised from the committed `C-001` and `P-001` JSON with the id, version, I2C address and driver overridden | Those registry rows do not exist in this worktree | Reading the real rows once the registry agent lands them |
+| `registry/assembly-profiles.json`, `registry/provisioning-profiles.json` | Not written here at all | Owned by the coordinator | The hand-written rows, which must match the constants reported by this slice exactly |
+| GPIO47 (SDA) / GPIO21 (SCL) | Chosen per `hardware/freenove/README.md`; pull-ups are assumed to come from the STEMMA QT breakouts | GPIO8/GPIO9 are camera data pins on this board (`firmware/esp32s3-camera/main/camera_runtime.c`), so the sensor bus had to move | A scope/bench check that the bus is clean with all three sensors daisy-chained |

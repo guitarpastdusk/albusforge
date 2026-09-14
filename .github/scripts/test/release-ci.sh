@@ -9,7 +9,7 @@ exit "${ANCESTRY_RESULT:-0}"
 STUB
 cat > "$tmp/gh" <<'STUB'
 #!/usr/bin/env bash
-printf '%s\n' "${CI_RESULT}"
+case "$*" in *camera-firmware.yml*) printf '%s\n' "${CAMERA_CI_RESULT:-$CI_RESULT}" ;; *) printf '%s\n' "${CI_RESULT}" ;; esac
 exit "${API_RESULT:-0}"
 STUB
 chmod +x "$tmp/git" "$tmp/gh"
@@ -40,4 +40,7 @@ check pass
 check fail CI_RESULT=$'completed\tfailure'
 check fail IMAGE_RESULT='[]'
 check fail IMAGE_RESULT='[{"version":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tags":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}]'
-printf '11 release CI gate checks passed\n'
+check pass IMAGE=fwbuild
+check fail IMAGE=fwbuild CAMERA_CI_RESULT=$'completed\tfailure'
+check fail IMAGE=fwbuild CAMERA_CI_RESULT=$'in_progress\tnull'
+printf '14 release CI gate checks passed\n'

@@ -14,14 +14,19 @@ else
   commits="${GITHUB_SHA:?GITHUB_SHA required}"
 fi
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY required}"
+workflows="ci.yml"
+# Camera packaging has its own exact-source pinned native compiler workflow.
+if [ "${IMAGE:-}" = "fwbuild" ]; then workflows="$workflows camera-firmware.yml"; fi
 for commit in $commits; do
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
   git merge-base --is-ancestor "$commit" origin/main || {
     echo "::error::Release source is not on main"; exit 1;
   }
-  result="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${commit}&event=push&per_page=100" \
-    --jq '[.workflow_runs[] | select(.head_sha == "'"$commit"'" and .event == "push")] | sort_by(.run_number) | last | [.status, .conclusion] | @tsv')"
-  [ "$result" = $'completed\tsuccess' ] || {
-    echo "::error::Latest exact-source push CI has not passed for ${commit}"; exit 1;
-  }
+  for workflow in $workflows; do
+    result="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?head_sha=${commit}&event=push&per_page=100" \
+      --jq '[.workflow_runs[] | select(.head_sha == "'"$commit"'" and .event == "push")] | sort_by(.run_number) | last | [.status, .conclusion] | @tsv')"
+    [ "$result" = $'completed\tsuccess' ] || {
+      echo "::error::Latest exact-source push CI has not passed for ${commit} (${workflow})"; exit 1;
+    }
+  done
 done

@@ -31,11 +31,11 @@ afterEach(async () => {
 });
 
 describe("useReplyWatchdog", () => {
-  it("offers to check again at 60 s, not before, and only once", async () => {
-    expect(REPLY_CHECK_AFTER_MS).toBe(60_000);
+  it("offers to check again at 30 s, not before, and only once", async () => {
+    expect(REPLY_CHECK_AFTER_MS).toBe(30_000);
     const onOverdue = vi.fn();
     await render(true, onOverdue);
-    await advance(59_999);
+    await advance(REPLY_CHECK_AFTER_MS - 1);
     expect(onOverdue).not.toHaveBeenCalled();
     await advance(1);
     expect(onOverdue).toHaveBeenCalledTimes(1);
@@ -46,13 +46,13 @@ describe("useReplyWatchdog", () => {
   it("a reply before the deadline cancels it; the next wait starts a fresh clock", async () => {
     const onOverdue = vi.fn();
     await render(true, onOverdue);
-    await advance(45_000);
+    await advance(REPLY_CHECK_AFTER_MS - 5_000);
     await render(false, onOverdue);
-    await advance(60_000);
+    await advance(REPLY_CHECK_AFTER_MS);
     expect(onOverdue).not.toHaveBeenCalled();
 
     await render(true, onOverdue);
-    await advance(59_000);
+    await advance(REPLY_CHECK_AFTER_MS - 1_000);
     expect(onOverdue).not.toHaveBeenCalled();
     await advance(1_000);
     expect(onOverdue).toHaveBeenCalledTimes(1);

@@ -294,10 +294,30 @@ describe("DesignReadyCard enclosure preview", () => {
     expect(html).toContain("Sign up to continue →");
   });
 
-  it("says the preview isn't generated yet in live mode, and links nothing", () => {
+  it("says the preview isn't generated yet when there is none, and links nothing", () => {
     const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={null} />);
     expect(html).toContain("3D preview available once the enclosure is generated");
     expect(html).not.toContain("View enclosure in 3D");
     expect(html).not.toContain(".glb");
+  });
+
+  it("a failed body read shows the message and a retry, and no preview button", async () => {
+    const { ENCLOSURE_SAMPLE } = await import("@/components/enclosure/fixture");
+    const html = renderToStaticMarkup(
+      <DesignReadyCard buildId="bld_1" card={READY} enclosure={ENCLOSURE_SAMPLE} enclosureError="We couldn’t load the enclosure preview." onRetryEnclosure={() => {}} />,
+    );
+    expect(html).toContain("We couldn’t load the enclosure preview.");
+    expect(html).toMatch(/<button type="button"[^>]*>Try again<\/button>/);
+    expect(html).not.toContain("enclosure in 3D");
+    expect(html).not.toContain(".glb");
+  });
+
+  it("the sample is the fixture, labelled, and the button says so", async () => {
+    const { ENCLOSURE_SAMPLE, ENCLOSURE_FIXTURE } = await import("@/components/enclosure/fixture");
+    expect(ENCLOSURE_SAMPLE.sample).toBe(true);
+    expect(ENCLOSURE_SAMPLE.glbUrl).toBe(ENCLOSURE_FIXTURE.glbUrl);
+    expect(ENCLOSURE_SAMPLE.description).toMatch(/^Sample enclosure\./);
+    const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={ENCLOSURE_SAMPLE} />);
+    expect(html).toContain("View a sample enclosure in 3D →");
   });
 });

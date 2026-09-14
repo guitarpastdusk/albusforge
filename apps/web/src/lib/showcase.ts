@@ -26,7 +26,8 @@ const toCarousel = (cards: ShowcaseCard[], now: Date): CarouselCard[] =>
  *   builds, labelled as examples. Expected, so nothing is logged.
  * - Any other failure (5xx, an HTML placeholder, a schema mismatch, a
  *   network failure) is a real failure: logged once as ERROR, with the
- *   request's trace, and the carousel is simply empty.
+ *   request's trace. The front door still shows the example builds, labelled
+ *   as examples, rather than an empty carousel (docs/DEMO-ASSUMPTIONS.md).
  */
 export async function loadShowcaseCards(): Promise<ShowcaseCards> {
   const now = new Date();
@@ -38,11 +39,11 @@ export async function loadShowcaseCards(): Promise<ShowcaseCards> {
     unstable_rethrow(error);
     if (isNotImplemented(error)) return { cards: toCarousel(exampleShowcase(now), now), examples: true };
     const reason = error instanceof Error ? error.message : String(error);
-    log("ERROR", `showcase unavailable; carousel shown empty: ${reason}`, {
+    log("ERROR", `showcase unavailable; carousel shows example builds: ${reason}`, {
       error,
       trace: traceFromHeaders(await headers()),
       fields: { component: "showcase" },
     });
-    return { cards: [], examples: false };
+    return { cards: toCarousel(exampleShowcase(now), now), examples: true };
   }
 }

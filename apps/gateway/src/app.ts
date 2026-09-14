@@ -18,6 +18,8 @@ import { HttpError, parse, pathOf, sendError } from "./http";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 import type { PartsStore } from "./parts";
 import type { Pool } from "pg";
+import { registerBuildPlans } from "./build-plan-routes";
+import type { ReviewedPlanCatalogue } from "./build-plan-catalogue";
 import { registerDeviceSetup } from "./device-setup";
 import { registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
@@ -33,6 +35,8 @@ declare module "fastify" {
 }
 
 export interface AppOptions {
+  /** Trusted server fixture/configuration, never supplied by a browser. */
+  planCatalogue?: ReviewedPlanCatalogue;
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
   sensorAsk?: SensorAskClient | null;
@@ -68,7 +72,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, sensorAsk = null, planCatalogue }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -190,6 +194,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   }
   if (auth) registerAuthRoutes(app, { log, auth });
   if (telemetryPool) {
+    registerBuildPlans(app, telemetryPool, planCatalogue);
     registerTelemetryReads(app, telemetryPool);
     registerDeviceSetup(app, telemetryPool);
     registerUsageRoutes(app, telemetryPool);

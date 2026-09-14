@@ -1,0 +1,39 @@
+# Trusted build plans (B3)
+
+The project overview links to `/projects/:buildId/plan`. It displays stored plan versions, a pinned bill of materials and cost estimate, wiring, power assumptions, solver explanations and immutable evidence identity. Operators/admins can generate and accept a plan for the exact current spec; viewers can inspect it. Historical plans remain visible and cannot be accepted for a newer spec.
+
+The software path is implemented. The production catalogue is deliberately unavailable: all current registry parts are drafts, and `registry/assembly-profiles.json` has no approved runtime or physical assembly profiles. No fixture promotes those parts or supplies production evidence. A cost estimate is not a purchase quote; acceptance neither generates firmware nor establishes physical compatibility.
+
+## API and persistence
+
+- `GET /v1/builds/:id/plans` returns current spec version, role-derived edit eligibility, profile availability and up to twenty recent versioned plans plus the current accepted plan if older. Foreign builds are opaque 404s. Unversioned legacy rows are withheld rather than treated as approved plans.
+- `POST /v1/builds/:id/plans` accepts only `{expected_tenant_id, spec_version}`. Inputs come from the stored spec, active registry definitions, reviewed server profile manifest and explicit compatibility rows. Browser-supplied parts, profiles or solver parameters are rejected.
+- `POST /v1/builds/:id/plans/:version/accept` accepts the same body. It verifies current spec, deterministic plan output and evidence identity before first acceptance. Repeating the same accepted version returns the recorded decision. Accepting a different version for the same spec conflicts; replacement requires a new spec revision. Historical acceptance does not authorize downstream work against a newer spec or withdrawn evidence.
+
+Migration `0006_build_plan_acceptance`, generated after fleet migration 0005, extends the existing `builds.plans` table rather than introducing a second producer table. It adds nullable versioned metadata, acceptance time and actor, plus a partial unique index allowing one accepted plan per `(build_id,spec_version)`. The existing exact spec foreign key remains. Deleted actors become null without erasing the recorded decision.
+
+Shared schemas are `BuildPlanV1`, `BuildPlanMetadata`, `PersistedBuildPlan`, `BuildPlanPage` and request/solve-response contracts. Matcher `PartPin`, `AssemblyProfile`, `CompatEntry`, wiring and power shapes now come from the same package. Metadata retains selected immutable PartDefinitions, connectors, the full assembly profile, selected-driver compatibility rows, runtime and total cost. `input_digest` is SHA-256 over the UTF-8 result of `serializeBuildPlanInput({spec,runtime,evidence})`: recursively sorted object keys, preserved array order, finite JSON primitives. Consumers recompute it from the exact spec row and immutable evidence. The digest proves identity, not approval.
+
+Repeated solves reuse an existing version with the same input identity. Legacy metadata-null records remain in storage but do not satisfy the v1 consumer contract. Firmware/provisioning must require a current accepted plan under the same build lock, verify its evidence digest and their own reviewed runtime/channel/compiler eligibility. Current mutable registry rows cannot replace the recorded snapshots.
+
+## Authorization, ordering and bounds
+
+New mutations require exact same-origin admission plus an explicit intended tenant. A shared managed READ COMMITTED lease locks session ancestry in ID order, validates family state/expiry, locks membership, requires operator/admin, checks intended tenant and then takes the build row `FOR UPDATE`. It checks expiry after the build wait and again before commit. A revocation/removal that wins admission is observed; an already admitted operation may complete before a later one. Tenant-sensitive operations never silently switch their target.
+
+The intake final publication transaction now locks the build before inserting assistant/spec child rows. All current spec producers use this resource lock ordering, so acceptance either sees the newer committed revision or completes before publication makes its old revision historical. No transaction spans a model call, HTTP request to a provider, stream or browser navigation. Planner search runs locally and is bounded at 100,000 steps, 24 parts, 32 profiles, 4096 compatibility tuples and 3 returned candidates. A limit/infeasible result does not persist a partial success. Part/compatibility rows are protected during the short write transaction.
+
+Viewer reads use the shared managed READ ONLY REPEATABLE READ helper. Session ancestry, host selection, membership and plan rows share a snapshot, with continuous transport-error handling and fenced lease cleanup. Read admission does not authorize later mutations. The public Header retains its separate streaming boundary; this guarded page uses the existing workspace reconciliation and passes its rendered tenant/spec as mutation intent.
+
+## Authoring approved profiles
+
+`registry/assembly-profiles.json` is a reviewed source manifest bundled into gateway. Its format is `{schema_version:1,runtime:null|SemVer,profiles:AssemblyProfile[]}`. Connector definitions are bundled from the committed registry. There is no browser configuration endpoint or production test-fixture switch.
+
+Before adding a production profile, provide physical evidence for exact brain/source pins, input/adapter wiring, port/GPIO allocations, voltage/current windows, regulator efficiency, quiescent draw, usable battery fraction and any duty-cycle assumptions. Runtime and exact driver/brain compatibility require explicit passed evidence. Candidate compilation alone must not be labeled passed physical compatibility. Activate registry parts only through the registry's established reviewed process. A profile also does not invent telemetry channel bounds; provisioning has its own reviewed channel manifest. Ship the new gateway bundle after review and migration, then verify catalogue eligibility through the API. No infrastructure changes or deployment are part of this PR.
+
+## Validation and operational checks
+
+Real PostgreSQL tests exercise actual matcher output persistence, deduplication, idempotent/competing acceptance, roles and foreign builds, intended workspace, Origin rejection, revoked/member-removed admission, expiry after a build wait, newer-spec publication, legacy metadata and corrupted/withdrawn evidence. A real intake handler is paused in its model fixture while acceptance takes the build lock; publication waits before any child write and subsequently advances the spec, leaving the earlier acceptance historical.
+
+DOM tests cover exact rendered mutation intent, BOM display, acceptance, viewer/stale/unavailable controls and uncertain-result recovery. Production browser coverage uses actual gateway/PostgreSQL reads and local email issuance, with synthetic stored plan fixtures to inspect BOM/history/evidence at 1440/390/320 px. The production profile manifest remains empty in that browser test; positive generation/acceptance are exercised by the real handler/PostgreSQL tests with explicit synthetic server inputs. No live email provider, compiler service, physical device or cloud deployment is validated here.
+
+Apply database migrations before the gateway and web. Monitor plan endpoint 409s separately from 503 database failures. A stale spec/evidence response requires refresh and a new solve, not replaying arbitrary saved browser inputs. The partial acceptance index is an additional storage guard; authorization and current-revision checks remain in the managed transaction.

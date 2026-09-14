@@ -127,6 +127,9 @@ importers:
       '@albusforge/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@albusforge/matcher':
+        specifier: workspace:*
+        version: link:../matcher
       '@albusforge/registry':
         specifier: workspace:*
         version: link:../../registry

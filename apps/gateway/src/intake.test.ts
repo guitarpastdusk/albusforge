@@ -141,21 +141,29 @@ describe("createTurnScheduler", () => {
     ]);
   });
 
-  it("doesn't retry a 4xx, a malformed answer or a timeout", async () => {
+  it("doesn't retry a 4xx or a timeout", async () => {
     const rejecting = await stubIntake((_body, _req, res) => json(res, 400, {}));
-    const hanging = await stubIntake(() => {});
-    stops.unshift(async () => void hanging.server.closeAllConnections());
+    // Observe scheduler admission directly: a real fetch can time out before
+    // localhost receives it under load, which says nothing about retry count.
+    const timeoutSignals: AbortSignal[] = [];
     const { lines, log } = capture();
 
     const rejected = createTurnScheduler({ intake: httpIntakeClient({ url: rejecting.url, authHeader: async () => undefined }), log, retryDelayMs: 10 });
     rejected.trigger(BUILD);
     await rejected.idle();
-    const slow = createTurnScheduler({ intake: httpIntakeClient({ url: hanging.url, authHeader: async () => undefined }), log, timeoutMs: 100, retryDelayMs: 10 });
+    const slow = createTurnScheduler({ intake: { turn: async (_build, signal) => {
+      timeoutSignals.push(signal);
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    } }, log, timeoutMs: 100, retryDelayMs: 10 });
     slow.trigger(BUILD);
     await slow.idle();
 
     expect(rejecting.calls).toHaveLength(1);
-    expect(hanging.calls).toHaveLength(1);
+    expect(timeoutSignals).toHaveLength(1);
+    expect(timeoutSignals[0]!.aborted).toBe(true);
+    expect(timeoutSignals[0]!.reason).toMatchObject({ name: "TimeoutError" });
     expect(lines).toEqual([
       expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, intakeStatus: 400 }),
       expect.objectContaining({ severity: "WARNING", message: "intake turn failed", attempt: 1, error: expect.objectContaining({ name: "TimeoutError" }) }),

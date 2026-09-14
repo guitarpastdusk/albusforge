@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb } from "@albusforge/db";
+
 import { SESSION_COOKIE } from "@albusforge/schema";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -14,7 +15,7 @@ beforeAll(async () => {
     CREATE TABLE users.tenants(id uuid PRIMARY KEY,slug text);
     CREATE TABLE users.tenant_members(tenant_id uuid,user_id uuid,role text);`);
 });
-afterAll(async () => { await handle?.pool.end(); await container?.stop(); });
+afterAll(async () => { await closeTestPool(handle?.pool); await container?.stop(); });
 async function identity() {
   const token = randomBytes(32).toString("base64url"), user = randomUUID(), tenant = randomUUID(), id = randomUUID();
   await handle.pool.query("INSERT INTO users.tenants VALUES($1,$2)", [tenant, `team-${tenant}`]);

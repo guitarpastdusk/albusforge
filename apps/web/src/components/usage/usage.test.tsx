@@ -36,3 +36,29 @@ describe("workspace consumption", () => {
     expect(html).not.toContain("Jan 1, 2027");
   });
 });
+
+it("shows exact accepted image uploads without describing them as retained storage", () => {
+  const data = UsageSummary.parse(fixture());
+  data.images = { accepted_count: "9007199254740993", accepted_bytes: "9007199254740994" };
+  const html = renderToStaticMarkup(<UsageDashboard usage={data} workspace="Garden" />);
+  expect(html).toContain("Images accepted");
+  expect(html).toContain("Accepted image upload");
+  expect(html).toContain("9,007,199,254,740,993");
+  expect(html).toContain("9,007,199,254,740,994");
+  expect(html).toContain("not retained or billed storage");
+  expect(html).toContain("Retries of the same image count once");
+});
+it("does not invent zero image usage when an older gateway omits the field", () => {
+  const older = fixture();
+  delete older.images;
+  const data = UsageSummary.parse(older);
+  const html = renderToStaticMarkup(<UsageDashboard usage={data} workspace="Garden" />);
+  expect(html).not.toContain("Images accepted");
+  expect(html).toContain("Sensor readings accepted");
+});
+
+it("requires exact nonnegative decimal strings for image consumption", () => {
+  for (const images of [{ accepted_count: 1, accepted_bytes: "10" }, { accepted_count: "-1", accepted_bytes: "10" }, { accepted_count: "1", accepted_bytes: "1.5" }]) {
+    expect(UsageSummary.safeParse({ ...fixture(), images }).success).toBe(false);
+  }
+});

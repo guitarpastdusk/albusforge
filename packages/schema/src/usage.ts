@@ -44,6 +44,8 @@ export const UsageSummary = z.object({
     stages: z.array(ModelConsumption.extend({ stage: UsageStage })).max(7),
   }),
   telemetry: z.strictObject({ readings_in: ExactCount, payload_bytes: ExactCount }),
+  // Additive rollout: absence means the serving gateway predates image usage.
+  images: z.strictObject({ accepted_count: ExactCount, accepted_bytes: ExactCount }).optional(),
 });
 export type UsageSummary = z.infer<typeof UsageSummary>;
 export type ModelConsumption = z.infer<typeof ModelConsumption>;

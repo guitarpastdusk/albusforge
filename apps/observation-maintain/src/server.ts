@@ -14,12 +14,14 @@ async function main() {
   process.once("SIGTERM", abort); process.once("SIGINT", abort);
   try {
     const result = await maintainObservations(pool, new GcsObservationStorage({ bucket }), {
+      onAccepted: bytes => console.log(JSON.stringify({ severity: "INFO", event: "observation_accepted", accepted_bytes: bytes })),
       limit: Number(process.env.OBSERVATION_MAINTENANCE_LIMIT ?? 100),
       orphanGraceMs: Number(process.env.OBSERVATION_ORPHAN_GRACE_S ?? 120) * 1000,
       maxDailyCount: Number(process.env.OBSERVATION_MAX_DAILY_COUNT ?? 1200),
       maxDailyBytes: Number(process.env.OBSERVATION_MAX_DAILY_BYTES ?? 134217728),
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(240_000)]),
     });
+    if (result.health) console.log(JSON.stringify({ severity: "INFO", event: "observation_health", ...result.health }));
     console.log(JSON.stringify({ severity: result.errors ? "WARNING" : "INFO", event: "observation_maintenance", ...result }));
     if (result.errors) process.exitCode = 1;
   } finally { process.off("SIGTERM", abort); process.off("SIGINT", abort); await pool.end(); }

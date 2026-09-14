@@ -36,6 +36,7 @@ resource "google_monitoring_alert_policy" "observation_maintenance_heartbeat" {
 resource "google_monitoring_alert_policy" "observation_failures" {
   project               = local.project_id
   display_name          = "Observation maintenance failed (${local.env})"
+  enabled               = var.observation_schedule_enabled
   combiner              = "OR"
   notification_channels = [google_monitoring_notification_channel.spend.id]
   conditions {

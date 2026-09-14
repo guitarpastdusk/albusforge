@@ -51,7 +51,8 @@ async function fixture(store = new MemoryObservationStorage(), options: Partial<
   await pool.query("INSERT INTO telemetry.devices(id,tenant_id,token_hash,channels,source) VALUES($1,$2,$3,$4,$5)", [dev, tenant, tokenHash(token), simulatorChannels, { kind: "test" }]);
   await pool.query("INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,interval_s,max_bytes,max_width,max_height) VALUES($1,'camera','image','jpeg.v1','test-camera',1,900,1048576,320,240)", [dev]);
   await pool.query("INSERT INTO telemetry.device_capabilities(device_id,capability_id,kind,payload_schema,profile_id,profile_version,interval_s,channels) VALUES($1,'measurements','measurement','readings.v1','test-measurements',1,60,$2)", [dev, simulatorChannels]);
-  const app = buildApp({ pool, now: () => new Date(clock * 1000), observations: { store, maxAttemptsPerMinute: 60, leaseMs: 30000, ...options }, log: () => {} });
+  const events: Record<string, unknown>[] = [];
+  const app = buildApp({ pool, now: () => new Date(clock * 1000), observations: { store, maxAttemptsPerMinute: 60, leaseMs: 30000, ...options }, log: entry => { events.push(entry); } });
   services.push(app);
   const origin = await app.listen({ host: "127.0.0.1", port: 0 });
   const id = randomUUID();
@@ -67,7 +68,7 @@ async function fixture(store = new MemoryObservationStorage(), options: Partial<
       body: JSON.stringify({ v: 1, dev, seq: 1, ts: clock, r: [{ c: "temperature_c", t: clock, v: 22 }], st: { up_s: 60, health: ["OK"] } }), signal: AbortSignal.timeout(10_000) });
     return response.status;
   };
-  return { dev, tenant, token, id, headers, send, numeric, store, origin };
+  return { dev, tenant, token, id, headers, send, numeric, store, origin, events };
 }
 async function count(dev: string, table: string) {
   return Number((await pool.query(`SELECT count(*) AS n FROM telemetry.${table} WHERE device_id=$1`, [dev])).rows[0].n);
@@ -293,4 +294,14 @@ it("rejects concatenated, trailing and truncated JPEG bodies", async () => {
     expect((await f.send({ "x-content-sha256": createHash("sha256").update(bytes).digest("hex") }, bytes)).status).toBe(422);
   }
   expect(await count(f.dev, "observation_receipts")).toBe(0);
+});
+
+it("emits bounded image outcomes and confirmed bytes once without identity or bearer labels", async () => {
+ const f=await fixture();expect((await f.send()).status).toBe(201);expect((await f.send()).status).toBe(200);
+ expect((await f.send({authorization:"Bearer invalid-private-value"})).status).toBe(401);
+ expect((await f.send({"x-content-sha256":"0".repeat(64)})).status).toBe(422);
+ const uploads=f.events.filter(e=>e.event==='observation_upload');
+ expect(uploads.map(e=>[e.status,e.outcome,e.reason])).toEqual([[201,'new','none'],[200,'duplicate','none'],[401,'rejected','unauthorized'],[422,'rejected','digest_mismatch']]);
+ expect(f.events.filter(e=>e.event==='observation_accepted')).toEqual([{severity:'INFO',event:'observation_accepted',accepted_bytes:jpeg.length}]);
+ for(const event of uploads){expect(Number(event.request_ms)).toBeGreaterThanOrEqual(0);expect(Number(event.storage_ms)).toBeGreaterThanOrEqual(0);expect(JSON.stringify(event)).not.toContain(f.dev);expect(JSON.stringify(event)).not.toContain(f.token);expect(Object.keys(event).sort()).toEqual(['accepted_bytes','event','outcome','reason','request_ms','severity','status','storage_ms']);}
 });

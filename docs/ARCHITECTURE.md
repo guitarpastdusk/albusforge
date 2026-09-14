@@ -549,6 +549,8 @@ A **sixth constraint is implied by the compliance block** (§9): generation rest
 
 ### 7.3 Codegen and the compile gate
 
+B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations; trusted plan acceptance, firmware generation and production credential handoff are assigned work, not completed capabilities. That ledger separates software verification from the required registry and physical hardware evidence.
+
 Invariants:
 
 - Generated app code may import **only `hsx-sdk` headers**. A lint step fails the bundle if raw driver headers appear.

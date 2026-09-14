@@ -158,3 +158,7 @@ These dependencies prevent honest end-to-end completion; they do not justify inv
 | UI-5 | A1 + Q1–Q3 regressions for those batches | Browser evidence of the complete paths and usable failure/mobile states. |
 
 The original audit opened no implementation PR. The delivery ledger above now tracks the submitted and merged batches; each further batch requires its own exact-head review and CI validation.
+
+## Build-to-device implementation
+
+B3, B6 and B8 are assigned parallel implementation tracks. The [delivery ledger](BUILD-TO-DEVICE-DELIVERY.md) records ownership, shared contracts and separate software/hardware acceptance gates. Assignment does not change the completion status above.

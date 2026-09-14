@@ -210,7 +210,10 @@ jobs:
           curl -fsS http://localhost:8080/readyz
           count=$(curl -fsS http://localhost:8080/v1/parts | jq '.parts | length')
           echo "parts: ${count}"
-          [ "$count" = 12 ] || { docker logs gateway; exit 1; }
+          # One row per non-retired part id. The registry grows, so assert a floor and
+          # that the loader actually reached the newest parts, not an exact total.
+          [ "$count" -ge 14 ] || { docker logs gateway; exit 1; }
+          curl -fsS http://localhost:8080/v1/parts | jq -e '[.parts[].id] | index("C-002") != null and index("P-006") != null'
           curl -fsS http://localhost:8080/v1/parts/C-001 | jq -e '.part.id == "C-001"'
           docker run --rm -i --network host -e PGPASSWORD=app-secret postgres:16-alpine \
             psql -h 127.0.0.1 -U albus_app -d albus -v ON_ERROR_STOP=1 < apps/gateway/scripts/telemetry-read-fixture.sql

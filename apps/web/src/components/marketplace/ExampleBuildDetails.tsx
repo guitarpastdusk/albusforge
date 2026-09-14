@@ -67,6 +67,9 @@ export function ExampleBuildDetails({ detail }: { detail: ExampleBuildDetail }) 
           {wiring.brain.name}&apos;s regulator makes the {volts(wiring.rail)} rail its GPIO and most of the sensors run from. Which header pin each lead lands
           on is our suggestion — the registry has no pin map, and nothing here has been wired on a bench.
         </p>
+        <p className="mt-2 max-w-[640px] text-[15px] font-light leading-[1.45] text-coral-deep">
+          Power the board off while you plug anything in. Every connector here is keyed: if it doesn&apos;t click in easily, turn it over rather than forcing it.
+        </p>
         <div className="mt-5 rounded-[20px] border border-hairline bg-porcelain px-4 py-5 sm:px-6">
           <BuildCircuitDiagram wiring={wiring} buildName={build.name} />
         </div>

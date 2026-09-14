@@ -1,4 +1,4 @@
-import { volts, type Wiring, type WiringLead } from "@/lib/example-wiring";
+import { BRAIN_HEADER, volts, type Wiring, type WiringLead } from "@/lib/example-wiring";
 
 /*
  * An example build's wiring, drawn from the registry: the supply and the volts
@@ -21,10 +21,35 @@ const NAME_LINE = 16;
 const LEAD = 19;
 const CARD_FOOT = 14;
 const CARD_GAP = 18;
+/** A chained block sits further down, so the cable into the block above it is legible. */
+const CHAIN_GAP = 40;
 
 const SUPPLY = { x: 12, w: 250, h: 92 };
 const BRAIN = { x: 375, w: 245 };
 const NODE = { x: 720, w: 310 };
+
+/**
+ * Connector families, for the keyed plug glyphs on a board edge and the legend
+ * (WIRING_DIAGRAM_RULES §4). Read from the connector's own housing string, so a
+ * new connector in the registry lands in the right family without a code change.
+ */
+const FAMILIES = [
+  { id: "sh", match: /JST SH/i, label: "JST SH 1.0 mm · QT", fill: "var(--color-ink)", stroke: "var(--color-ink)" },
+  { id: "ph", match: /JST PH/i, label: "JST PH 2.0 mm", fill: "#ffffff", stroke: "var(--color-muted)" },
+  { id: "usb", match: /USB/i, label: "USB", fill: "var(--color-faint)", stroke: "var(--color-muted)" },
+] as const;
+
+const HEADER_FAMILY = { id: "header", label: "header pin", fill: "#e5c05b", stroke: "var(--color-muted)" } as const;
+
+export function familyOf(housing: string) {
+  return FAMILIES.find((family) => family.match.test(housing)) ?? FAMILIES[2];
+}
+
+/** A keyed plug on a board edge. */
+function Port({ x, y, housing }: { x: number; y: number; housing: string }) {
+  const family = familyOf(housing);
+  return <rect x={x - 5} y={y - 7} width="10" height="14" rx="2" fill={family.fill} stroke={family.stroke} strokeWidth="1" />;
+}
 
 /** How a part's interface reads on the diagram. */
 const INTERFACE: Record<string, string> = { i2c: "I²C", adc: "ADC", pwm: "PWM", gpio: "GPIO", "1-wire": "One-Wire" };
@@ -72,19 +97,24 @@ function Box({ x, y, w, h, tone = "plain" }: { x: number; y: number; w: number; 
   );
 }
 
-/** A lead: solid coral for power, hairline for ground, dashed coral for a signal (the carousel's wire). */
+/**
+ * A lead, coloured by what the conductor is: red V+, black ground, blue SDA,
+ * yellow SCL, coral for a plain signal — the colours the cables themselves come
+ * in, so the drawing matches what is in your hand. A signal stays dashed, as it
+ * is on the carousel.
+ */
+const WIRE_STROKE: Record<string, string> = {
+  power: "var(--color-wire-power)",
+  ground: "var(--color-wire-ground)",
+  sda: "var(--color-wire-sda)",
+  scl: "var(--color-wire-scl)",
+  signal: "var(--color-wire-signal)",
+};
+
 function Wire({ y, from, to, lead }: { y: number; from: number; to: number; lead: WiringLead }) {
   const signal = lead.pin.role !== "power" && lead.pin.role !== "ground";
   return (
-    <line
-      x1={from}
-      x2={to}
-      y1={y}
-      y2={y}
-      strokeWidth="1.5"
-      strokeDasharray={signal ? "4 4" : undefined}
-      className={lead.pin.role === "ground" ? "stroke-faint" : "stroke-coral-deep"}
-    />
+    <line x1={from} x2={to} y1={y} y2={y} strokeWidth="1.5" strokeDasharray={signal ? "4 4" : undefined} stroke={WIRE_STROKE[lead.pin.role]} />
   );
 }
 
@@ -106,10 +136,12 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
       const name = wrapName(node.part.name, NODE_NAME_CHARS);
       const head = CARD_HEAD + (name.length - 1) * NAME_LINE;
       const previous = stack.at(-1);
-      stack.push({ node, unit, name, head, h: head + (unit.leads.length - 1) * LEAD + CARD_FOOT, y: previous ? previous.y + previous.h + CARD_GAP : TOP + BRAIN_HEAD });
+      const gap = unit.leads[0]?.source.kind === "chain" ? CHAIN_GAP : CARD_GAP;
+      stack.push({ node, unit, name, head, h: head + (unit.leads.length - 1) * LEAD + CARD_FOOT, y: previous ? previous.y + previous.h + gap : TOP + BRAIN_HEAD });
     }
   }
 
+  const blockOf = new Map(stack.map((block) => [block.unit.label, block]));
   const stackBottom = stack.reduce((bottom, block) => Math.max(bottom, block.y + block.h), TOP + BRAIN_HEAD);
   const brainHeight = Math.max(stackBottom - TOP + 14, BRAIN_HEAD + 40);
   // Leads that take their power from the supply run around the board, not through it.
@@ -124,7 +156,26 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
   const chargerY = supplyY + supplyHeight + 30;
   const legendY =
     Math.max(TOP + brainHeight, supply.upstream.length > 0 ? chargerY + 76 : supplyY + supplyHeight, fromSupply.length > 0 ? busY + 10 : 0) + 34;
-  const height = legendY + 16;
+  const LEGEND_ROW = 18;
+  const height = legendY + LEGEND_ROW * 2 + 20;
+
+  // Every bus device shows its address; the map says whether they collide (rules §4).
+  const addresses = stack.flatMap(({ node, unit }) => (node.part.electrical.i2c_address ? [{ unit: unit.label, address: node.part.electrical.i2c_address }] : []));
+  const clashes = [...new Map(addresses.map((entry) => [entry.address, addresses.filter((other) => other.address === entry.address)])).values()].filter(
+    (group) => group.length > 1,
+  );
+  const addressMap =
+    addresses.length === 0
+      ? null
+      : `I²C ${addresses.map((entry) => `${entry.address} ${entry.unit}`).join(" · ")} — ${
+          clashes.length === 0 ? "no conflicts" : `conflict: ${clashes.map((group) => group[0]!.address).join(", ")}`
+        }`;
+
+  // Connector families actually used, one legend entry each (rules §4).
+  const families = [...new Map([supply.connector, ...nodes.map((node) => node.connector)].map((connector) => {
+    const family = familyOf(connector.housing);
+    return [family.id, family];
+  })).values()];
 
   const description = [
     `${buildName} wiring.`,
@@ -237,6 +288,33 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
           </g>
         ))}
 
+        {/* The I2C chain: a part with a second port passes the bus on, so the next
+            sensor plugs into it rather than into the board. One cable between the
+            two blocks, its four conductors in their own colours. */}
+        {stack.flatMap((block) => {
+          const upstreamLabel = block.unit.leads[0]?.source.kind === "chain" ? block.unit.leads[0].source.label : null;
+          const upstream = upstreamLabel === null ? undefined : blockOf.get(upstreamLabel);
+          if (!upstream) return [];
+          const from = upstream.y + upstream.h;
+          const to = block.y;
+          return [
+            <g key={`chain-${block.unit.label}`}>
+              {/* Plugs at both ends, so nothing about the wires is the reader's to decide:
+                  one grey cable, named by what it is (rules §4). */}
+              <line x1={NODE.x + 30} x2={NODE.x + 30} y1={from} y2={to} strokeWidth="7" strokeLinecap="round" className="stroke-hairline" />
+              <line x1={NODE.x + 30} x2={NODE.x + 30} y1={from} y2={to} strokeWidth="2.5" strokeLinecap="round" className="stroke-faint" />
+              <Port x={NODE.x + 30} y={from} housing={block.node.connector.housing} />
+              <Port x={NODE.x + 30} y={to} housing={block.node.connector.housing} />
+              <text x={NODE.x + 46} y={(from + to) / 2} fontSize="9.5" className="fill-ink font-mono">
+                {clip(`${block.unit.label} → ${upstreamLabel}`, 40)}
+              </text>
+              <text x={NODE.x + 46} y={(from + to) / 2 + 13} fontSize="9.5" className="fill-muted font-mono">
+                {clip(`${block.node.connector.housing} · either port`, 44)}
+              </text>
+            </g>,
+          ];
+        })}
+
         {/* Peripherals the supply powers directly: down from the supply, under the board and up the
             outside, so the branch crosses none of the board's own leads. */}
         {fromSupply.map(({ lead, y }, index) => {
@@ -258,18 +336,50 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
         })}
 
         {/* Legend. */}
+        {/* Legend. Wire colours are for the loose-ended run onto the header: a cable
+            with a plug at both end has nothing for the reader to decide (rules §4). */}
+        <text x={16} y={legendY + 4} fontSize="10" className="fill-ink font-mono">
+          loose ends →
+        </text>
         {[
-          { x: 16, label: "power", className: "stroke-coral-deep", dash: undefined },
-          { x: 150, label: "ground", className: "stroke-faint", dash: undefined },
-          { x: 290, label: "signal", className: "stroke-coral-deep", dash: "4 4" },
+          { x: 104, label: "V+ · red", role: "power", dash: undefined },
+          { x: 210, label: "GND · black", role: "ground", dash: undefined },
+          { x: 332, label: "SDA · blue", role: "sda", dash: "4 4" },
+          { x: 444, label: "SCL · yellow", role: "scl", dash: "4 4" },
+          { x: 566, label: "signal · orange", role: "signal", dash: "4 4" },
         ].map((entry) => (
           <g key={entry.label}>
-            <line x1={entry.x} x2={entry.x + 34} y1={legendY} y2={legendY} strokeWidth="1.5" strokeDasharray={entry.dash} className={entry.className} />
-            <text x={entry.x + 42} y={legendY + 4} fontSize="10" className="fill-muted font-mono">
+            <line x1={entry.x} x2={entry.x + 30} y1={legendY} y2={legendY} strokeWidth="1.5" strokeDasharray={entry.dash} stroke={WIRE_STROKE[entry.role]} />
+            <text x={entry.x + 38} y={legendY + 4} fontSize="10" className="fill-muted font-mono">
               {entry.label}
             </text>
           </g>
         ))}
+
+        <text x={16} y={legendY + LEGEND_ROW + 4} fontSize="10" className="fill-ink font-mono">
+          connectors →
+        </text>
+        {families.map((family, index) => (
+          <g key={family.id}>
+            <rect x={100 + index * 190} y={legendY + LEGEND_ROW - 3} width="10" height="14" rx="2" fill={family.fill} stroke={family.stroke} strokeWidth="1" />
+            <text x={118 + index * 190} y={legendY + LEGEND_ROW + 4} fontSize="10" className="fill-muted font-mono">
+              {family.label}
+            </text>
+          </g>
+        ))}
+        <rect x={100 + families.length * 190} y={legendY + LEGEND_ROW - 3} width="10" height="14" rx="2" fill={HEADER_FAMILY.fill} stroke={HEADER_FAMILY.stroke} strokeWidth="1" />
+        <text x={118 + families.length * 190} y={legendY + LEGEND_ROW + 4} fontSize="10" className="fill-muted font-mono">
+          {HEADER_FAMILY.label}
+        </text>
+
+        {addressMap ? (
+          <text x={16} y={legendY + LEGEND_ROW * 2 + 4} fontSize="10" className="fill-muted font-mono">
+            {addressMap}
+          </text>
+        ) : null}
+        <text x={16} y={legendY + LEGEND_ROW * 2 + (addressMap ? 17 : 4)} fontSize="10" className="fill-coral-deep font-mono">
+          {`${brain.name} GPIO are ${logic[1]} V only — do not wire a signal to the ${BRAIN_HEADER.rail5v} rail.`}
+        </text>
       </svg>
     </div>
   );

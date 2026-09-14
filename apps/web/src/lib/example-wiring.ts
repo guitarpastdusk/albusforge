@@ -58,8 +58,10 @@ export interface WiringLead {
    * Where the lead ends. A part that runs from the supply takes its power from
    * the supply itself, not from the board's 5V header: that header is VCC_5V,
    * after the USB Schottky, and power.ts's window is the supply's own output.
+   * `chain` means it plugs into the part named, not into the board: an I2C
+   * breakout has two identical ports, so the bus passes through it.
    */
-  source: { kind: "header" | "supply"; label: string };
+  source: { kind: "header" | "supply" | "chain"; label: string };
   /** Volts the lead carries, on the power lead; null on ground and signal leads, where the pin names say it. */
   window: VoltageWindow | null;
   /** What the signal is, on signal leads: "I²C 0x77", "ADC", "PWM". */
@@ -81,6 +83,13 @@ export interface WiringNode {
   rail: { label: string; window: VoltageWindow };
   /** Where rail and `voltage_range` overlap: the volts the part actually sees. */
   usable: VoltageWindow;
+  /**
+   * The part this one plugs into instead of the board, when it is further down
+   * an I2C chain; null for the part that reaches the board. Only a connector
+   * with a second identical port can pass the bus on, which is why a 3-pin
+   * probe never chains.
+   */
+  chainedTo: string | null;
   notes: string[];
 }
 
@@ -110,6 +119,42 @@ export interface Wiring {
 
 /** "3.251–3.349 V", the registry's own spelling of a window. */
 export const volts = (window: VoltageWindow) => `${window[0]}–${window[1]} V`;
+
+/**
+ * Parts with a second, identical I2C port, so another sensor can plug into them
+ * and the bus passes through.
+ *
+ * **This is a per-part fact, not a connector one.** A Connector Definition
+ * describes one pinout; it says nothing about how many sockets a given breakout
+ * puts on its board. Inferring "has two ports" from "has SDA and SCL" would
+ * invent a port the registry does not record, which the wiring-diagram rules
+ * forbid. So this is an explicit, sourced, example-only list and everything
+ * absent from it is drawn as a spoke.
+ *
+ * Each entry quotes the vendor page that establishes the second port. Parts
+ * whose page says only "connectors" in the plural are deliberately **not**
+ * here: plural is not a count, and a board drawn as a pass-through when it has
+ * one socket is a wiring error someone would find at the bench.
+ *
+ * The durable fix is a port count in the Part Definition, which would make this
+ * list unnecessary.
+ */
+const PASS_THROUGH: Record<string, { ports: number; source: string }> = {
+  "P-001": {
+    ports: 2,
+    // https://www.adafruit.com/product/2652
+    source: 'Adafruit 2652: "The STEMMA QT connectors on either side are compatible with the SparkFun Qwiic I2C connectors."',
+  },
+};
+
+/**
+ * True when another part can plug into this one. Note the direction: chaining B
+ * into A needs a spare socket on **A**, the part already on the bus — B only
+ * needs the one port it plugs in with.
+ */
+export function acceptsChain(part: PartDefinition): boolean {
+  return part.electrical.interface === "i2c" && (PASS_THROUGH[part.id]?.ports ?? 1) >= 2;
+}
 
 function connectorOf(part: PartDefinition): ConnectorDefinition {
   const found = CONNECTORS.get(part.electrical.connector);
@@ -176,6 +221,14 @@ export function exampleWiring(build: ExampleBuild): Wiring {
   const takeDigital = pinPool(BRAIN_HEADER.digital, "digital");
   const takePwm = pinPool(BRAIN_HEADER.pwm, "PWM");
 
+  /**
+   * The last thing on the I2C bus, so the next part plugs into it rather than
+   * into the board. A Qwiic/STEMMA QT breakout carries two identical ports, so
+   * the bus passes straight through: the board sees one cable however many
+   * sensors hang off it. Only the first part on the bus reaches the header.
+   */
+  let lastOnBus: { label: string; accepts: boolean } | null = null;
+
   const nodes = parts
     .filter(({ part }) => part.electrical.interface !== "host" && part.electrical.interface !== "power")
     .map(({ part, qty }): WiringNode => {
@@ -189,9 +242,32 @@ export function exampleWiring(build: ExampleBuild): Wiring {
       const supplyPin = connectorOf(supplyPart).pins.find((pin) => pin.role === "power");
       const header = (label: string) => ({ kind: "header" as const, label });
 
-      const units = Array.from({ length: qty }, (_unit, index) => ({
-        label: qty > 1 ? `${part.id} · ${index + 1} of ${qty}` : part.id,
+      // We can only join the bus if whatever is already on it has a spare socket.
+      const onBus = part.electrical.interface === "i2c";
+      const chainedTo = onBus && lastOnBus?.accepts ? lastOnBus.label : null;
+
+      const units = Array.from({ length: qty }, (_unit, index) => {
+        const label = qty > 1 ? `${part.id} · ${index + 1} of ${qty}` : part.id;
+        // Each unit plugs into whatever is already on the bus, then becomes its end.
+        const upstream = onBus && lastOnBus?.accepts ? lastOnBus.label : null;
+        if (onBus) lastOnBus = { label, accepts: acceptsChain(part) };
+        const chain = (pin: ConnectorPin, signal: string | null, window: VoltageWindow | null): WiringLead => ({
+          pin,
+          source: { kind: "chain", label: upstream! },
+          window,
+          signal,
+        });
+        return {
+        label,
         leads: connector.pins.map((pin): WiringLead => {
+          // Every conductor of a chained part goes down the same cable to the part before it.
+          if (upstream !== null) {
+            return chain(
+              pin,
+              pin.role === "sda" || pin.role === "scl" ? `I²C ${part.electrical.i2c_address}` : null,
+              pin.role === "power" ? usable : null,
+            );
+          }
           switch (pin.role) {
             case "power":
               return {
@@ -217,7 +293,8 @@ export function exampleWiring(build: ExampleBuild): Wiring {
                   : { pin, source: header(takeDigital()), window: null, signal: part.electrical.interface === "1-wire" ? "One-Wire" : "digital in" };
           }
         }),
-      }));
+        };
+      });
 
       const notes = [];
       const note = NOTES[part.electrical.interface];
@@ -228,7 +305,7 @@ export function exampleWiring(build: ExampleBuild): Wiring {
           `${part.name} can answer at up to ${part.electrical.logic_v[1]} V, above the ${logic[1]} V ${brain.name} GPIO accepts. Its signal needs a divider, which isn't in the parts list.`,
         );
       }
-      return { part, connector, units, rail: { label: fromSupply ? supplyPart.name : `${brain.name} 3V3 rail`, window: railWindow }, usable, notes };
+      return { part, connector, units, rail: { label: fromSupply ? supplyPart.name : `${brain.name} 3V3 rail`, window: railWindow }, usable, chainedTo, notes };
     });
 
   return { brain, brainConnector: connectorOf(brain), rail, logic, supply, nodes };

@@ -28,6 +28,7 @@
   },
   "exports": {
     "./candidate": "./src/candidate.ts",
+    "./accepted-candidate": "./src/accepted-candidate.ts",
     "./artifacts": "./src/artifacts.ts",
     "./plan": "./src/plan.ts",
     "./worker": "./src/job.ts",

@@ -1,3 +1,4 @@
+import { cameraApprovalsFromEnv } from "@albusforge/codegen/accepted-candidate";
 import { GoogleAuth } from "google-auth-library";
 import { gcsArtifacts, localArtifacts } from "@albusforge/codegen/artifacts";
 import type { FirmwareOptions } from "./firmware-routes";
@@ -17,6 +18,8 @@ export function firmwareOptionsFromEnv(
     : directory
       ? localArtifacts(directory)
       : undefined;
+  const mode = env.FIRMWARE_DISPATCH_MODE ?? "direct";
+  if (mode !== "direct" && mode !== "scheduler") throw new Error("Invalid firmware dispatch mode");
   const resource = env.FIRMWARE_JOB_RESOURCE;
   if (
     resource &&
@@ -34,7 +37,8 @@ export function firmwareOptionsFromEnv(
   return {
     artifacts,
     enabled,
-    ...(resource
+    cameraApprovals: cameraApprovalsFromEnv(env),
+    ...(resource && mode === "direct"
       ? {
           dispatch: async () => {
             const token = await auth.getAccessToken();

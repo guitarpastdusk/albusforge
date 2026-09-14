@@ -301,6 +301,17 @@ describe("DesignReadyCard enclosure preview", () => {
     expect(html).not.toContain(".glb");
   });
 
+  it("a failed body read shows the message and a retry, and no preview button", async () => {
+    const { ENCLOSURE_SAMPLE } = await import("@/components/enclosure/fixture");
+    const html = renderToStaticMarkup(
+      <DesignReadyCard buildId="bld_1" card={READY} enclosure={ENCLOSURE_SAMPLE} enclosureError="We couldn’t load the enclosure preview." onRetryEnclosure={() => {}} />,
+    );
+    expect(html).toContain("We couldn’t load the enclosure preview.");
+    expect(html).toMatch(/<button type="button"[^>]*>Try again<\/button>/);
+    expect(html).not.toContain("enclosure in 3D");
+    expect(html).not.toContain(".glb");
+  });
+
   it("the sample is the fixture, labelled, and the button says so", async () => {
     const { ENCLOSURE_SAMPLE, ENCLOSURE_FIXTURE } = await import("@/components/enclosure/fixture");
     expect(ENCLOSURE_SAMPLE.sample).toBe(true);

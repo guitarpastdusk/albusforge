@@ -13,7 +13,7 @@ import { SpecPanel } from "./SpecPanel";
  * `active` shows it regardless (the /build/[buildId] page).
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
-  const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, streamState } = useConversation();
+  const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, enclosureError, retryEnclosure, streamState } = useConversation();
 
   if (!active && state.messages.length === 0) return null;
 
@@ -59,7 +59,16 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         ) : null}
         <SpecPanel spec={state.spec} status={state.status} />
         <CandidateParts parts={state.candidateParts} />
-        {state.ready && state.buildId ? <SessionReadyCard buildId={state.buildId} signedIn={signedIn} card={state.ready} enclosure={enclosurePreview} /> : null}
+        {state.ready && state.buildId ? (
+          <SessionReadyCard
+            buildId={state.buildId}
+            signedIn={signedIn}
+            card={state.ready}
+            enclosure={enclosurePreview}
+            enclosureError={enclosureError}
+            onRetryEnclosure={retryEnclosure}
+          />
+        ) : null}
       </div>
 
       <form

@@ -39,6 +39,9 @@ interface ConversationApi {
   signedIn: boolean | Promise<boolean>;
   /** The device-ready card's 3D enclosure preview: the build's body (GET /v1/builds/:id/body) once it has one, the labelled sample until then, null to show none. */
   enclosurePreview: EnclosurePreviewData | null;
+  /** The body read failed (not "no body yet"): the card says so instead of showing the sample, and offers a retry. */
+  enclosureError: string | null;
+  retryEnclosure: () => void;
   /** The event stream's state, once a build exists; null before. The view says when replies may be delayed. */
   streamState: StreamState | null;
   /** Send a message; the first one creates the build. False if nothing was sent. */
@@ -90,7 +93,7 @@ export function BuildConversation({
   const typing = isTyping(state);
   const [streamState, setStreamState] = useState<StreamState | null>(null);
   const { buildId } = state;
-  const enclosurePreview = useEnclosureBody(buildId, state.ready !== null, fallbackPreview, loadBody);
+  const { preview: enclosurePreview, error: enclosureError, retry: retryEnclosure } = useEnclosureBody(buildId, state.ready !== null, fallbackPreview, loadBody);
   const requestRefresh = useBuildRefresh(ACTIONS, dispatch);
 
   const send = (text: string): boolean => {
@@ -137,7 +140,11 @@ export function BuildConversation({
 
   useReplyWatchdog(Boolean(buildId) && typing, () => dispatch({ type: "overdue", message: OVERDUE_MESSAGE }));
 
-  return <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, streamState }}>{children}</ConversationContext>;
+  return (
+    <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, enclosureError, retryEnclosure, streamState }}>
+      {children}
+    </ConversationContext>
+  );
 }
 
 /** Renders its children only while the conversation hasn't started — the landing hero. */

@@ -7,9 +7,24 @@ const usd = (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${a
 
 /**
  * Shown once the plan is solved — the only sign-up ask in the chat. Parts come from the plan, never UI strings.
- * `enclosure`: a preview opens the 3D viewer; null says it isn't generated yet (live mode); omitted shows neither.
+ * `enclosure`: a preview opens the 3D viewer; null says it isn't generated yet; omitted shows neither.
+ * `enclosureError`: the body read failed, so instead of a preview the card says so and offers `onRetryEnclosure`.
  */
-export function DesignReadyCard({ card, buildId, signedIn = false, enclosure }: { card: DeviceReadyCard; buildId: string; signedIn?: boolean; enclosure?: EnclosurePreviewData | null }) {
+export function DesignReadyCard({
+  card,
+  buildId,
+  signedIn = false,
+  enclosure,
+  enclosureError = null,
+  onRetryEnclosure,
+}: {
+  card: DeviceReadyCard;
+  buildId: string;
+  signedIn?: boolean;
+  enclosure?: EnclosurePreviewData | null;
+  enclosureError?: string | null;
+  onRetryEnclosure?: () => void;
+}) {
   const projectHref = `/projects/${encodeURIComponent(buildId)}`;
   return (
     <section aria-label="Device design ready" className="rounded-[24px] border border-hairline bg-white px-[34px] py-[30px]">
@@ -29,7 +44,16 @@ export function DesignReadyCard({ card, buildId, signedIn = false, enclosure }: 
           </li>
         ))}
       </ul>
-      {enclosure !== undefined ? (
+      {enclosureError ? (
+        <p role="alert" className="mt-4 flex flex-wrap items-center gap-3 text-[14px] text-coral-deep">
+          <span>{enclosureError}</span>
+          {onRetryEnclosure ? (
+            <button type="button" onClick={onRetryEnclosure} className="font-semibold hover:text-coral">
+              Try again
+            </button>
+          ) : null}
+        </p>
+      ) : enclosure !== undefined ? (
         <div className="mt-4">
           <EnclosureDialogButton preview={enclosure} title={card.name} />
         </div>

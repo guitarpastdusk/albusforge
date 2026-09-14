@@ -19,3 +19,4 @@ export * from "./sensor-ask";
 export * from "./firmware";
 export * from "./device-provisioning";
 export * from "./device-setup";
+export * from "./build-plan";

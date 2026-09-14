@@ -2,7 +2,7 @@ import { createClientDb, type Db } from "@albusforge/db";
 import type { Pool, PoolClient } from "pg";
 
 /** Own every phase of a short read lease, including BEGIN and transport errors. */
-export const readSnapshot = <T>(pool: Pool, read: (db: Db) => Promise<T>): Promise<T> =>
+export const readSnapshot = <T>(pool: Pool, read: (db: Db, client: PoolClient) => Promise<T>): Promise<T> =>
   managedTransaction(pool, "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", read);
 
 /** Mutation callers own their row locks; transport/cleanup ownership is shared. */

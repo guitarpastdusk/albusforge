@@ -18,3 +18,4 @@ export * from "./telemetry-read";
 export * from "./sensor-ask";
 
 export * from "./device-provisioning";
+export * from "./firmware";

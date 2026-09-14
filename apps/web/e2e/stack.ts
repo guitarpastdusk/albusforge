@@ -4,7 +4,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import http from "node:http";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { buildApp as buildIngest } from "../../cloudlink/src/app";
+import { provisioningFixtureModel } from "../../gateway/src/provisioning.test-fixtures";
 import pg from "pg";
 
 const root = path.resolve(import.meta.dirname, "../../..");
@@ -37,7 +41,9 @@ async function ready(url: string, child: ChildProcess) {
 }
 function processEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // Fixed local endpoints override inherited application/provider configuration.
-  const env = { ...process.env, ...extra };
+  const inherited = { ...process.env };
+  for (const key of ["DEVICE_HANDOFF_KEYS", "DEVICE_INGEST_URL", "DEVICE_PROVISIONING_TEST_PROFILES_FILE", "FIRMWARE_JOB_RESOURCE", "FIRMWARE_ARTIFACT_BUCKET", "FIRMWARE_ARTIFACT_DIR", "FIRMWARE_JOBS_ENABLED"]) delete inherited[key];
+  const env = { ...inherited, ...extra };
   for (const key of ["K_SERVICE", "K_REVISION", "INTERNAL_AUTH_AUDIENCE", "SSR_SERVICE_ACCOUNT", "ASK_URL", "RESEND_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"]) delete env[key];
   return env;
 }
@@ -45,16 +51,23 @@ function processEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 export interface Stack {
   webUrl: string;
   gatewayUrl: string;
+  ingestUrl?: string;
+  artifactDir?: string;
   pool: pg.Pool;
   codeFor(email: string): Promise<string>;
 }
 
-export const test = base.extend<{ stack: Stack }>({
-  stack: [async ({}, runTest) => {
+export const test = base.extend<{ stack: Stack; enableProvisioning: boolean; enableFirmware: boolean }>({
+  enableProvisioning: [false, { option: true }],
+  enableFirmware: [false, { option: true }],
+  stack: [async ({ enableProvisioning, enableFirmware }, runTest) => {
     const container = await new PostgreSqlContainer("postgres:16-alpine").start();
     const children: ChildProcess[] = [];
     let pool: pg.Pool | undefined;
     let intake: http.Server | undefined;
+    let cloudlink: ReturnType<typeof buildIngest> | undefined;
+    let fixtureDirectory: string | undefined;
+    let ingestUrl: string | undefined, artifactDir: string | undefined;
     try {
       const admin = new pg.Client({ connectionString: container.getConnectionUri() });
       await admin.connect();
@@ -103,9 +116,25 @@ export const test = base.extend<{ stack: Stack }>({
       const intakePort = await listen(intake);
       const gatewayPort = await freePort();
       const codes = new Map<string, string>();
+      const deviceEnv: NodeJS.ProcessEnv = {};
+      if (enableProvisioning || enableFirmware) fixtureDirectory = mkdtempSync(path.join(tmpdir(), "albus-browser-fixture-"));
+      if (enableProvisioning) {
+        cloudlink = buildIngest({ pool: db, log: () => {} });
+        ingestUrl = `${await cloudlink.listen({ host: "127.0.0.1", port: 0 })}/ingest/v1`;
+        const profilePath = path.join(fixtureDirectory!, "provisioning-profiles.json");
+        writeFileSync(profilePath, JSON.stringify([provisioningFixtureModel().profile]), { mode: 0o600 });
+        deviceEnv.DEVICE_HANDOFF_KEYS = JSON.stringify({ active: "browser-fixture", keys: { "browser-fixture": randomBytes(32).toString("base64url") } });
+        deviceEnv.DEVICE_INGEST_URL = ingestUrl;
+        deviceEnv.DEVICE_PROVISIONING_TEST_PROFILES_FILE = profilePath;
+      }
+      if (enableFirmware) {
+        artifactDir = path.join(fixtureDirectory!, "artifacts");
+        deviceEnv.FIRMWARE_ARTIFACT_DIR = artifactDir;
+        deviceEnv.FIRMWARE_JOBS_ENABLED = "1";
+      }
       const gateway = spawn(process.execPath, ["apps/gateway/dist/server.js"], {
         cwd: root,
-        env: processEnv({ ...dbEnv, DB_USER: "albus_app", DB_PASSWORD: "local-app", PORT: String(gatewayPort), EMAIL_ADAPTER: "log", INTAKE_URL: `http://127.0.0.1:${intakePort}`, INTAKE_AUTH: "none", ASK_AUTH: "none" }),
+        env: processEnv({ ...dbEnv, ...deviceEnv, DB_USER: "albus_app", DB_PASSWORD: "local-app", PORT: String(gatewayPort), EMAIL_ADAPTER: "log", INTAKE_URL: `http://127.0.0.1:${intakePort}`, INTAKE_AUTH: "none", ASK_AUTH: "none" }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       children.push(gateway);
@@ -129,14 +158,16 @@ export const test = base.extend<{ stack: Stack }>({
       });
       children.push(web); web.stdout?.resume(); web.stderr?.resume();
       await ready(`${webUrl}/signin`, web);
-      await runTest({ webUrl, gatewayUrl: `http://127.0.0.1:${gatewayPort}`, pool: db, async codeFor(email) {
+      await runTest({ webUrl, ingestUrl, artifactDir, gatewayUrl: `http://127.0.0.1:${gatewayPort}`, pool: db, async codeFor(email) {
         for (let i = 0; i < 100; i++) { const code = codes.get(email); if (code) { codes.delete(email); return code; } await delay(50); }
         throw new Error("No email arrived in the local acceptance sink");
       } });
     } finally {
       for (const child of children.reverse()) await stop(child);
       if (intake) { intake.closeAllConnections(); await new Promise<void>(resolve => intake!.close(() => resolve())); }
+      await cloudlink?.close();
       await pool?.end();
+      if (fixtureDirectory) rmSync(fixtureDirectory, { recursive: true, force: true });
       await container.stop();
     }
   }, { timeout: 120_000 }],

@@ -6,7 +6,7 @@ Check-in submissions for the Battle of the Coasts hackathon (Deep Tech / Physica
 | --- | --- | --- |
 | 1 | 12 | [CHECKIN-1.md](CHECKIN-1.md) · [CHECKIN-1.pdf](CHECKIN-1.pdf) |
 | 2 | 24 | [CHECKIN-2.md](CHECKIN-2.md) · [CHECKIN-2.pdf](CHECKIN-2.pdf) · [Evidence and statistics](CHECKIN-2-EVIDENCE.md) |
-| 3 | 36 | [CHECKIN-3.md](CHECKIN-3.md) · [Evidence and statistics](CHECKIN-3-EVIDENCE.md) |
+| 3 | 36 | [CHECKIN-3.md](CHECKIN-3.md) · [CHECKIN-3.pdf](CHECKIN-3.pdf) · [Evidence and statistics](CHECKIN-3-EVIDENCE.md) |
 
 The Markdown is the source, and GitHub renders its Mermaid diagram. The PDF is exported from it for submission.
 

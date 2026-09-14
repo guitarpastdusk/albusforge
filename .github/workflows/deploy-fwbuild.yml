@@ -1,0 +1,189 @@
+# Manual rollout after gateway-owned migrations; schedules remain Terraform-owned.
+name: deploy-fwbuild
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# `shell: bash` runs steps with `bash -eo pipefail`. Without it Actions uses
+# `bash -e`, where a failing command piped into another doesn't fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/albusforge-ci/albusforge
+  IMAGE: fwbuild
+  JOBS: fwbuild
+  PROJECT: albusforge-staging
+  WIF_PROVIDER: projects/511005698198/locations/global/workloadIdentityPools/github/providers/github-actions
+  # The service account this workflow deploys as (ADR 0001).
+  DEPLOYER: deploy-staging@albusforge-ci.iam.gserviceaccount.com
+
+jobs:
+  staging:
+    # workflow_dispatch can target any branch; only main deploys.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # WIF trust is bound to the GitHub environment, not the branch (ADR 0001).
+    environment: staging
+    # fwbuild deploys never overlap. Not deploy-web's or deploy-gateway's group:
+    # GitHub keeps one pending run per group across workflows, so sharing one
+    # would let a queued run of one silently replace a queued run of another.
+    # The freshness check below keeps runs in commit order.
+    concurrency:
+      group: deploy-staging-fwbuild
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # Full history for the freshness check's ancestry test.
+          fetch-depth: 0
+          # Nothing after checkout needs git credentials.
+          persist-credentials: false
+
+      - name: Require successful CI for this main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/require-release-ci.sh
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # google-github-actions/auth only writes a credentials file; the token
+      # exchange and impersonation happen on the first gcloud call. Fail here,
+      # clearly, if this job can't act as the deployer.
+      - name: Verify GCP credentials
+        run: |
+          gcloud auth print-access-token >/dev/null \
+            || { echo "::error::Could not get credentials for ${DEPLOYER} through workload identity. Check its WIF binding for this GitHub environment (ADR 0001)."; exit 1; }
+
+      # gcloud run deploy creates a missing service, and deploy-staging is
+      # allowed to. Services come only from Terraform (ADR 0005): fail before
+      # building if infra/env hasn't created fwbuild yet.
+      - name: Require Terraform-managed jobs
+        run: |
+          for job in ${JOBS}; do
+            gcloud run jobs describe "$job" --project "$PROJECT" --region "$REGION" --format='value(metadata.name)' >/dev/null
+          done
+
+      - name: Require the matching successful schema migration
+        run: bash .github/scripts/require-schema-release.sh
+
+      # Inside the concurrency lock, compare with the revision staging actually
+      # serves (not the desired image a failed deploy leaves behind). An older or
+      # diverged commit is refused before anything is built; the same commit is a
+      # no-op. Rolling back is not possible from this workflow.
+      - name: Check staging freshness
+        id: fresh
+        run: bash .github/scripts/staging-freshness.sh >> "$GITHUB_OUTPUT"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      # Tags are immutable, so a re-run for the same commit can't push again.
+      # Reuse the image that the earlier attempt pushed. A failed lookup means
+      # "not pushed yet" only if the repository itself is reachable; any other
+      # failure stops the job instead of building into an immutable-tag error.
+      - name: Look for an existing image for this commit
+        id: existing
+        run: |
+          if digest="$(gcloud artifacts docker images describe "${REPO}/${IMAGE}:${GITHUB_SHA}" \
+              --format='value(image_summary.digest)' 2>"${RUNNER_TEMP}/describe.err")"; then
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "Reusing ${REPO}/${IMAGE}:${GITHUB_SHA} (${digest})"
+          elif gcloud artifacts repositories describe albusforge \
+              --project albusforge-ci --location "${REGION}" --format='value(name)' >/dev/null; then
+            echo "digest=" >> "$GITHUB_OUTPUT"
+            echo "No image for ${GITHUB_SHA} yet; building."
+          else
+            cat "${RUNNER_TEMP}/describe.err" >&2
+            echo "::error::Could not reach Artifact Registry to check for an existing image; not building."
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: steps.existing.outputs.digest == ''
+
+      - name: Build and push
+        id: build
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/codegen/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }}
+          # No attestation manifests: the digest must be the single-platform
+          # image manifest that Cloud Run deploys.
+          provenance: false
+          sbom: false
+
+      - name: Resolve digest
+        id: digest
+        env:
+          EXISTING: ${{ steps.existing.outputs.digest }}
+          BUILT: ${{ steps.build.outputs.digest }}
+        run: |
+          digest="${EXISTING:-$BUILT}"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::No valid image digest (existing='${EXISTING}', built='${BUILT}')"
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      # Image only: Terraform owns job env vars, secrets and
+      # everything else (ADR 0005).
+      - name: Update and execute reviewed job images
+        if: steps.fresh.outputs.action == 'deploy'
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          for job in ${JOBS}; do
+            gcloud run jobs update "$job" --image "${REPO}/${IMAGE}@${DIGEST}" --project "$PROJECT" --region "$REGION" --quiet
+            gcloud run jobs execute "$job" --project "$PROJECT" --region "$REGION" --wait
+          done
+
+      # Runs only if the deploy succeeded, or staging already serves this commit,
+      # and the script itself re-checks that both jobs’ latest successful executions
+      # runs this digest. promote-fwbuild refuses any digest without this tag.
+      - name: Mark the digest as deployed to staging
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: bash .github/scripts/mark-staging-deployed.sh "$DIGEST"
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          ACTION: ${{ steps.fresh.outputs.action }}
+        run: |
+          {
+            if [ "$ACTION" = skip ]; then
+              echo "### Staging already runs this commit"
+            else
+              echo "### Deployed fwbuild to staging"
+            fi
+            echo
+            echo "Commit \`${GITHUB_SHA}\`"
+            echo
+            echo "Image \`${REPO}/${IMAGE}@${DIGEST}\`, tagged \`staging-deployed-${GITHUB_SHA}\`"
+            echo
+            echo "To promote this image, run **promote-fwbuild** with \`digest\`:"
+            echo
+            echo '```'
+            echo "${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

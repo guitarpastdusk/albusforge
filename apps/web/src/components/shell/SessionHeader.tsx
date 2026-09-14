@@ -14,6 +14,7 @@ export async function SessionHeader() {
   const session = await getHeaderSession();
   const host = ((await headers()).get("host") ?? "").toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
   const hostScoped = host.endsWith(".albusforge.ai") && host !== "staging.albusforge.ai";
-  return <><WorkspaceIdentity snapshot={session ? { userId: session.user.id, tenantId: session.tenant.id } : null} /><Header user={session ? { email: session.user.email, displayName: session.user.display_name,
-    workspace: hostScoped ? session.tenants.find((tenant) => tenant.slug === host.slice(0, -".albusforge.ai".length)) : session.tenant, memberships: session.tenants, hostScoped } : null} /></>;
+  const workspace = session ? (hostScoped ? session.tenants.find((tenant) => tenant.slug === host.slice(0, -".albusforge.ai".length)) : session.tenant) : undefined;
+  return <><WorkspaceIdentity intendedTenantId={workspace?.id ?? null} snapshot={session ? { userId: session.user.id, tenantId: session.tenant.id } : null} /><Header user={session ? { email: session.user.email, displayName: session.user.display_name,
+    workspace, memberships: session.tenants, hostScoped } : null} /></>;
 }

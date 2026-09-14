@@ -44,3 +44,10 @@ it("binds new-build intent to the confirmed rendered header and removes admissio
   expect(container.textContent).not.toContain("private upstream details");
   expect(container.querySelector("button")?.textContent).toBe("Reload workspace");
 });
+
+it("uses the displayed host workspace as intent even when the session active tenant differs", async () => {
+  vi.mocked(reconcileWorkspace).mockResolvedValue({ ok: true, data: true });
+  await act(async () => root.render(<WorkspaceBoundary><WorkspaceIdentity snapshot={snapshot} intendedTenantId="host-tenant-b" /><Intent /></WorkspaceBoundary>));
+  expect(reconcileWorkspace).toHaveBeenCalledWith(snapshot);
+  expect(container.textContent).toContain("host-tenant-b");
+});

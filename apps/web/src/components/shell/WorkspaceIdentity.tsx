@@ -6,11 +6,12 @@ import { settle } from "@/lib/safe-action";
 import { useWorkspaceTransition } from "./WorkspaceBoundary";
 
 /** Reconcile the streamed header without delaying public server content. */
-export function WorkspaceIdentity({ snapshot }: { snapshot: { userId: string; tenantId: string } | null }) {
+export function WorkspaceIdentity({ snapshot, intendedTenantId }: { snapshot: { userId: string; tenantId: string } | null; intendedTenantId?: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const setExpectedTenant = useWorkspaceTransition()?.setExpectedTenant;
   const userId = snapshot?.userId ?? null;
   const tenantId = snapshot?.tenantId ?? null;
+  const intended = intendedTenantId === undefined ? tenantId : intendedTenantId;
   useEffect(() => {
     if (!setExpectedTenant) return;
     let alive = true;
@@ -21,7 +22,7 @@ export function WorkspaceIdentity({ snapshot }: { snapshot: { userId: string; te
       setError(null);
       const result = await settle(() => reconcileWorkspace(userId && tenantId ? { userId, tenantId } : null));
       if (!alive || current !== generation) return;
-      if (result.ok && result.data) setExpectedTenant(tenantId);
+      if (result.ok && result.data) setExpectedTenant(intended);
       else if (result.ok) window.location.replace(window.location.pathname);
       else setError(result.message);
       // Uncertain reads keep mutation admission disabled. Focus/reload retries.
@@ -30,6 +31,6 @@ export function WorkspaceIdentity({ snapshot }: { snapshot: { userId: string; te
     window.addEventListener("focus", focus);
     void check();
     return () => { alive = false; window.removeEventListener("focus", focus); };
-  }, [userId, tenantId, setExpectedTenant]);
+  }, [userId, tenantId, intended, setExpectedTenant]);
   return error ? <div role="alert" className="px-6 py-3 text-muted">{error} <button type="button" className="underline" onClick={() => window.location.reload()}>Reload workspace</button></div> : null;
 }

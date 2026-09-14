@@ -167,7 +167,7 @@ describe("build conversation outcomes", () => {
       ok: true,
       data: { buildId: "bld_1", messages: [ASK], ready: null, status: "asking", specVersion: null, spec: null, candidateParts: [] },
     });
-    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds", expect.anything(), { ask_text: "A soil sensor", client_message_id: CLIENT_ID });
+    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds", expect.anything(), { ask_text: "A soil sensor", client_message_id: CLIENT_ID, expected_tenant_id: null });
   });
 
   it("startBuild whose transcript read fails still returns the build, showing the ask (logged once, not a failed send)", async () => {
@@ -208,4 +208,8 @@ it("forwards an explicit sensor channel/window through the server action", async
   vi.mocked(apiPost).mockResolvedValue({ message, queries: [] });
   expect(await askDevice("sensor", "Mean?", scope)).toEqual({ ok: true, data: message });
   expect(apiPost).toHaveBeenCalledWith("/v1/devices/sensor/ask", expect.anything(), { text: "Mean?", ...scope });
+});
+
+it("requires an explicit rendered workspace intent before attempting build creation", async () => {
+  await expect(startBuild("A soil sensor", CLIENT_ID)).resolves.toMatchObject({ ok: false, message: "Reload to confirm your workspace before starting a build." });
 });

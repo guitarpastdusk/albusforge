@@ -93,7 +93,7 @@ test('a peer hydrating after a completed switch must not retain old tenant conte
     await peer.getByRole('button',{name:'Start building'}).click();
     await expect.poll(async()=> (await stack.pool.query('SELECT tenant_id FROM builds.builds WHERE ask_text=$1',['Reviewer intended private workspace A'])).rows.length).toBe(1);
     const writtenWorkspace=(await stack.pool.query('SELECT tenant_id FROM builds.builds WHERE ask_text=$1',['Reviewer intended private workspace A'])).rows[0].tenant_id;
-    console.log(JSON.stringify({staleA,displayedOldWorkspace:displayedWorkspace===row.active_tenant_id,writtenToNewWorkspace:writtenWorkspace===b}));
+    expect(displayedWorkspace).toBe(b);
     expect(staleA).toBe(0);
     expect(writtenWorkspace).toBe(displayedWorkspace);
   }finally{release();await peer.close();}
@@ -113,6 +113,6 @@ test("a missed switch cannot retarget a new build after client admission", async
   await stack.pool.query("UPDATE users.sessions SET active_tenant_id=$1 WHERE user_id=$2", [other,row.id]);
   await page.getByLabel("Describe the device you want").fill("Must never be silently retargeted");
   await page.getByRole("button", {name:"Start building",exact:true}).click();
-  await expect(page.getByRole("alert")).toContainText("Your workspace changed");
+  await expect(page.getByRole("alert").filter({ hasText: "Your workspace changed" })).toContainText("Your workspace changed");
   expect((await stack.pool.query("SELECT id FROM builds.builds WHERE ask_text=$1", ["Must never be silently retargeted"])).rows).toEqual([]);
 });

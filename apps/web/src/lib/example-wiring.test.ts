@@ -168,6 +168,12 @@ describe("chaining shapes the example builds don't cover", () => {
     clones: 0,
     parts,
     power: { supply: "E-005", brainInput: "primary" },
+    // Sample data, as on every example build: the fixture only exercises wiring,
+    // but ExampleBuild carries the listing's readings table too.
+    readings: {
+      everySeconds: 300,
+      channels: [{ part: "P-001", capability: "read.temperature_c", label: "Air temp", precision: 1, values: [20.1, 20.3, 20.2, 20.4, 20.3, 20.2] }],
+    },
   });
 
   it("chains unit to unit when one chainable part is pinned more than once", () => {

@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
-import { buildMessages, builds, createDb, type DbConfig, specs, tenants } from "@albusforge/db";
+import { buildMessages, builds, createDb, type DbConfig, specs, tenants, users, sessions, tenantMembers } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -17,6 +17,8 @@ import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app";
+import { sessionTenantIn } from "./auth-store";
+import { hashSessionToken, newSessionToken } from "./session-cookie";
 import type { ChatOptions } from "./build-routes";
 import { createChatStore } from "./chat-store";
 import { createTurnScheduler, httpIntakeClient, type TurnScheduler } from "./intake";
@@ -143,6 +145,66 @@ const expectError = (response: { statusCode: number; json: () => unknown }, stat
 const sorted = (values: number[]) => [...values].sort((a, b) => a - b);
 
 describe("POST /v1/builds", () => {
+
+  it("rejects stale rendered workspace intent before writing or scheduling a build", async () => {
+    const [a, b] = await handle.db.insert(tenants).values([{ name: "Intent A" }, { name: "Intent B" }]).returning();
+    const [user] = await handle.db.insert(users).values({ email: `${randomUUID()}@intent.test` }).returning();
+    await handle.db.insert(tenantMembers).values([a!, b!].map(t => ({ tenantId: t.id, userId: user!.id, role: "admin" as const })));
+    const token = newSessionToken();
+    await handle.db.insert(sessions).values({ userId: user!.id, tokenHash: hashSessionToken(token), activeTenantId: a!.id, expiresAt: new Date(Date.now() + 60_000) });
+    const { app } = makeApp({ sessions: { tenantOf: value => sessionTenantIn(handle.db, value) } });
+    const ask = `Intent ${randomUUID()}`;
+    const headers = { cookie: `__Host-albus_session=${token}` };
+    // A rendered first; the other tab completed a switch before this submission.
+    await handle.db.update(sessions).set({ activeTenantId: b!.id }).where(eq(sessions.tokenHash, hashSessionToken(token)));
+    for (const expected of [a!.id, null]) {
+      const result = await app.inject({ method: "POST", url: "/v1/builds", headers, payload: { ask_text: ask, expected_tenant_id: expected } });
+      expectError(result, 409, "WORKSPACE_CHANGED");
+      expect(result.headers["set-cookie"]).toBeUndefined();
+    }
+    expect(await handle.db.select().from(builds).where(eq(builds.askText, ask))).toHaveLength(0);
+    expect(intakeCalls).toHaveLength(0);
+    // Reconciled intent is accepted, and the actual row belongs to B.
+    const accepted = await app.inject({ method: "POST", url: "/v1/builds", headers, payload: { ask_text: ask, expected_tenant_id: b!.id } });
+    expect(accepted.statusCode).toBe(201);
+    const [row] = await handle.db.select().from(builds).where(eq(builds.id, CreatedBuild.parse(accepted.json()).id));
+    expect(row?.tenantId).toBe(b!.id);
+  });
+
+  it("pins the admitted owner when the session switches after tenant resolution", async () => {
+    const [a, b] = await handle.db.insert(tenants).values([{ name: "Pinned A" }, { name: "Pinned B" }]).returning();
+    const [user] = await handle.db.insert(users).values({ email: `${randomUUID()}@intent.test` }).returning();
+    await handle.db.insert(tenantMembers).values([a!, b!].map(t => ({ tenantId: t.id, userId: user!.id, role: "admin" as const })));
+    const token = newSessionToken();
+    await handle.db.insert(sessions).values({ userId: user!.id, tokenHash: hashSessionToken(token), activeTenantId: a!.id, expiresAt: new Date(Date.now() + 60_000) });
+    let resolutions = 0;
+    const { app } = makeApp({ sessions: { tenantOf: async value => {
+      const admitted = await sessionTenantIn(handle.db, value);
+      resolutions++;
+      await handle.db.update(sessions).set({ activeTenantId: b!.id }).where(eq(sessions.tokenHash, hashSessionToken(value)));
+      return admitted;
+    } } });
+    const result = await app.inject({ method: "POST", url: "/v1/builds", headers: { cookie: `__Host-albus_session=${token}` }, payload: { ask_text: "Keep this build in its admitted workspace", expected_tenant_id: a!.id } });
+    expect(result.statusCode).toBe(201);
+    const [row] = await handle.db.select().from(builds).where(eq(builds.id, CreatedBuild.parse(result.json()).id));
+    expect(row?.tenantId).toBe(a!.id);
+    expect(await sessionTenantIn(handle.db, token)).toBe(b!.id);
+    expect(resolutions).toBe(1);
+  });
+
+  it("does not silently downgrade signed-in intent to an anonymous build", async () => {
+    const { app } = makeApp();
+    const ask = `No downgrade ${randomUUID()}`;
+    const rejected = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: ask, expected_tenant_id: randomUUID() } });
+    expectError(rejected, 409, "WORKSPACE_CHANGED");
+    expect(rejected.headers["set-cookie"]).toBeUndefined();
+    expect(await handle.db.select().from(builds).where(eq(builds.askText, ask))).toHaveLength(0);
+    const anonymous = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: ask, expected_tenant_id: null } });
+    expect(anonymous.statusCode).toBe(201);
+    const [row] = await handle.db.select().from(builds).where(eq(builds.id, CreatedBuild.parse(anonymous.json()).id));
+    expect(row?.tenantId).toBeNull();
+    expect(row?.anonOwnerHash).toBeTruthy();
+  });
   it("issues the anonymous owner cookie, stores its hash, inserts the first message and starts a turn", async () => {
     const { app, turns } = makeApp();
     const response = await app.inject({ method: "POST", url: "/v1/builds", payload: { ask_text: "  A soil moisture sensor  " } });

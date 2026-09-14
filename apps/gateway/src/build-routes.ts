@@ -186,6 +186,12 @@ export function registerBuildRoutes(app: FastifyInstance, { parts, log, chat }: 
     // Signed in: the build belongs to the tenant and no anonymous cookie is issued.
     // Otherwise the existing anonymous cookie, or a new one, owns it.
     const tenantId = (await ownerOf(request))?.tenantId ?? null;
+    // Compare intent before creating cookies, charging limits or scheduling work.
+    // Keep this resolved owner pinned through persistence: a subsequent session
+    // switch must not silently retarget an already admitted request.
+    if (body.expected_tenant_id !== undefined && body.expected_tenant_id !== tenantId) {
+      throw new HttpError(409, "WORKSPACE_CHANGED", "Your workspace changed. Reload before starting a build.");
+    }
     const existingToken = anonTokenFromCookieHeader(request.headers.cookie);
     const token = tenantId !== null ? undefined : (existingToken ?? newAnonToken());
     const owner: Owner = token === undefined ? { tenantId, anonHash: null } : { tenantId: null, anonHash: hashAnonToken(token) };

@@ -11,7 +11,8 @@ function fixture() {
 it("requires exact build, plan, code, runtime, compiler profile and channel authority", () => {
   const { identity, record } = fixture();
   expect(verifyProvisioningFirmware(record, identity)).toEqual(record);
-  for (const change of [{ buildId: randomUUID() }, { planVersion: 3 }, { codeVersion: 3 }, { runtime: "0.2.0" }, { firmwareProfileId: "other" }, { channels: { illuminance: { unit: "lux", min: 0, max: 10 } } }, { channels: { invented: { unit: "C", min: 0, max: 65535 } } }]) expect(verifyProvisioningFirmware(record, { ...identity, ...change })).toBeNull();
+  const changes: Array<Partial<Parameters<typeof verifyProvisioningFirmware>[1]>> = [{ buildId: randomUUID() }, { planVersion: 3 }, { codeVersion: 3 }, { runtime: "0.2.0" }, { firmwareProfileId: "other" }, { channels: { illuminance: { unit: "lux", min: 0, max: 10 } } }, { channels: { invented: { unit: "C", min: 0, max: 65535 } } }];
+  for (const change of changes) expect(verifyProvisioningFirmware(record, { ...identity, ...change })).toBeNull();
 });
 it("rejects modified manifest bytes, missing evidence and unexpected persisted fields", () => {
   const { identity, record } = fixture();

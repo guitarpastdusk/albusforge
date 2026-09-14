@@ -549,6 +549,8 @@ A **sixth constraint is implied by the compliance block** (§9): generation rest
 
 ### 7.3 Codegen and the compile gate
 
+B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations; trusted plan acceptance, firmware generation and production credential handoff are assigned work, not completed capabilities. That ledger separates software verification from the required registry and physical hardware evidence.
+
 Invariants:
 
 - Generated app code may import **only `hsx-sdk` headers**. A lint step fails the bundle if raw driver headers appear.
@@ -639,6 +641,8 @@ M6b (merged PR #40) adds daily PostgreSQL partitions, transactionally queued min
 M6c read API (merged PR #44) adds gateway `/v1/telemetry/devices` list/detail/latest/history endpoints. Existing PostgreSQL sessions and current tenant membership authorize each read in a consistent read-only transaction. Queries bind tenant identity server-side, bound raw/rollup windows and response sizes, expose dirty-rollup freshness and explicitly report expired history. Sign-in issuance is merged; the richer provisioned dashboard contract and SSE remain pending; see [`TELEMETRY-READ-API.md`](TELEMETRY-READ-API.md).
 
 The portal now uses those read endpoints for a minimal stored-telemetry monitor at `/live` and `/live/:deviceId`: session-bound fleet pagination, latest provisioned channels/health and selectable bounded UTC history. Timestamp-positioned dots and sample tables preserve gaps, zero values and exact sequence identity; expiry, excessive point counts and pending rollups are explicit. This is refresh-based UI, without fabricated build metadata, Ask/rules or production SSE. See [`TELEMETRY-UI.md`](TELEMETRY-UI.md).
+
+Existing-device setup at `/setup?device=UUID` uses the gateway’s read-only `GET /v1/devices/:id/setup` projection. A current tenant session gates an indexed accepted-packet receipt check and the registered channels’ latest samples in one consistent snapshot. Visible waiting screens check every five seconds with a bounded automatic budget; confirmation means authenticated cloud reception, not successful physical assembly or flashing. No identity, credential, channel snapshot or ownership is created or changed. New enrollment still depends on the persisted trusted BuildPlan, trusted provisioning producer and secure firmware credential handoff tracked in [UI-BACKLOG B3/B6/B8](UI-BACKLOG.md) and [CLOUD-PLATFORM §4.2](CLOUD-PLATFORM.md), under [ADR 0009](adr/0009-tenant-created-at-sign-up.md). Implementation boundaries and real HTTP/PostgreSQL/browser evidence are in [DEVICE-SETUP.md](DEVICE-SETUP.md).
 
 ### 7.7 Marketplace
 

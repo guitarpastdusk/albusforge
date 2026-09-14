@@ -4,12 +4,12 @@ Companion to [CHECKIN-3.md](CHECKIN-3.md). Every number here was measured at a f
 
 ## 1. Fixed comparison boundary
 
-| | Commit | Date |
-| --- | --- | --- |
-| Start | `CHECKIN2` = `28c4ac1` | 13 Sep 2026 |
-| End | `CHECKIN3` = `38c93d0` | 14 Sep 2026, 00:49 EDT |
+| | Tag object | Commit it points at | Date |
+| --- | --- | --- | --- |
+| Start | `CHECKIN2` = `28c4ac1` | `9cd94be` | 13 Sep 2026 |
+| End | `CHECKIN3` = `f0a4b2e`* | `38c93d0` | 14 Sep 2026, 00:49 EDT |
 
-Both are annotated tags in the repository. All statistics are `28c4ac1..38c93d0`.
+Both are **annotated tags**, so the tag object's own SHA differs from the commit it points at; `git rev-parse CHECKIN2^{}` yields the commit. Git peels the tag automatically, so `git diff CHECKIN2 CHECKIN3` compares the commits and every statistic below is unaffected. *The end tag object SHA is whatever `git rev-parse CHECKIN3` prints in your clone; the commit is the fixed value shown.
 
 ## 2. Repository totals
 
@@ -117,7 +117,18 @@ Check-in 2 reported **871** passing TypeScript tests; this is a **+524** increas
 | Firmware encoder | compiled `-Wall -Wextra -Werror` and asserted | `firmware-compile` job |
 | CAD spike | 132 tests, **unchanged since Check-in 2** | `spikes/fit`, local, outside CI |
 
-The browser suite is not a mock harness: real Playwright Chromium against a production `next start` build, the compiled `apps/gateway/dist/server.js` as a child process, and a disposable `postgres:16-alpine` container running the real migrations under the restricted `albus_app` role. Sign-in codes are parsed from a log email sink. **The model provider is mocked** by a deterministic in-process fixture; telemetry rows are seeded.
+The browser suite is a **real browser/gateway/database integration harness with explicitly substituted authority**. Real: Playwright Chromium against a production `next start` build, the compiled `apps/gateway/dist/server.js` as a child process, and a disposable `postgres:16-alpine` container running the real migrations under the restricted `albus_app` role. Sign-in codes are parsed from a log email sink.
+
+Substituted, and material to how the nine journeys should be read:
+
+| Substitute | Where |
+| --- | --- |
+| Model provider — deterministic in-process intake fixture, no paid call | all journeys |
+| **Synthetic compiler** — `fixtureCompile` returns literal "SYNTHETIC browser artifact" buffers and a synthetic ZIP | `e2e/firmware.spec.ts` |
+| **Seeded accepted plans** and approved profile/compiler authority inserted directly | firmware and provisioning journeys |
+| Seeded telemetry rows | live, fleet and setup journeys |
+
+So the browser journeys are **not** a compiler-to-installer demonstration over approved parts. The pinned ESP-IDF compiler and the host encoder are exercised separately, in the `firmware-compile` CI job — and neither involves physical flashing.
 
 ### CI jobs: 5 → 8
 
@@ -154,7 +165,7 @@ Staging runs the same source. Every promoted digest is the exact staging-certifi
 | `https://albusforge.ai/v1/me` | **401** (was 501 at Check-in 2) |
 | `https://staging.albusforge.ai/` | 200 |
 
-**Model calls actually made and attributed.** One real intake turn on staging: `claude-opus-5`, `cost_usd 0.103305`, correlated in the `llm_calls` table and the `event=llm_call` log line that feeds the spend metric. Two sensor-Ask acceptance calls: `claude-haiku-4-5`, $0.000386 each. Spend alerts fire at $1/hour and $3/day on staging, $2/$5 in production. **These alert; they are not a provider-enforced cap.**
+**Model calls actually made and attributed.** One real intake turn on staging: `claude-opus-5`, `cost_usd 0.103305`, correlated in the `llm_calls` table and the `event=llm_call` log line that feeds the spend metric. Two sensor-Ask acceptance calls: `claude-haiku-4-5`, $0.000386 each. Spend alerts fire at $1 per hour and $3 per **22-hour** window on staging, $2 and $5 in production. The longer window is 22 hours, not 24: Monitoring reads at most 24 hours of history and a sliding window needs about an hour of headroom. **These alert; they are not a provider-enforced cap.**
 
 ## 6. Physical hardware log
 
@@ -175,7 +186,8 @@ From `hardware/freenove/` (logs are gitignored and live only in the working chec
 
 ## 7. Outstanding work, excluded from merged-main accomplishments
 
-- **`fwbuild` job has no Terraform.** Its contract is specified in `docs/FIRMWARE-PIPELINE.md`; production firmware compilation is not deployable at this tag.
+- **`fwbuild` job has no Terraform.** Its contract is specified in `docs/FIRMWARE-PIPELINE.md`; production firmware compilation is not deployable at this tag. Creating the job alone is not enough — the immutable artifact bucket, gateway and worker IAM and environment, and invocation/recovery scheduling are all part of that contract.
+- **The gateway has no deployed handoff configuration.** `DEVICE_HANDOFF_KEYS` and `DEVICE_INGEST_URL` are absent from the Terraform configuration and from the production gateway environment, and `device-provisioning-store.ts` refuses issuance without both. Approving profiles and deploying `fwbuild` still would not make the provisioning and flash journey work.
 - **Gateway telemetry SSE returns `501`.** The live UI's stream is exercised only against the local browser stack.
 - **Registry manifests ship empty by design** — `assembly-profiles.json` and `provisioning-profiles.json` — so build plans and device registration fail closed in production. All 12 parts remain drafts.
 - **Daily telemetry maintenance has never been observed firing on schedule**; only manual and seeded runs succeeded.
@@ -186,6 +198,14 @@ From `hardware/freenove/` (logs are gitignored and live only in the working chec
 - **Real sign-in email delivery is untested.** `auth.albusforge.ai` is verified in Resend, but no production code has been sent.
 - **`docs/UI-BACKLOG.md` is stale** against this tag: several items it lists as in flight have merged.
 - Two orphaned GitHub run records (`34793442644`, `34793442663`) remain queued with zero jobs and refuse cancellation; their replacements succeeded. They are not drained history.
+
+### Device and firmware limitations carried from the design documents
+
+- **No physical qualification of any kind:** no driver, wiring or sensor-accuracy measurement, no reboot or network-recovery testing, no production-profile qualification. A passing host encoder or a synthetic accepted plan establishes none of it.
+- **One pending packet, not an offline queue.** The firmware persists a single packet before upload; measurements pause while retries continue. The reporting interval is compiled in, not remotely controlled.
+- **No device-side secret protection.** Secure Boot and flash encryption are not implemented, so the cloud's encrypted handoff does not protect credentials once they are in device NVS. There is no credential-downlink rotation.
+- **Sensor Ask is a bounded classifier**, not analysis: it selects a channel and window, and every number is computed by SQL. It performs no cross-sensor reasoning, no anomaly detection and no actions. Ledger reconciliation and retention policy remain operational follow-ups.
+- **No production intake turn and no production email have been performed.** Both paths are deployed; neither has been exercised with a real request.
 
 ## 8. Reproduction
 

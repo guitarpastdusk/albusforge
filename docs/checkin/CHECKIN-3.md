@@ -4,9 +4,9 @@
 
 **Team:** Albus · **Solo hacker:** Sukrit Dasgupta · **Website:** [albusforge.ai](https://albusforge.ai) · **Code:** [guitarpastdusk/albusforge](https://github.com/guitarpastdusk/albusforge)
 
-> **One question in. A working device out, with a cloud that helps it improve.** Ask "keep my greenhouse soil moist." Albus Forge turns that intent into a checked parts list, a printable enclosure and real firmware, then connects the device to a **sense → detect → reason → act → confirm** loop.
+> **One question in. A working device out, with a cloud that helps it improve.** Ask "keep my greenhouse soil moist." Albus Forge aims to turn that intent into a checked parts list, a printable enclosure and real firmware, then connect the device to a **sense → detect → reason → act → confirm** loop. That whole loop is the goal, not this snapshot.
 
-**What changed:** Check-in 2 had components. This interval connected them into a path a person can walk: **the AI conversation is live in production**, sign-in and workspaces are real, telemetry is stored and queryable, and a device can now be **provisioned, compiled for, and flashed by its owner over USB**. **37 PRs merged since `CHECKIN2`; 1,395 automated tests pass in CI**, plus 9 real browser journeys, 92 delivery checks and 132 local CAD tests. The whole platform runs in production. The product's own firmware has **not** yet run on physical hardware — that boundary is stated precisely in §5.
+**What changed:** Check-in 2 had components. This interval turned the cloud half into a deployed service and built the device half in software. **Deployed and serving production traffic:** the AI conversation, email sign-in, tenants and workspaces, telemetry storage and the read APIs. **Merged and locally tested, but not usable in production:** build plans, firmware compilation, provisioning and USB self-flash — the approval manifests ship empty, the compile job has no Terraform, and the gateway has no handoff configuration. **37 PRs merged since `CHECKIN2`; 1,395 automated tests pass in CI**, plus 9 browser journeys, 92 delivery checks and 132 local CAD tests. The product's own firmware has **not** run on physical hardware — §5 states that boundary precisely.
 
 **Snapshot:** `CHECKIN2` (`28c4ac1`) → `CHECKIN3` (`38c93d0`, 14 Sep, 00:49 EDT). [Full statistics and evidence](CHECKIN-3-EVIDENCE.md).
 
@@ -16,8 +16,8 @@
 
 | Check-in 2 commitment | Result at this snapshot |
 | --- | --- |
-| **Finish the conversational path** — land intake, show one real request producing a persisted spec with visible assumptions and metered model calls | **Delivered and live.** A real request on staging returned a specific clarifying question, wrote the spec version, and logged `cost_usd 0.103305` against the build. Intake runs in production. |
-| **Turn software evidence into hardware evidence** — real parts, one printed enclosure, one flashed sensor delivering authenticated readings | **Partly.** Firmware, a pinned compiler, provisioning and a USB self-flash installer are merged and tested; a physical ESP32-S3 was flashed, joined Wi-Fi and streamed video. **The product's firmware has not run on a board, and no enclosure has been printed.** |
+| **Finish the conversational path** — land intake, show one real request producing a persisted spec with visible assumptions and metered model calls | **Delivered, demonstrated on staging.** A real request there returned a specific clarifying question, wrote the spec version and logged `cost_usd 0.103305`. Intake is deployed to production, but no real turn has been put through it. |
+| **Turn software evidence into hardware evidence** — real parts, one printed enclosure, one flashed sensor delivering authenticated readings | **Software preparation only.** Firmware, a pinned compiler, provisioning and a USB self-flash installer are merged and tested. **None of the promised journey is complete:** no part was promoted out of draft, no compatibility established, no enclosure printed, and no product sensor flashed into authenticated ingestion. A separate ESP32-S3 board was flashed and streamed video, but with unrelated camera firmware (§5). |
 | **Connect action to outcome** — live dashboard and confirmed rules wired to a device acknowledgment | **Not yet.** Telemetry read APIs, fleet views and live streaming are merged; the gateway's SSE telemetry endpoint still answers `501`. No closed loop is claimed. |
 
 ## 2. Innovation: the plan is the contract, all the way to the board
@@ -29,7 +29,7 @@ That is the interesting claim: **an accepted plan, a compiled artifact and a run
 **Build loop.** ask → spec (live) → checked plan (merged, fails closed in production) → firmware compile (merged, pinned ESP-IDF 5.5.3) → self-flash over USB (merged, tested).
 **Operating loop.** device → authenticated ingest (live) → partitioned storage with rollups and retention (live) → fleet, latest and history APIs (live) → Ask over your own readings (live, `claude-haiku-4-5`) → confirmed rule → device action (**not built**).
 
-## 3. Value and impact: the first useful device, attainable in an evening
+## 3. Value and impact: make the first useful device attainable
 
 Our user is a maker, small grower or lab operator with a concrete monitoring need and no appetite for assembling CAD, firmware, electronics and a dashboard separately.
 
@@ -39,7 +39,9 @@ This interval removed three specific costs. **Identity:** sign-in, tenants and w
 
 <!-- pagebreak -->
 
-## 4. Technical implementation: what runs in production today
+## 4. Technical implementation
+
+Solid arrows are deployed and serving production traffic. Dotted arrows are merged and tested in software only: no `fwbuild` job exists in either environment, and no physical device has ever reached `cloudlink`.
 
 ```mermaid
 flowchart LR
@@ -47,19 +49,19 @@ flowchart LR
   W --> G[gateway · auth, builds, plans, telemetry]
   G --> I[intake · claude-opus-5]
   G --> A[ask · claude-haiku-4-5]
-  G --> C[codegen · fwbuild · ESP-IDF]
-  D[device · ESP32-S3] --> L[cloudlink · authenticated ingest]
+  G -.->|not deployed| C[codegen · fwbuild · ESP-IDF]
+  D[device · ESP32-S3] -.->|never exercised| L[cloudlink · authenticated ingest]
   L --> DB[(Cloud SQL · partitioned telemetry)]
   G --> DB
   I --> DB
   A --> DB
   C -.-> ART[(artifacts · GCS)]
-  W -.->|USB self-flash| D
+  W -.->|USB self-flash · not deployed| D
 ```
 
 | Component | Working evidence | Boundary |
 | --- | --- | --- |
-| **Conversation (intake)** | `POST /v1/turns`, one advisory lock and one connection per turn; scope filter refuses unsafe asks with no model call; 2-round cap; every failure still writes one assistant reply. Verified live with a real Claude turn and attributed cost | Registry parts are all drafts, so drafts are enabled on staging only. Prod intake has not had a real turn put through it |
+| **Conversation (intake)** | `POST /v1/turns`, one advisory lock and one connection per turn; scope filter refuses unsafe asks with no model call; 2-round cap; a model refusal, timeout or invalid response still persists exactly one assistant reply. Verified live with a real Claude turn and attributed cost | Registry parts are all drafts, so drafts are enabled on staging only. A database or budget failure returns a retryable `503` **without** a reply — the one-reply rule is a no-duplicate invariant, not an availability guarantee. Production intake has never had a real turn put through it |
 | **Identity and tenancy** | Email-code sign-in (6 digits, 10 min, 5 attempts, hashed), opaque session tokens, `__Host-` cookies, anonymous build claiming, tenant per sign-up, cross-tenant access returns 404 not 403 | Real email delivery through Resend is covered by no automated test; the domain is verified but no production code has been sent |
 | **Telemetry platform** | Daily-partitioned readings, in-transaction dirty markers, minute/hour rollups, 90-day raw retention; fleet/latest/series APIs with resolution limits and `410`/`422` boundaries | Gateway SSE telemetry endpoint returns `501`. No physical device has ever reached the cloud |
 | **Build plans** | Persisted plans, BOM acceptance, `input_digest`, one accepted plan per spec version, bounded planner (100k steps) | `registry/assembly-profiles.json` ships empty — production plan generation fails closed, by design |
@@ -80,7 +82,7 @@ There are **two separate firmware efforts in this repository and they have not m
 
 **Track B — real hardware bring-up (`hardware/freenove/`).** A Freenove ESP32-S3 board was genuinely put through its paces on 13–14 Sep: chip identified (QFN56 rev v0.2, 8 MB PSRAM, 16 MB flash), full 16 MB flash backed up and MD5-verified, ESPHome 2026.8.2 / ESP-IDF 5.5.5 image compiled (1,049,223 bytes), flashed over serial with hash verified, booted, joined Wi-Fi at −63 dBm, streamed MJPEG at **4.7–4.9 fps**, and accepted an OTA update in 6.25 s. A real defect was found and fixed: the GC0308 sensor mapped ESPHome's default `agc_value: 0` to hardware gain zero, producing uniformly black frames; `agc_value: 10` fixed it, confirmed by a decoded 14,088-byte JPEG.
 
-**This is ESPHome camera firmware, not Albus firmware, and it does not talk to our cloud.** It proves the toolchain, the board and the operator's workflow — flash, boot, network, OTA, recover — which is exactly the risk that stops most physical projects. It does not prove our device path.
+**This is ESPHome camera firmware, not Albus firmware, and it does not talk to our cloud.** It proves the toolchain, the board and the operator's workflow — flash, boot, network, OTA, recover. It does not prove our device path.
 
 The enclosure spike is unchanged since Check-in 2: 45 configurations, 132 CAD tests, **zero physical measurements, no first print**.
 
@@ -93,14 +95,14 @@ Both environments run **5 Cloud Run services** (`web`, `gateway`, `intake`, `ask
 - **Edge.** Cloud Armor rate-limits ingest on malformed bearers (60/min/IP) and per credential (120/min), both denying `429`. Load-balancer request logging is deliberately **off** so bearer tokens are never written to logs.
 - **Storage.** Readings are partitioned daily by UTC; a statement-level trigger marks dirty hours in the same transaction; the rollup job claims markers `FOR UPDATE SKIP LOCKED` and recomputes minute and hourly aggregates by replacement. Raw data is kept 90 days behind a monotonic watermark; partitions are dropped only once no dirty markers remain.
 - **Observability.** **15 alert policies per environment** — backlog depth and age, rollup and maintenance heartbeats, SQL CPU/disk/connections, ingest pool wait, per-job failures, 5xx rates for `cloudlink` and `ask`, and LLM spend on 1-hour and 22-hour windows.
-- **Capacity.** Connection budgets were measured, not guessed: staging reserves 40 of 50, production 266 of 400, each with an alert below the ceiling.
+- **Capacity.** Connection reservations were calculated against measured server limits rather than guessed: staging reserves 40 of 50, production 266 of 400, each with an alert below the ceiling. They are modelled overlap reservations, not measured peak usage or an enforced cap.
 - **Governance.** `infra/env` is applied by hand, by exactly one owner at a time. This interval recorded that rule in `ARCHITECTURE.md` §12.3.1 after two agents applied the same state on non-conflicting instructions — the state lock prevented collision but cannot prevent contradiction.
 
 **Not proven:** daily maintenance has never been observed firing on schedule (only manual runs); alert delivery was proven on staging only; there is no sustained-load certification; and the `fwbuild` job has no Terraform yet.
 
 ## 7. Interface: from a chat box to a device you can hold
 
-`apps/web` gained 5 new component areas and 3 route segments. **Project workspace** with build continuation through sign-up; **usage dashboard** showing per-stage tokens, cache hits and cost as exact decimals (labelled an estimate, not an invoice); **live device views** with reconnect recovery and mobile layouts; **device setup** and **firmware/self-flash** pages; **email-code sign-in with recovery** and server-backed retry countdowns; **workspace switching** with cross-tab state reset; **fleet search** with literal substring matching and role-gated renames; **accessible loading and recovery states** across 10 new boundary files; and **public guides** at `/docs` and `/security`.
+`apps/web` gained 5 new component areas and 3 route segments. **Project workspace** with build continuation through sign-up; **usage dashboard** showing per-stage tokens, cache hits and cost as exact decimals (labelled an estimate, not an invoice); **live device views** with reconnect recovery and mobile layouts; **device setup** and **firmware/self-flash** pages; **email-code sign-in with recovery** and server-backed retry countdowns; **workspace switching** with cross-tab state reset; **fleet search** with literal substring matching and role-gated renames; **accessible loading and recovery states** across 11 new boundary files; and **public guides** at `/docs` and `/security`.
 
 Marketplace and the enclosure viewer remain fixture-backed, unchanged from Check-in 2.
 
@@ -131,9 +133,11 @@ CI now runs **8 jobs**, up from 5 — adding intake and ask image smokes and a *
 2. **The conversation.** Ask for a device on staging and watch it come back with a specific question about power and battery life, an assumption list, and a metered model call.
 3. **The firmware path.** [`firmware/`](../../firmware/), [`docs/FIRMWARE-PIPELINE.md`](../FIRMWARE-PIPELINE.md) and [`docs/DEVICE-PROVISIONING.md`](../DEVICE-PROVISIONING.md) — including the sentence "no physical board has been flashed or measured" for our own firmware, and [`hardware/freenove/README.md`](../../hardware/freenove/README.md) for the board that was.
 
-## 10. Next check-in: close the last two gaps
+## 10. Next check-in: activate the device path, then close the loop
 
-**Run our own firmware on our own board.** Deploy the `fwbuild` job, compile an accepted plan for real, flash it over USB with the installer, and land one authenticated reading from that device in production. That single journey converts every "merged and tested" claim in §4 into a physical one.
+**Activate the device path in production.** It needs more than merging: approve real parts and an assembly profile, publish a provisioning profile, deploy the `fwbuild` job with its artifact bucket, worker IAM and recovery scheduling, and configure the gateway's handoff keyring and trusted ingest URL. Only then can a plan be accepted, compiled and flashed for real.
+
+**Then run our own firmware on our own board** — flash it over USB with the installer and land one authenticated reading from that device in production. That single journey converts every "merged and tested" claim in §4 into a physical one, and none of Check-in 2's promised sensor journey is complete until it does.
 
 **Then close the loop.** Implement the gateway telemetry stream so `live` is live against production, wire the confirmed-rule backend to a device acknowledgment, and demonstrate one person-approved action followed by the sensor reading that confirms its effect.
 

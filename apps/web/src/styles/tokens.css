@@ -9,6 +9,17 @@
   --color-ink-2: #3a3542;
   --color-coral: #e8794a;
   --color-coral-deep: #c4643b;
+  /*
+   * Wiring-diagram conductors, by the pin's role. The registry records no wire
+   * colours; these follow the convention hobby I2C cables ship with — red V+,
+   * black ground, blue SDA, yellow SCL — desaturated to sit on porcelain. A
+   * plain signal keeps the diagram's own coral.
+   */
+  --color-wire-power: #c8564a;
+  --color-wire-ground: #3a3542;
+  --color-wire-sda: #3f6fa8;
+  --color-wire-scl: #bd932c;
+  --color-wire-signal: #e8794a;
   --color-muted: #6e6879;
   --color-faint: #a9a3b2;
   --color-hairline: #eae5de;

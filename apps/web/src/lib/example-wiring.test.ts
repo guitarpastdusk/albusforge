@@ -49,20 +49,40 @@ describe.each(EXAMPLE_BUILDS.map((build) => [build.id, build] as const))("%s wir
     }
   });
 
-  it("lands every lead on a header pin the board has, or on the supply", () => {
-    for (const { lead } of leads) {
+  it("lands every lead on a header pin the board has, on the supply, or on a part already on the bus", () => {
+    const units = wiring.nodes.flatMap((node) => node.units.map((unit) => unit.label));
+    for (const { unit, lead } of leads) {
       if (lead.source.kind === "header") expect(HEADER_PINS.has(lead.source.label), `${lead.pin.name} → ${lead.source.label}`).toBe(true);
-      else expect(lead.source.label).toMatch(new RegExp(`^${build.power.supply} `));
+      else if (lead.source.kind === "chain") {
+        // A chained lead plugs into a unit that is itself already wired, and earlier in the chain.
+        expect(units, `${unit.label} chains into ${lead.source.label}`).toContain(lead.source.label);
+        expect(units.indexOf(lead.source.label)).toBeLessThan(units.indexOf(unit.label));
+      } else expect(lead.source.label).toMatch(new RegExp(`^${build.power.supply} `));
     }
   });
 
-  it("gives each signal its own pin, and shares the I2C bus", () => {
-    const signals = leads.filter(({ lead }) => lead.pin.role === "signal");
-    expect(new Set(signals.map(({ lead }) => lead.source.label)).size).toBe(signals.length);
-    for (const { lead } of leads) {
+  it("daisy-chains the I2C parts so exactly one cable reaches the board", () => {
+    const busUnits = wiring.nodes.filter((node) => node.part.electrical.interface === "i2c").flatMap((node) => node.units);
+    if (busUnits.length === 0) return;
+    // Every unit either reaches the header or plugs into the one before it: one path, one end.
+    const onHeader = busUnits.filter((unit) => unit.leads.every((lead) => lead.source.kind === "header"));
+    expect(onHeader).toHaveLength(1);
+    for (const unit of busUnits) {
+      if (unit === onHeader[0]) continue;
+      // A chained unit goes down one cable: every conductor to the same place.
+      expect(new Set(unit.leads.map((lead) => `${lead.source.kind}:${lead.source.label}`)).size).toBe(1);
+      expect(unit.leads[0]!.source.kind).toBe("chain");
+    }
+    // The one that reaches the board uses the board's I2C pins.
+    for (const lead of onHeader[0]!.leads) {
       if (lead.pin.role === "sda") expect(lead.source.label).toBe(BRAIN_HEADER.sda);
       if (lead.pin.role === "scl") expect(lead.source.label).toBe(BRAIN_HEADER.scl);
     }
+  });
+
+  it("gives each signal its own pin", () => {
+    const signals = leads.filter(({ lead }) => lead.pin.role === "signal");
+    expect(new Set(signals.map(({ lead }) => lead.source.label)).size).toBe(signals.length);
   });
 
   it("carries the volts the registry's power check works out, on the power lead only", () => {
@@ -77,13 +97,18 @@ describe.each(EXAMPLE_BUILDS.map((build) => [build.id, build] as const))("%s wir
         expect(power[0]!.window).toEqual(node.usable);
         // A supply-fed part hangs off the supply, never off the board's 5V header: that pin is an
         // input, and sits after the USB Schottky, so it carries less than the supply puts out.
-        expect(power[0]!.source).toEqual(
-          fromSupply
-            ? { kind: "supply", label: `${wiring.supply.part.id} ${wiring.supply.connector.pins.find((pin) => pin.role === "power")!.name}` }
-            : { kind: "header", label: BRAIN_HEADER.rail3v3 },
-        );
-        // Ground is common whatever powers the part.
-        expect(unitLeads.find((lead) => lead.pin.role === "ground")!.source).toEqual({ kind: "header", label: BRAIN_HEADER.ground });
+        // A chained part takes power and ground down the same cable as the bus; the
+        // rail behind it is still the board's, which is why `usable` is unchanged.
+        const chained = power[0]!.source.kind === "chain";
+        if (!chained) {
+          expect(power[0]!.source).toEqual(
+            fromSupply
+              ? { kind: "supply", label: `${wiring.supply.part.id} ${wiring.supply.connector.pins.find((pin) => pin.role === "power")!.name}` }
+              : { kind: "header", label: BRAIN_HEADER.rail3v3 },
+          );
+          // Ground is common whatever powers the part.
+          expect(unitLeads.find((lead) => lead.pin.role === "ground")!.source).toEqual({ kind: "header", label: BRAIN_HEADER.ground });
+        }
       }
     }
   });

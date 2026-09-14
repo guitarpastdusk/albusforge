@@ -21,6 +21,8 @@ const NAME_LINE = 16;
 const LEAD = 19;
 const CARD_FOOT = 14;
 const CARD_GAP = 18;
+/** A chained block sits further down, so the cable into the block above it is legible. */
+const CHAIN_GAP = 40;
 
 const SUPPLY = { x: 12, w: 250, h: 92 };
 const BRAIN = { x: 375, w: 245 };
@@ -72,19 +74,24 @@ function Box({ x, y, w, h, tone = "plain" }: { x: number; y: number; w: number; 
   );
 }
 
-/** A lead: solid coral for power, hairline for ground, dashed coral for a signal (the carousel's wire). */
+/**
+ * A lead, coloured by what the conductor is: red V+, black ground, blue SDA,
+ * yellow SCL, coral for a plain signal — the colours the cables themselves come
+ * in, so the drawing matches what is in your hand. A signal stays dashed, as it
+ * is on the carousel.
+ */
+const WIRE_STROKE: Record<string, string> = {
+  power: "var(--color-wire-power)",
+  ground: "var(--color-wire-ground)",
+  sda: "var(--color-wire-sda)",
+  scl: "var(--color-wire-scl)",
+  signal: "var(--color-wire-signal)",
+};
+
 function Wire({ y, from, to, lead }: { y: number; from: number; to: number; lead: WiringLead }) {
   const signal = lead.pin.role !== "power" && lead.pin.role !== "ground";
   return (
-    <line
-      x1={from}
-      x2={to}
-      y1={y}
-      y2={y}
-      strokeWidth="1.5"
-      strokeDasharray={signal ? "4 4" : undefined}
-      className={lead.pin.role === "ground" ? "stroke-faint" : "stroke-coral-deep"}
-    />
+    <line x1={from} x2={to} y1={y} y2={y} strokeWidth="1.5" strokeDasharray={signal ? "4 4" : undefined} stroke={WIRE_STROKE[lead.pin.role]} />
   );
 }
 
@@ -106,10 +113,12 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
       const name = wrapName(node.part.name, NODE_NAME_CHARS);
       const head = CARD_HEAD + (name.length - 1) * NAME_LINE;
       const previous = stack.at(-1);
-      stack.push({ node, unit, name, head, h: head + (unit.leads.length - 1) * LEAD + CARD_FOOT, y: previous ? previous.y + previous.h + CARD_GAP : TOP + BRAIN_HEAD });
+      const gap = unit.leads[0]?.source.kind === "chain" ? CHAIN_GAP : CARD_GAP;
+      stack.push({ node, unit, name, head, h: head + (unit.leads.length - 1) * LEAD + CARD_FOOT, y: previous ? previous.y + previous.h + gap : TOP + BRAIN_HEAD });
     }
   }
 
+  const blockOf = new Map(stack.map((block) => [block.unit.label, block]));
   const stackBottom = stack.reduce((bottom, block) => Math.max(bottom, block.y + block.h), TOP + BRAIN_HEAD);
   const brainHeight = Math.max(stackBottom - TOP + 14, BRAIN_HEAD + 40);
   // Leads that take their power from the supply run around the board, not through it.
@@ -237,6 +246,35 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
           </g>
         ))}
 
+        {/* The I2C chain: a part with a second port passes the bus on, so the next
+            sensor plugs into it rather than into the board. One cable between the
+            two blocks, its four conductors in their own colours. */}
+        {stack.flatMap((block) => {
+          const upstreamLabel = block.unit.leads[0]?.source.kind === "chain" ? block.unit.leads[0].source.label : null;
+          const upstream = upstreamLabel === null ? undefined : blockOf.get(upstreamLabel);
+          if (!upstream) return [];
+          const from = upstream.y + upstream.h;
+          const to = block.y;
+          return [
+            <g key={`chain-${block.unit.label}`}>
+              {block.unit.leads.map((lead, index) => (
+                <line
+                  key={lead.pin.n}
+                  x1={NODE.x + 22 + index * 7}
+                  x2={NODE.x + 22 + index * 7}
+                  y1={from}
+                  y2={to}
+                  strokeWidth="1.5"
+                  stroke={WIRE_STROKE[lead.pin.role]}
+                />
+              ))}
+              <text x={NODE.x + 22 + block.unit.leads.length * 7 + 8} y={(from + to) / 2 + 4} fontSize="9.5" className="fill-muted font-mono">
+                {clip(`${block.unit.label} → ${upstreamLabel} · ${block.node.connector.housing}`, 46)}
+              </text>
+            </g>,
+          ];
+        })}
+
         {/* Peripherals the supply powers directly: down from the supply, under the board and up the
             outside, so the branch crosses none of the board's own leads. */}
         {fromSupply.map(({ lead, y }, index) => {
@@ -259,13 +297,15 @@ export function BuildCircuitDiagram({ wiring, buildName }: { wiring: Wiring; bui
 
         {/* Legend. */}
         {[
-          { x: 16, label: "power", className: "stroke-coral-deep", dash: undefined },
-          { x: 150, label: "ground", className: "stroke-faint", dash: undefined },
-          { x: 290, label: "signal", className: "stroke-coral-deep", dash: "4 4" },
+          { x: 16, label: "V+ · red", role: "power", dash: undefined },
+          { x: 130, label: "GND · black", role: "ground", dash: undefined },
+          { x: 262, label: "SDA · blue", role: "sda", dash: "4 4" },
+          { x: 384, label: "SCL · yellow", role: "scl", dash: "4 4" },
+          { x: 516, label: "signal · orange", role: "signal", dash: "4 4" },
         ].map((entry) => (
           <g key={entry.label}>
-            <line x1={entry.x} x2={entry.x + 34} y1={legendY} y2={legendY} strokeWidth="1.5" strokeDasharray={entry.dash} className={entry.className} />
-            <text x={entry.x + 42} y={legendY + 4} fontSize="10" className="fill-muted font-mono">
+            <line x1={entry.x} x2={entry.x + 30} y1={legendY} y2={legendY} strokeWidth="1.5" strokeDasharray={entry.dash} stroke={WIRE_STROKE[entry.role]} />
+            <text x={entry.x + 38} y={legendY + 4} fontSize="10" className="fill-muted font-mono">
               {entry.label}
             </text>
           </g>

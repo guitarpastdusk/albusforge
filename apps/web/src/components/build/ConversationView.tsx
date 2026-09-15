@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui";
 import { AnswerChoices, liveOptions } from "./AnswerChoices";
+import { composerVisible } from "./ready-artifacts";
 import { useConversation } from "./BuildConversation";
 import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
@@ -17,11 +18,13 @@ import { SpecPanel } from "./SpecPanel";
 export function ConversationView({ active = false }: { active?: boolean }) {
   const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, enclosureError, retryEnclosure, streamState } = useConversation();
   // While a question offers answers, the reply box stays out of the way; "Continue
-  // chatting" brings it back. Remembering which question it was opened for means a
-  // new question closes it again, with no effect and no stale state to reset.
+  // chatting" brings it back. Keyed by the message that asked, not by its wording:
+  // intake can ask the same question twice, and the second time must close the box
+  // again rather than inherit the first one's answer.
   const offered = liveOptions(state.spec);
+  const questionKey = state.messages.findLast((message) => message.role === "assistant")?.id ?? null;
   const [typingFor, setTypingFor] = useState<string | null>(null);
-  const showComposer = offered === null || typingFor === offered.question;
+  const showComposer = composerVisible({ hasOptions: offered !== null, questionKey, typingFor });
 
   if (!active && state.messages.length === 0) return null;
 
@@ -33,7 +36,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
             {/* The answers live inside the bubble that asks the question, and only
                 the last one: an earlier question has already been answered. */}
             {message.role === "assistant" && index === state.messages.length - 1 ? (
-              <AnswerChoices spec={state.spec} disabled={state.sending || typing} onChoose={send} onContinue={() => setTypingFor(offered?.question ?? null)} />
+              <AnswerChoices spec={state.spec} disabled={state.sending || typing} onChoose={send} onContinue={() => setTypingFor(questionKey)} />
             ) : null}
           </ChatBubble>
         ))}

@@ -18,7 +18,7 @@ import {
   type ConversationState,
 } from "./conversation";
 import { DesignReadyCard } from "./DesignReadyCard";
-import { cadence, cloudWorkspace, readyWiring } from "./ready-artifacts";
+import { assumptionsFor, cadence, cloudWorkspace, composerVisible, readyWiring } from "./ready-artifacts";
 import { SpecPanel } from "./SpecPanel";
 
 const AT = "2026-09-13T12:00:00Z";
@@ -437,5 +437,57 @@ describe("ready artifacts", () => {
     expect(html).toContain("Created when you sign up");
     expect(html).toContain("soil moisture %");
     expect(html).toContain("every 10 minutes");
+  });
+});
+
+describe("review fixes for #103", () => {
+  const card = (parts: DeviceReadyCard["parts"]): DeviceReadyCard => ({ name: "Build", est_price_usd: 34, fulfillment_note: "kit", parts });
+
+  it("draws nothing when any part on the card is not a registry part", () => {
+    // The brain and supply are both present, so the old filter still drew a
+    // diagram and silently dropped the sensor the card actually names.
+    const mixed = card([
+      { part_id: "C-001", label: "ESP32-S3", accent: "peach" },
+      { part_id: "E-001", label: "18650", accent: "green" },
+      { part_id: "X-999", label: "New sensor", accent: "blue" },
+    ]);
+    expect(readyWiring(mixed)).toBeNull();
+    expect(readyWiring(card([]))).toBeNull();
+  });
+
+  it("states what it assumed, so the viewer reads it and not just the source", () => {
+    const assumed = assumptionsFor(card([
+      { part_id: "C-001", label: "ESP32-S3", accent: "peach" },
+      { part_id: "P-005", label: "probe", accent: "blue" },
+      { part_id: "E-001", label: "cell", accent: "green" },
+    ]));
+    expect(assumed.some((line) => line.startsWith("4 × "))).toBe(true);
+    expect(assumed.some((line) => line.includes("5v-pin"))).toBe(true);
+  });
+
+  it("reopens the composer per question instance, not per wording", () => {
+    // Same words, a new message: the box must close again.
+    expect(composerVisible({ hasOptions: true, questionKey: "m1", typingFor: "m1" })).toBe(true);
+    expect(composerVisible({ hasOptions: true, questionKey: "m2", typingFor: "m1" })).toBe(false);
+    // No question with answers: the box is simply there.
+    expect(composerVisible({ hasOptions: false, questionKey: "m2", typingFor: null })).toBe(true);
+    expect(composerVisible({ hasOptions: true, questionKey: null, typingFor: null })).toBe(false);
+  });
+
+  it("labels the diagram as example wiring on the card", () => {
+    const html = renderToStaticMarkup(
+      <DesignReadyCard
+        card={card([
+          { part_id: "C-001", label: "ESP32-S3", accent: "peach" },
+          { part_id: "P-005", label: "probe", accent: "blue" },
+          { part_id: "E-001", label: "cell", accent: "green" },
+        ])}
+        buildId="b1"
+        signedIn={false}
+        spec={null}
+      />,
+    );
+    expect(html).toContain("Example wiring");
+    expect(html).toContain("Check these before building");
   });
 });

@@ -3,7 +3,7 @@ import { ButtonLink, Pill } from "@/components/ui";
 import { BuildCircuitDiagram } from "@/components/marketplace/BuildCircuitDiagram";
 import { EnclosureDialogButton } from "@/components/enclosure/EnclosureDialog";
 import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
-import { cadence, cloudWorkspace, readyWiring } from "./ready-artifacts";
+import { assumptionsFor, cadence, cloudWorkspace, readyWiring } from "./ready-artifacts";
 
 const usd = (amount: number) => (Number.isInteger(amount) ? `$${amount}` : `$${amount.toFixed(2)}`);
 
@@ -32,6 +32,7 @@ export function DesignReadyCard({
 }) {
   const projectHref = `/projects/${encodeURIComponent(buildId)}`;
   const wiring = readyWiring(card);
+  const assumed = wiring ? assumptionsFor(card) : [];
   const workspace = cloudWorkspace(spec);
   return (
     <section aria-label="Device design ready" className="rounded-[24px] border border-hairline bg-white px-[34px] py-[30px]">
@@ -80,8 +81,8 @@ export function DesignReadyCard({
             <dt className="text-[16px] text-ink">Circuit diagram</dt>
             <dd className="flex-1 text-[15px] font-light text-muted">
               {wiring
-                ? "Every connector pin, the header pin it lands on, and the volts each part sees."
-                : "Drawn once the parts are pinned to the registry."}
+                ? "Example wiring: every connector pin and the volts each part sees, from the registry."
+                : "Drawn once every part on this design is a registry part."}
             </dd>
           </div>
           {wiring ? (
@@ -91,6 +92,14 @@ export function DesignReadyCard({
                 <span className="hidden group-open:inline">Hide the circuit diagram</span>
               </summary>
               <div className="mt-3 rounded-[16px] border border-hairline bg-porcelain px-4 py-4">
+                {/* The viewer is told what is assumed, not just the source. */}
+                {assumed.length > 0 ? (
+                  <p className="mb-3 rounded-[12px] border border-dashed border-coral-deep/40 bg-white px-4 py-3 text-[14px] font-light leading-[1.45] text-coral-deep">
+                    <span className="font-mono text-[12px] uppercase tracking-[0.16em]">Example wiring</span>
+                    <br />
+                    The parts and their pins are real. Assumed, because the design doesn&apos;t record them yet: {assumed.join("; ")}. Check these before building.
+                  </p>
+                ) : null}
                 <BuildCircuitDiagram wiring={wiring} buildName={card.name} />
               </div>
             </details>

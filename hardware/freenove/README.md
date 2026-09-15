@@ -136,3 +136,19 @@ may contain credentials from the previous firmware.
 - [Freenove board pin map](https://docs.freenove.com/projects/fnk0083/en/latest/fnk0083/codes/Python/Preface.html)
 - [Freenove SDMMC pin assignments](https://docs.freenove.com/projects/fnk0083/en/latest/fnk0083/codes/C/29_Play_SD_card_music.html)
 - [Espressif FAT/SD mounting API](https://docs.espressif.com/projects/esp-idf/en/v5.4.1/esp32s3/api-reference/storage/fatfs.html)
+
+## Cloud uplink (2026-09-15, hackathon demo provision)
+
+`plant-node.yaml` now posts one Cloudlink v1 envelope every 60 s to
+`https://albusforge.ai/ingest/v1` with `ambient_light_lux`, `air_temperature_c`,
+`air_pressure_hpa` and `air_humidity_pct`, using SNTP time, a flash-persisted
+sequence and TLS verified against the ESP-IDF certificate bundle. The device
+UUID and bearer come from `secrets.yaml` (`device_id`, `device_bearer`). The
+`0x36` soil device is still excluded.
+
+Plant A's production device row was inserted **manually** through a one-off
+`registry-load` job execution (`registry-load-4sxbt`) under the owner's personal
+tenant, bypassing the product provisioning path and the five gates in
+HANDOFF.md. Treat it as a demo provision, not evidence for that path. First
+accepted packets were observed on serial at 22:45 local on 2026-09-14
+(`202 {"ok":4,"next_s":60,"cmd":[]}`).

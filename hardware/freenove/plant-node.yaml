@@ -1,3 +1,6 @@
+substitutions:
+  device_id: !secret device_id
+
 esphome:
   name: plant-a
   friendly_name: Plant A
@@ -87,6 +90,7 @@ esp32_camera_web_server:
 
 sensor:
   - platform: bh1750
+    id: ambient_light
     name: Ambient Light
     i2c_id: sensor_i2c
     address: 0x23
@@ -95,17 +99,27 @@ sensor:
     i2c_id: sensor_i2c
     address: 0x77
     temperature:
+      id: air_temperature
       name: Air Temperature
     pressure:
+      id: air_pressure
       name: Air Pressure
     humidity:
+      id: air_humidity
       name: Air Humidity
     update_interval: 30s
   - platform: uptime
+    id: uptime_s
     name: Uptime
   - platform: wifi_signal
+    id: wifi_rssi
     name: WiFi Signal
     update_interval: 30s
+  - platform: template
+    id: uplink_last_status
+    name: Uplink Last HTTP Status
+    accuracy_decimals: 0
+    update_interval: never
 
 text_sensor:
   - platform: template
@@ -115,3 +129,80 @@ text_sensor:
   - platform: wifi_info
     ip_address:
       name: IP Address
+
+# --- Cloud uplink: Cloudlink numeric telemetry v1 (docs/TELEMETRY-INGEST.md) ---
+# Every 60 s the node posts one envelope with the four provisioned channels.
+# Sample time is the send time (t = ts); the sequence persists in flash so
+# retries after a reboot never reuse a number. Device identity and bearer come
+# from the ignored secrets.yaml, never from this file. TLS is verified against
+# the ESP-IDF certificate bundle.
+time:
+  - platform: sntp
+    id: sntp_time
+
+http_request:
+  id: cloud_http
+  timeout: 15s
+
+globals:
+  - id: uplink_seq
+    type: int
+    restore_value: true
+    initial_value: '0'
+  - id: uplink_body
+    type: std::string
+    restore_value: false
+
+interval:
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (!id(sntp_time).now().is_valid()) return false;
+              return !std::isnan(id(air_temperature).state) || !std::isnan(id(ambient_light).state);
+          then:
+            - lambda: |-
+                id(uplink_seq) += 1;
+                const uint32_t ts = id(sntp_time).now().timestamp;
+                std::string r;
+                auto add = [&](const char *c, float v) {
+                  if (std::isnan(v)) return;
+                  char buf[112];
+                  snprintf(buf, sizeof buf, "%s{\"c\":\"%s\",\"t\":%u,\"v\":%.3f}", r.empty() ? "" : ",", c, (unsigned) ts, v);
+                  r += buf;
+                };
+                add("ambient_light_lux", id(ambient_light).state);
+                add("air_temperature_c", id(air_temperature).state);
+                add("air_pressure_hpa", id(air_pressure).state);
+                add("air_humidity_pct", id(air_humidity).state);
+                const int rssi = std::isnan(id(wifi_rssi).state) ? -100 : (int) id(wifi_rssi).state;
+                const uint32_t up = std::isnan(id(uptime_s).state) ? 0 : (uint32_t) id(uptime_s).state;
+                char head[192];
+                snprintf(head, sizeof head, "{\"v\":1,\"dev\":\"%s\",\"seq\":%d,\"ts\":%u,\"r\":[", "${device_id}", id(uplink_seq), (unsigned) ts);
+                char tail[96];
+                snprintf(tail, sizeof tail, "],\"st\":{\"rssi\":%d,\"up_s\":%u,\"health\":[\"OK\"]}}", rssi, (unsigned) up);
+                id(uplink_body) = std::string(head) + r + tail;
+                ESP_LOGI("uplink", "seq %d, %u bytes", id(uplink_seq), (unsigned) id(uplink_body).size());
+            - http_request.post:
+                url: https://albusforge.ai/ingest/v1
+                request_headers:
+                  Content-Type: application/json
+                  Authorization: !secret device_bearer
+                body: !lambda 'return id(uplink_body);'
+                capture_response: true
+                max_response_buffer_size: 512
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(uplink_last_status).publish_state(response->status_code);
+                        if (response->status_code == 202) {
+                          ESP_LOGI("uplink", "202 accepted: %s", body.c_str());
+                        } else {
+                          ESP_LOGW("uplink", "HTTP %d: %s", response->status_code, body.c_str());
+                        }
+                on_error:
+                  then:
+                    - lambda: |-
+                        id(uplink_last_status).publish_state(-1);
+                        ESP_LOGW("uplink", "request failed (no response)");

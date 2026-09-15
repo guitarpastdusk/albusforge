@@ -164,7 +164,11 @@ it("exposes labelled history controls and inspectable evidence in the DOM", asyn
       searchParams: Promise.resolve({}),
     }),
   );
-  expect(document.querySelectorAll("form label")).toHaveLength(4);
+  // Window, resolution and end time remain; the channel picker is gone, because
+  // every channel is plotted rather than chosen one at a time.
+  expect(document.querySelectorAll("form label")).toHaveLength(3);
+  expect(document.querySelector("select[name=channel]")).toBeNull();
+  expect(document.querySelectorAll("section[aria-label$='history']")).toHaveLength(1);
   expect(
     document.querySelector("select[name=resolution]")?.closest("label")
       ?.textContent,
@@ -281,4 +285,64 @@ it("preserves filters on pagination but starts a new filter submission without a
   expect(document.querySelector('nav[aria-label="Fleet pages"] a:last-child')?.getAttribute("href")).toContain("q=Fridge&status=offline&after=");
   expect(document.body.textContent).toContain("Fridge");
   expect(document.body.textContent).toContain("not fleet totals");
+});
+
+it("plots every channel at once, each in its own titled card and colour", async () => {
+  mocked.get
+    .mockResolvedValueOnce({
+      device,
+      channels: { temp: { unit: "C", min: -40, max: 85 }, soil: { unit: "%", min: 0, max: 100 } },
+    })
+    .mockResolvedValueOnce({ device_id: id, readings: [] })
+    .mockResolvedValueOnce({ ...history, channel: "temp" })
+    .mockResolvedValueOnce({ ...history, channel: "soil" });
+  document.body.innerHTML = renderToStaticMarkup(
+    await DevicePage({ params: Promise.resolve({ deviceId: id }), searchParams: Promise.resolve({}) }),
+  );
+  const cards = document.querySelectorAll("section[aria-label$='history']");
+  expect([...cards].map((card) => card.getAttribute("aria-label"))).toEqual(["temp history", "soil history"]);
+  // Both are drawn, rather than one chosen and the other hidden behind a select.
+  expect(document.querySelectorAll("section[aria-label$='history'] svg")).toHaveLength(2);
+  // Fixed order, never cycled: channel one is slot one whatever else is present.
+  const dots = [...document.querySelectorAll("section[aria-label$='history'] span[aria-hidden]")];
+  expect(dots.map((dot) => dot.getAttribute("style"))).toEqual([
+    "background:var(--color-series-1)",
+    "background:var(--color-series-2)",
+  ]);
+  // Identity is in the heading, not only the colour.
+  expect([...cards].map((card) => card.querySelector("h3")?.textContent)).toEqual(["temp", "soil"]);
+});
+
+it("keeps one channel's failure inside its own card", async () => {
+  mocked.get
+    .mockResolvedValueOnce({
+      device,
+      channels: { temp: { unit: "C", min: -40, max: 85 }, soil: { unit: "%", min: 0, max: 100 } },
+    })
+    .mockResolvedValueOnce({ device_id: id, readings: [] })
+    .mockResolvedValueOnce({ ...history, channel: "temp" })
+    .mockRejectedValueOnce(new ApiRequestError(410, "HISTORY_EXPIRED", "expired", { available_from: "2026-01-01T00:00:00Z" }));
+  document.body.innerHTML = renderToStaticMarkup(
+    await DevicePage({ params: Promise.resolve({ deviceId: id }), searchParams: Promise.resolve({}) }),
+  );
+  // The healthy channel still plots; only the failing one says so.
+  expect(document.querySelectorAll("section[aria-label$='history'] svg")).toHaveLength(1);
+  expect(document.querySelector("section[aria-label='soil history'] [role=alert]")?.textContent).toBeTruthy();
+});
+
+it("ignores a retired channel parameter instead of contradicting the plots", async () => {
+  mocked.get
+    .mockResolvedValueOnce({ device, channels: { temp: { unit: "C", min: -40, max: 85 } } })
+    .mockResolvedValueOnce({ device_id: id, readings: [] })
+    .mockResolvedValueOnce({ ...history, channel: "temp" });
+  document.body.innerHTML = renderToStaticMarkup(
+    await DevicePage({
+      params: Promise.resolve({ deviceId: id }),
+      // A bookmark from when the page had a channel picker, naming a channel that is gone.
+      searchParams: Promise.resolve({ channel: "removed_channel" }),
+    }),
+  );
+  // The plot renders, and nothing tells the person to choose a provisioned channel.
+  expect(document.querySelectorAll("section[aria-label$='history'] svg")).toHaveLength(1);
+  expect(document.body.textContent).not.toContain("Choose a provisioned channel");
 });

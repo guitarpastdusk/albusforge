@@ -14,6 +14,8 @@ import { DeviceConsole } from "@/components/devices/DeviceConsole";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
+import { mapWithConcurrency } from "@/lib/concurrency";
+import { seriesColor } from "@/lib/series-color";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { requireSession } from "@/lib/session";
 import {
@@ -24,6 +26,15 @@ import {
 } from "@/lib/telemetry-monitor";
 
 export const metadata: Metadata = { title: "Device telemetry" };
+
+/**
+ * Series requests in flight at once, per render. Kept under the gateway's
+ * five-client pool so one wide device cannot enqueue sixty-four authenticated
+ * sessions at once and starve its own plots. It bounds a single page render,
+ * not the pool: several renders at once can still contend, and a global budget
+ * would have to live in the gateway.
+ */
+const SERIES_CONCURRENCY = 3;
 
 export default async function DevicePage({
   params,
@@ -47,29 +58,37 @@ export default async function DevicePage({
   const search = await searchParams,
     channels = Object.keys(detail.channels);
   const now = new Date();
-  const selected = selection(search, channels, now.getTime());
-  let history:
-    | Awaited<ReturnType<typeof apiGet<typeof TelemetryHistory>>>
-    | undefined;
-  let error: string | undefined = selected.error;
-  if (selected.query) {
-    const query = new URLSearchParams(
-      Object.entries(selected.query).map(([key, value]) => [
-        key,
-        String(value),
-      ]),
-    );
-    try {
-      history = await apiGet(
-        `${routes.telemetry.series.path(deviceId)}?${query}`,
-        TelemetryHistory,
+  // The channel parameter is retired: every channel is plotted. Dropping it from
+  // the shared state stops a bookmarked ?channel=removed_channel reporting
+  // "choose a provisioned channel" over a page of working plots.
+  const sharedSearch: Search = Object.fromEntries(Object.entries(search).filter(([key]) => key !== "channel"));
+  const selected = selection(sharedSearch, channels, now.getTime());
+  // One plot per channel, over the one window chosen above: a person watching a
+  // device wants to see moisture against temperature, not pick them one at a
+  // time. Fetched together so a slow channel doesn't serialise the rest.
+  const plots = await mapWithConcurrency(channels, SERIES_CONCURRENCY, async (channel) => {
+      const forChannel = selection(sharedSearch, channels, now.getTime(), channel);
+      if (!forChannel.query) return { channel, error: forChannel.error };
+      const query = new URLSearchParams(
+        Object.entries(forChannel.query).map(([key, value]) => [key, String(value)]),
       );
-    } catch (failure) {
-      const message = historyFailure(failure);
-      if (!message) throw failure;
-      error = message;
-    }
-  }
+      try {
+        return {
+          channel,
+          history: await apiGet(
+            `${routes.telemetry.series.path(deviceId)}?${query}`,
+            TelemetryHistory,
+          ),
+        };
+      } catch (failure) {
+        const message = historyFailure(failure);
+        if (!message) throw failure;
+        // One channel failing is its own plot's problem, not the page's.
+        return { channel, error: message };
+      }
+  });
+  const error: string | undefined = selected.error;
+  const pendingRollup = plots.some((plot) => plot.history?.pending_rollup);
   const { device } = detail;
   const input =
     "min-w-0 w-full max-w-full border border-current/20 rounded-lg px-3 py-2 bg-transparent";
@@ -177,22 +196,6 @@ export default async function DevicePage({
         </h2>
         <form className="flex flex-wrap items-end gap-4 mt-4">
           <label className="grid min-w-0 max-w-full gap-2">
-            Channel
-            <select
-              name="channel"
-              defaultValue={
-                typeof search.channel === "string"
-                  ? search.channel
-                  : channels[0]
-              }
-              className={input}
-            >
-              {channels.map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-          </label>
-          <label className="grid min-w-0 max-w-full gap-2">
             Window
             <select
               name="window"
@@ -246,20 +249,48 @@ export default async function DevicePage({
             {error}
           </p>
         )}
-        {history && (
-          <>
-            {history.pending_rollup && (
-              <p role="status" className="mt-5">
-                Rollups are pending. Averages may be stale or missing; refresh
-                later or select raw samples.
-              </p>
-            )}
-            <HistoryPlot
-              history={history}
-              unit={detail.channels[history.channel]?.unit ?? ""}
-            />
-          </>
+        {pendingRollup && (
+          <p role="status" className="mt-5">
+            Rollups are pending. Averages may be stale or missing; refresh later
+            or select raw samples.
+          </p>
         )}
+        <div className="mt-6 grid gap-5 xl:grid-cols-2">
+          {plots.map((plot, index) => (
+            <section
+              key={plot.channel}
+              aria-label={`${plot.channel} history`}
+              className="min-w-0 rounded-[20px] border border-hairline bg-white px-5 py-4"
+            >
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                {/* The dot repeats the mark's colour beside a heading that names
+                    the channel, so identity never rests on the colour alone. */}
+                <span
+                  aria-hidden
+                  className="size-2.5 shrink-0 rounded-full"
+                  style={{ background: seriesColor(index) }}
+                />
+                <h3 className="min-w-0 break-all text-[16px] font-semibold text-ink">
+                  {plot.channel}
+                </h3>
+                <span className="font-mono text-[13px] text-muted">
+                  {detail.channels[plot.channel]?.unit ?? ""}
+                </span>
+              </div>
+              {plot.error ? (
+                <p role="alert" className="mt-4 text-[15px] text-coral-deep">
+                  {plot.error}
+                </p>
+              ) : plot.history ? (
+                <HistoryPlot
+                  history={plot.history}
+                  unit={detail.channels[plot.channel]?.unit ?? ""}
+                  color={seriesColor(index)}
+                />
+              ) : null}
+            </section>
+          ))}
+        </div>
       </section>
       </>}
         </div>

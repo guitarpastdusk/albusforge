@@ -26,16 +26,16 @@ async function main() {
     const timer=setTimeout(() => process.exit(1),30000); timer.unref();
     void app.close().then(() => pool.end()).then(() => {clearTimeout(timer);process.exit(0);});
   });
-  // A cold instance's route to the internet isn't usable for some seconds
-  // after the port opens, so a question arriving in that window falls back to
-  // evidence_only for no reason, and a device chat turn fails outright. Cloud
-  // Run holds the request while the container starts; waiting here keeps the
-  // interpretation. Bounded, and skipped when neither model is configured.
-  if (provider || chatProvider) {
-    const egress=await awaitEgress();
-    process.stdout.write(JSON.stringify({event:"ask_egress",severity:egress.ok ? "INFO" : "CRITICAL",
-      ok:egress.ok,attempts:egress.attempts,waited_ms:egress.waitedMs,last_code:egress.lastCode ?? null})+"\n");
-  }
   await app.listen({host:"0.0.0.0",port:config.PORT});
+  // How long the route to the model API takes to open, measured after we are
+  // serving and never awaited: blocking startup on it cost a cold start its
+  // whole budget and prevented nothing (packages/llm's egress.ts). A question
+  // that arrives first degrades to evidence_only, which is still a real answer.
+  if (provider || chatProvider) {
+    void awaitEgress().then((egress) => {
+      process.stdout.write(JSON.stringify({event:"ask_egress",severity:egress.ok ? "INFO" : "CRITICAL",
+        ok:egress.ok,attempts:egress.attempts,waited_ms:egress.waitedMs,last_code:egress.lastCode ?? null})+"\n");
+    },() => {});
+  }
 }
 main().catch(() => { process.stderr.write("Ask startup failed\n"); process.exitCode=1; });

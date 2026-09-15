@@ -19,6 +19,19 @@ function flakyFetch(failures: number, code = "ENOTFOUND"): { fetch: typeof globa
 const instant = () => Promise.resolve();
 
 describe("awaitEgress", () => {
+  it("bounds itself by the backoff it intended, not only by the clock", async () => {
+    // Nothing blocks on this any more, so the budget only bounds the
+    // measurement — but a stubbed `sleep` must still reach it, or a route that
+    // stays shut leaves the loop running for the life of the process.
+    const { fetch, calls } = flakyFetch(Number.POSITIVE_INFINITY);
+    const wait = await awaitEgress({ fetch, sleep: instant, budgetMs: 120_000 });
+    expect(wait.ok).toBe(false);
+    // 250 + 500 + 1000 + 2000, then 3000 each: ~41 attempts to spend 120 s.
+    expect(calls()).toBe(wait.attempts);
+    expect(wait.attempts).toBeGreaterThan(35);
+    expect(wait.attempts).toBeLessThan(50);
+  });
+
   it("returns on the first attempt when the route is already open", async () => {
     const { fetch, calls } = flakyFetch(0);
     expect(await awaitEgress({ fetch, sleep: instant })).toMatchObject({ ok: true, attempts: 1 });
@@ -32,7 +45,7 @@ describe("awaitEgress", () => {
     expect(calls()).toBe(5);
   });
 
-  it("gives up inside the budget rather than blocking startup forever", async () => {
+  it("gives up inside its budget rather than probing forever", async () => {
     const { fetch } = flakyFetch(Number.POSITIVE_INFINITY);
     // Real waits, small budget: the loop must stop on its own.
     const wait = await awaitEgress({ fetch, budgetMs: 600 });

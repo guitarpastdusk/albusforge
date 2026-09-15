@@ -111,25 +111,6 @@ async function main(): Promise<void> {
   process.once("SIGTERM", (signal) => void shutdown(signal));
   process.once("SIGINT", (signal) => void shutdown(signal));
 
-  /*
-   * Not ready until the API is reachable.
-   *
-   * A cold instance passes its TCP startup probe as soon as this port opens,
-   * but the route out to the internet isn't usable for some seconds after
-   * that — the database, on a private address, already is. Serving in that
-   * window answers the person's first message with a fallback. Cloud Run
-   * holds the request while the container starts, so waiting here costs that
-   * first turn some latency and saves the answer.
-   *
-   * Bounded: if the route never opens we listen anyway and say so, rather than
-   * failing the instance and taking the service down for a check that is not
-   * itself the service.
-   */
-  const egress = await awaitEgress();
-  log(egress.ok ? "INFO" : "CRITICAL", egress.ok ? "route to the model API is open" : "route to the model API never opened; serving anyway", {
-    fields: { attempts: egress.attempts, waitedMs: egress.waitedMs, ...(egress.lastCode === undefined ? {} : { lastCode: egress.lastCode }) },
-  });
-
   await app.listen({ port: config.port, host: "0.0.0.0" });
   // Never the API key or the database password.
   log("INFO", "intake listening", {
@@ -147,6 +128,26 @@ async function main(): Promise<void> {
       turnBudgetMs: config.turnBudgetMs,
     },
   });
+
+  /*
+   * How long the route to the model API takes to open, measured, not waited
+   * for. Blocking startup on this was tried and removed (packages/llm's
+   * egress.ts): it cost every cold start its whole budget and prevented
+   * nothing. A turn that arrives before the route opens is carried by the
+   * retries instead — transport retries, the hand-back to gateway's retry,
+   * and the portal's chase.
+   *
+   * Not awaited, so it can't hold up serving, and its own failure can't take
+   * the instance down.
+   */
+  void awaitEgress().then(
+    (egress) => {
+      log(egress.ok ? "INFO" : "CRITICAL", egress.ok ? "route to the model API opened" : "route to the model API never opened", {
+        fields: { attempts: egress.attempts, waitedMs: egress.waitedMs, ...(egress.lastCode === undefined ? {} : { lastCode: egress.lastCode }) },
+      });
+    },
+    (error: unknown) => log("WARNING", "could not measure the route to the model API", { error }),
+  );
 }
 
 void main();

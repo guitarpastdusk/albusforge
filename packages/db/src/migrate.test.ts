@@ -4,7 +4,8 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { eq, sql } from "drizzle-orm";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createClientDb, createDb } from "./client.js";
+import { createClientDb } from "./client.js";
+import { createTestDb as createDb, closeTestPool } from "../test/pool-shutdown.js";
 import type { DbConfig } from "./config.js";
 import { MIGRATIONS_FOLDER, runMigrations } from "./migrate.js";
 import { APP_SCHEMAS, buildMessages, builds, llmCalls, tenants } from "./schema/index.js";
@@ -114,7 +115,7 @@ describe("constraints", () => {
   });
 
   afterAll(async () => {
-    await handle?.pool.end();
+    await closeTestPool(handle?.pool);
   });
 
   it("rejects a build with neither a tenant nor an anonymous owner", async () => {
@@ -188,8 +189,31 @@ describe("app role", () => {
       await db.delete(builds).where(eq(builds.id, build!.id));
       expect(await db.select({ n: sql<number>`count(*)::int` }).from(builds)).toEqual([{ n: 0 }]);
     } finally {
-      await pool.end();
+      await closeTestPool(pool);
     }
+  });
+
+  it("retains observation deletion intents after tenant cascade as the restricted app role", async () => {
+    await withClient(asApp(), async c => {
+      const { rows: [tenant] } = await c.query("INSERT INTO users.tenants (name) VALUES ('Camera cleanup') RETURNING id");
+      const { rows: [device] } = await c.query(`INSERT INTO telemetry.devices (tenant_id, token_hash, channels, source)
+        VALUES ($1, 'cleanup-token', '{}'::jsonb, '{}'::jsonb) RETURNING id`, [tenant.id]);
+      await c.query(`INSERT INTO telemetry.device_capabilities
+        (device_id, capability_id, kind, payload_schema, profile_id, profile_version, interval_s, max_bytes, max_width, max_height)
+        VALUES ($1, 'camera.front', 'image', 'jpeg.v1', 'test-camera', 1, 900, 1048576, 320, 240)`, [device.id]);
+      const { rows: [receipt] } = await c.query(`INSERT INTO telemetry.observation_receipts
+        (device_id, observation_id, capability_id, fingerprint, sha256, bytes, captured_at, received_at, expires_at, state, reserved_day)
+        VALUES ($1, gen_random_uuid(), 'camera.front', repeat('a',64), repeat('b',64), 100, now(), now(), now()+interval '30 days', 'stored', '2026-09-14')
+        RETURNING observation_id`, [device.id]);
+      await c.query(`INSERT INTO telemetry.observation_images
+        (device_id, observation_id, object_key, generation, width, height)
+        VALUES ($1, $2, 'test/cleanup.jpeg', '123', 320, 240)`, [device.id, receipt.observation_id]);
+      await c.query("DELETE FROM users.tenants WHERE id=$1", [tenant.id]);
+      expect((await c.query("SELECT count(*)::int AS n FROM telemetry.observation_receipts WHERE device_id=$1", [device.id])).rows).toEqual([{ n: 0 }]);
+      expect((await c.query("SELECT generation FROM telemetry.observation_deletion_intents WHERE object_key='test/cleanup.jpeg'")).rows).toEqual([{ generation: '123' }]);
+      // The cleanup role can acknowledge work without the now-deleted owner.
+      await c.query("DELETE FROM telemetry.observation_deletion_intents WHERE object_key='test/cleanup.jpeg'");
+    });
   });
 
   it("cannot run DDL", async () => {
@@ -260,7 +284,7 @@ describe("createClientDb", () => {
   });
 
   afterAll(async () => {
-    await handle?.pool.end();
+    await closeTestPool(handle?.pool);
   });
 
   /*

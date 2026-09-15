@@ -43,6 +43,48 @@
       "when": 1789345492122,
       "tag": "0005_fleet_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789347666660,
+      "tag": "0006_build_plan_acceptance",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789348008392,
+      "tag": "0007_device_provisioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789363176382,
+      "tag": "0008_sensor_observations",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789364725756,
+      "tag": "0009_observation_maintenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789377901454,
+      "tag": "0010_observation_operational_health",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789419748685,
+      "tag": "0011_device_chat",
+      "breakpoints": true
     }
   ]
 }

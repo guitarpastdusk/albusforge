@@ -1,0 +1,75 @@
+{
+  "$schema": "../../../schemas/part.schema.json",
+  "id": "M-001",
+  "version": "1.1.0",
+  "name": "SG90 Micro Servo",
+  "category": "motion",
+  "status": "active",
+  "successor": null,
+  "electrical": {
+    "interface": "pwm",
+    "connector": "hsx-3pin-v1",
+    "voltage_range": [
+      4.8,
+      6.0
+    ],
+    "current_draw_ma": {
+      "idle": 600,
+      "active": 600
+    },
+    "requires": [
+      "gpio.pwm",
+      "power.5v"
+    ],
+    "conflicts": [],
+    "i2c_address": null,
+    "logic_v": [
+      3.0,
+      5.5
+    ]
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [
+      32.0,
+      12.2,
+      31.0
+    ],
+    "mount": {
+      "type": "tabs",
+      "hole_d_mm": 2.2,
+      "hole_spacing_mm": 27.8
+    },
+    "exposure": "none",
+    "environment_flags": [
+      "moving-parts",
+      "temp:0..50C"
+    ]
+  },
+  "software": {
+    "driver_pkg": "hsx-driver-servo-pwm",
+    "driver_version": "0.1.0",
+    "sdk_module": "motion/servo",
+    "capabilities": [
+      "act.position_deg"
+    ],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "position.v1",
+    "default_widgets": [
+      "stat"
+    ],
+    "alert_templates": []
+  },
+  "commerce": {
+    "suppliers": [
+      {
+        "vendor": "adafruit",
+        "sku": "169",
+        "url": "https://www.adafruit.com/product/169"
+      }
+    ],
+    "unit_cost_usd": 5.95
+  }
+}

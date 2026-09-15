@@ -37,14 +37,15 @@ afterEach(async () => {
 });
 
 describe("useReplyWatchdog", () => {
-  it("checks at 60 s, not before, then again on each longer wait", async () => {
-    expect(REPLY_CHECK_AFTER_MS).toBe(60_000);
-    expect(REPLY_RETRY_AFTER_MS).toEqual([60_000, 30_000, 60_000]);
+  it("checks at 30 s, not before, then again on each following wait", async () => {
+    expect(REPLY_CHECK_AFTER_MS).toBe(30_000);
+    // The first wait is the check deadline itself, so shortening one shortens both.
+    expect(REPLY_RETRY_AFTER_MS).toEqual([30_000, 30_000, 60_000]);
     const onCheck = vi.fn();
     const onGiveUp = vi.fn();
     await render({ waiting: true, onCheck, onGiveUp });
 
-    await advance(59_999);
+    await advance(REPLY_CHECK_AFTER_MS - 1);
     expect(onCheck).not.toHaveBeenCalled();
     await advance(1);
     expect(onCheck).toHaveBeenCalledTimes(1);
@@ -86,7 +87,7 @@ describe("useReplyWatchdog", () => {
 
     // Waiting again: the full sequence, not what was left of the last one.
     await render({ waiting: true, onCheck, onGiveUp });
-    await advance(59_999);
+    await advance(REPLY_CHECK_AFTER_MS - 1);
     expect(onCheck).toHaveBeenCalledTimes(2);
     await advance(1);
     expect(onCheck).toHaveBeenCalledTimes(3);

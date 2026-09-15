@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/part.schema.json",
+  "id": "C-002",
+  "version": "1.0.0",
+  "name": "Freenove ESP32-S3-WROOM CAM (N16R8, 16 MB flash / 8 MB PSRAM, GC0308)",
+  "category": "communication",
+  "status": "active",
+  "successor": null,
+  "electrical": {
+    "interface": "host",
+    "connector": "usb-c-v1",
+    "voltage_range": [4.13, 5.5],
+    "alt_inputs": [
+      { "name": "5v-pin", "voltage_range": [3.68, 5.5] },
+      { "name": "3v3-pin", "voltage_range": [3.0, 3.6] }
+    ],
+    "current_draw_ma": { "idle": 0.02, "active": 500 },
+    "requires": [],
+    "conflicts": [],
+    "i2c_address": null,
+    "logic_v": [3.3, 3.3],
+    "supply": { "output_v": [3.2, 3.4], "max_output_ma": 600, "capacity_mah": null }
+  },
+  "mechanical": {
+    "footprint_file": "footprint.step",
+    "bounding_mm": [65.0, 26.0, 14.0],
+    "mount": { "type": "standoffs", "hole_d_mm": 2.2, "holes_mm": [[2.5, 2.5], [2.5, 23.5], [62.5, 2.5], [62.5, 23.5]] },
+    "exposure": "window",
+    "environment_flags": ["rf-radiator", "needs-line-of-sight"]
+  },
+  "software": {
+    "driver_pkg": null,
+    "driver_version": null,
+    "sdk_module": null,
+    "capabilities": ["bus.i2c", "bus.spi", "bus.uart", "gpio.adc", "gpio.digital", "gpio.pwm", "net.ble", "net.wifi", "power.3v3"],
+    "min_runtime": ">=0.1.0"
+  },
+  "cloud": {
+    "telemetry_schema": "device_health.v1",
+    "default_widgets": ["stat"],
+    "alert_templates": []
+  },
+  "commerce": {
+    "suppliers": [{ "vendor": "digikey", "sku": "1738-FNK0085-ND", "url": "https://www.digikey.com/en/products/detail/freenove/FNK0085/22119481" }],
+    "unit_cost_usd": 21.95
+  }
+}

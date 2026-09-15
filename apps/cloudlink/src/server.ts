@@ -1,3 +1,4 @@
+import { observationStorageFromEnv } from "@albusforge/storage";
 import { buildApp } from "./app.js";
 import { configFromEnv } from "./config.js";
 import { connectDatabase } from "./database.js";
@@ -7,7 +8,10 @@ async function main() {
   const config = configFromEnv();
   const database = connectDatabase(config);
   database.pool.on("error", () => log("ERROR", "idle database connection failed"));
-  const app = buildApp({ pool: database.pool, maxInflight: config.maxInflight });
+  const store = observationStorageFromEnv(process.env, "OBSERVATION_UPLOADS_ENABLED");
+  const app = buildApp({ pool: database.pool, maxInflight: config.maxInflight,
+    observations: store ? { store, maxInflight: config.observations.maxInflight, maxDailyCount: config.observations.maxDailyCount,
+      maxDailyBytes: config.observations.maxDailyBytes, maxAttemptsPerMinute: config.observations.maxAttemptsPerMinute } : undefined });
   let closing = false;
   async function close() {
     if (closing) return;

@@ -1,17 +1,18 @@
 import { performance } from "node:perf_hooks";
 import type { Log } from "./app.js";
-import { createHash } from "node:crypto";
+import { bearerHash, tokenHash } from "./device-auth.js";
+import { IngestAdmission } from "./admission.js";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { Pool } from "pg";
 import { TelemetryAck, TelemetryChannels, TelemetryEnvelope } from "@albusforge/schema";
 
-export const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
+export { tokenHash } from "./device-auth.js";
 class IngestError extends Error {
   constructor(readonly statusCode: number, readonly code: string) { super(code); }
 }
 
 /** All tenant attribution comes from the authenticated device, never the wire. */
-export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8, log: Log = () => {}) {
+export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => Date = () => new Date(), maxInflight = 8, log: Log = () => {}, admission = new IngestAdmission(maxInflight)) {
   app.setErrorHandler((error, _request, reply) => {
     // Never log driver errors: they can contain values from parameterized SQL.
     const code = (error as { statusCode?: number }).statusCode;
@@ -20,8 +21,8 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
     reply.code(status).send({ error: { code: error instanceof IngestError ? error.code : status < 500 ? "invalid_request" : "storage_unavailable", message: status < 500 ? "Telemetry request rejected" : "Telemetry storage unavailable" } });
   });
   const ingest = async (request: FastifyRequest, reply: FastifyReply) => {
-    const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? "");
-    if (!match) throw new IngestError(401, "unauthorized");
+    const credentialHash = bearerHash(request.headers.authorization);
+    if (!credentialHash) throw new IngestError(401, "unauthorized");
     const parsed = TelemetryEnvelope.safeParse(request.body);
     if (!parsed.success) throw new IngestError(400, "invalid_envelope");
     const envelope = parsed.data;
@@ -49,9 +50,19 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       // marker while that worker inserts aggregates referencing this device.
       const device = (await client.query<{ channels: unknown; next_s: number }>(
         "SELECT channels, next_s FROM telemetry.devices WHERE id=$1 AND token_hash=$2 AND revoked_at IS NULL FOR NO KEY UPDATE",
-        [envelope.dev, tokenHash(match[1]!)],
+        [envelope.dev, credentialHash],
       )).rows[0];
       if (!device) throw new IngestError(401, "unauthorized");
+      // Legacy devices retain their channel-only contract. Capability-aware
+      // devices also require current source authorization, including replays.
+      const capabilities = (await client.query<{ enabled: boolean; kind: string; payload_schema: string; channels: unknown }>(
+        "SELECT enabled,kind,payload_schema,channels FROM telemetry.device_capabilities WHERE device_id=$1 FOR SHARE", [envelope.dev],
+      )).rows;
+      if (capabilities.length) {
+        const authorized = new Set(capabilities.filter(cap => cap.enabled && cap.kind === "measurement" && cap.payload_schema === "readings.v1")
+          .flatMap(cap => Object.keys(TelemetryChannels.parse(cap.channels))));
+        if (envelope.r.some(reading => !authorized.has(reading.c))) throw new IngestError(403, "capability_forbidden");
+      }
       const prior = (await client.query<{ fingerprint: string; response: unknown }>(
         "SELECT fingerprint, response FROM telemetry.packets WHERE device_id=$1 AND seq=$2", [envelope.dev, envelope.seq],
       )).rows[0];
@@ -93,6 +104,13 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
         ON CONFLICT(device_id,period) DO UPDATE SET readings_in=usage.readings_in+EXCLUDED.readings_in,
         payload_bytes=usage.payload_bytes+EXCLUDED.payload_bytes`,
         [envelope.dev, received.toISOString().slice(0, 7), normalized.length, Buffer.byteLength(canonical)]);
+      await client.query(`INSERT INTO telemetry.capability_presence(device_id,capability_id,last_capture_at,last_received_at)
+        SELECT $1,c.capability_id,max(r.ts),$3 FROM telemetry.device_capabilities c
+        CROSS JOIN jsonb_to_recordset($2::jsonb) AS r(channel text,ts timestamptz)
+        WHERE c.device_id=$1 AND c.kind='measurement' AND c.enabled AND c.channels ? r.channel
+        GROUP BY c.capability_id
+        ON CONFLICT(device_id,capability_id) DO UPDATE SET last_capture_at=GREATEST(capability_presence.last_capture_at,EXCLUDED.last_capture_at),
+          last_received_at=GREATEST(capability_presence.last_received_at,EXCLUDED.last_received_at)`, [envelope.dev, data, received]);
       await client.query("COMMIT");
       return reply.code(202).send(response);
     } catch (error) {
@@ -106,10 +124,9 @@ export function registerTelemetry(app: FastifyInstance, pool: Pool, now: () => D
       client.release(discard);
     }
   };
-  let inflight = 0;
   app.post("/ingest/v1", { bodyLimit: 128 * 1024 }, async (request, reply) => {
-    if (inflight >= maxInflight) return reply.code(503).header("retry-after", "1").send({ error: { code: "busy", message: "Retry this packet later" } });
-    inflight++;
-    try { return await ingest(request, reply); } finally { inflight--; }
+    const release = admission.acquire();
+    if (!release) return reply.code(503).header("retry-after", "1").send({ error: { code: "busy", message: "Retry this packet later" } });
+    try { return await ingest(request, reply); } finally { release(); }
   });
 }

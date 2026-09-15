@@ -31,6 +31,20 @@ export const EXAMPLE_PARTS: ReadonlyMap<string, PartDefinition> = new Map(
   }),
 );
 
+/** A column in an example build's sample readings table. */
+export interface SampleChannel {
+  /** The part in the build that reads or drives it. */
+  part: string;
+  /** Its `read.*` or `act.*` capability; the unit comes from the suffix (`capabilityUnit`). */
+  capability: string;
+  /** Column heading. */
+  label: string;
+  /** Decimals for numeric values. Omit for values that are already text ("MOTION"). */
+  precision?: number;
+  /** One value per row, oldest first. Every channel in a build has the same count. */
+  values: readonly (number | string)[];
+}
+
 export interface ExampleBuild {
   id: string;
   name: string;
@@ -44,6 +58,8 @@ export interface ExampleBuild {
   parts: readonly { id: string; qty: number }[];
   /** The part that powers the brain, and the brain input it's wired to: `primary`, or one of the brain's `alt_inputs`. */
   power: { supply: string; brainInput: string };
+  /** Sample data: the readings table on the listing page, and how far apart its rows are. */
+  readings: { everySeconds: number; channels: readonly SampleChannel[] };
   /** On the landing carousel. The reading and its age are sample data. */
   showcase?: { reading: string; chain: readonly [string, string, string]; caption: string; secondsAgo: number };
 }
@@ -67,6 +83,14 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
     ],
     // The cell feeds the brain's 5V pin and onboard regulator, as the golden build does.
     power: { supply: "E-001", brainInput: "5v-pin" },
+    readings: {
+      everySeconds: 300,
+      channels: [
+        { part: "P-001", capability: "read.temperature_c", label: "Air temp", precision: 1, values: [3.6, 3.8, 4.1, 5.2, 4.4, 3.9] },
+        { part: "P-001", capability: "read.humidity_pct", label: "Humidity", precision: 0, values: [61, 62, 63, 68, 65, 62] },
+        { part: "P-004", capability: "read.acceleration_g", label: "Door tilt", precision: 2, values: [0.02, 0.02, 0.02, 0.98, 0.11, 0.02] },
+      ],
+    },
     showcase: { reading: "3.8°C", chain: ["BME280", "ESP32-S3", "Wi-Fi"], caption: "Temp + humidity · door by tilt", secondsAgo: 12 },
   },
   {
@@ -85,6 +109,13 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-005", qty: 1 },
     ],
     power: { supply: "E-005", brainInput: "primary" },
+    readings: {
+      everySeconds: 60,
+      channels: [
+        { part: "L-003", capability: "read.motion_bool", label: "Motion", values: ["clear", "clear", "MOTION", "MOTION", "clear", "clear"] },
+        { part: "V-005", capability: "read.illuminance_lux", label: "Ambient light", precision: 0, values: [412, 396, 88, 74, 63, 55] },
+      ],
+    },
     showcase: { reading: "MOTION", chain: ["PIR", "ESP32-S3", "alert"], caption: "Motion · quiet in daylight", secondsAgo: 30 },
   },
   {
@@ -104,6 +135,14 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-005", qty: 1 },
     ],
     power: { supply: "E-005", brainInput: "primary" },
+    readings: {
+      everySeconds: 600,
+      channels: [
+        { part: "P-005", capability: "read.soil_moisture_pct", label: "Soil", precision: 0, values: [38, 36, 35, 34, 41, 40] },
+        { part: "M-001", capability: "act.position_deg", label: "Valve lever", precision: 0, values: [0, 0, 0, 90, 0, 0] },
+        { part: "V-005", capability: "read.illuminance_lux", label: "Light", precision: 0, values: [820, 764, 690, 641, 583, 520] },
+      ],
+    },
     showcase: { reading: "34% soil", chain: ["soil probe", "ESP32-S3", "servo"], caption: "Waters when dry · on-device", secondsAgo: 40 },
   },
   {
@@ -121,6 +160,15 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-004", qty: 1 },
     ],
     power: { supply: "E-001", brainInput: "5v-pin" },
+    readings: {
+      everySeconds: 600,
+      channels: [
+        { part: "P-005", capability: "read.soil_moisture_pct", label: "Bed 1", precision: 0, values: [33, 32, 32, 31, 31, 30] },
+        { part: "P-005", capability: "read.soil_moisture_pct", label: "Bed 2", precision: 0, values: [41, 40, 40, 39, 38, 38] },
+        { part: "P-005", capability: "read.soil_moisture_pct", label: "Bed 3", precision: 0, values: [28, 28, 27, 27, 26, 26] },
+        { part: "P-005", capability: "read.soil_moisture_pct", label: "Bed 4", precision: 0, values: [36, 36, 35, 35, 34, 34] },
+      ],
+    },
     showcase: { reading: "31% soil", chain: ["soil probe ×4", "ESP32-S3", "Wi-Fi"], caption: "Four beds · battery powered", secondsAgo: 55 },
   },
   {
@@ -139,6 +187,14 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-004", qty: 1 },
     ],
     power: { supply: "E-001", brainInput: "5v-pin" },
+    readings: {
+      everySeconds: 300,
+      channels: [
+        { part: "V-005", capability: "read.illuminance_lux", label: "Light", precision: 0, values: [240, 265, 312, 420, 505, 561] },
+        { part: "P-001", capability: "read.humidity_pct", label: "Humidity", precision: 0, values: [58, 59, 61, 62, 62, 63] },
+        { part: "P-001", capability: "read.temperature_c", label: "Temp", precision: 1, values: [21.4, 21.5, 21.6, 21.8, 21.9, 22.0] },
+      ],
+    },
     showcase: { reading: "62% RH", chain: ["light + RH", "ESP32-S3", "Wi-Fi"], caption: "Light + humidity for orchids", secondsAgo: 8 },
   },
   {
@@ -155,6 +211,13 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-005", qty: 1 },
     ],
     power: { supply: "E-005", brainInput: "primary" },
+    readings: {
+      everySeconds: 60,
+      channels: [
+        { part: "P-004", capability: "read.acceleration_g", label: "Vibration", precision: 2, values: [0.11, 0.12, 0.12, 0.13, 0.14, 0.14] },
+        { part: "P-004", capability: "read.angular_rate_dps", label: "Rotation", precision: 1, values: [1.8, 1.9, 2.0, 2.1, 2.3, 2.4] },
+      ],
+    },
     showcase: { reading: "0.14 g", chain: ["MPU-6050", "ESP32-S3", "alert"], caption: "Vibration trend · bearing wear", secondsAgo: 5 },
   },
   {
@@ -172,6 +235,13 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-005", qty: 1 },
     ],
     power: { supply: "E-005", brainInput: "primary" },
+    readings: {
+      everySeconds: 300,
+      channels: [
+        { part: "P-004", capability: "read.acceleration_g", label: "Panel tilt", precision: 2, values: [0.02, 0.02, 0.97, 0.98, 0.98, 0.98] },
+        { part: "V-005", capability: "read.illuminance_lux", label: "Light", precision: 0, values: [96, 42, 18, 6, 3, 2] },
+      ],
+    },
   },
   {
     id: "cold-room-temperature-log",
@@ -187,6 +257,10 @@ export const EXAMPLE_BUILDS: readonly ExampleBuild[] = [
       { id: "E-005", qty: 1 },
     ],
     power: { supply: "E-005", brainInput: "primary" },
+    readings: {
+      everySeconds: 300,
+      channels: [{ part: "P-002", capability: "read.temperature_c", label: "Cold-room temp", precision: 1, values: [2.1, 2.3, 2.6, 3.1, 3.4, 2.9] }],
+    },
   },
 ];
 

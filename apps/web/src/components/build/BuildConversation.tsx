@@ -1,11 +1,13 @@
 "use client";
 
 import { BUILD_EVENT, BuildUpdatedEvent, MessageCreatedEvent } from "@albusforge/schema";
-import { createContext, useContext, useReducer, type ReactNode } from "react";
+import { createContext, useContext, useReducer, useState, type ReactNode } from "react";
+import type { ActionResult } from "@/lib/action-result";
 import { useWorkspaceTransition } from "@/components/shell/WorkspaceBoundary";
 import { refreshBuild, sendBuildMessage, startBuild } from "@/actions/builds";
-import type { EnclosurePreviewData } from "@/components/enclosure/fixture";
-import { useEventStream } from "@/lib/sse/useEventStream";
+import { loadEnclosureBody } from "@/actions/enclosure";
+import { ENCLOSURE_SAMPLE, type EnclosurePreviewData } from "@/components/enclosure/fixture";
+import { useEventStream, type StreamState } from "@/lib/sse/useEventStream";
 import {
   clientMessageIdFor,
   conversationReducer,
@@ -20,6 +22,7 @@ import {
 } from "./conversation";
 import { useReplyWatchdog } from "./useReplyWatchdog";
 import { useBuildRefresh } from "./useBuildRefresh";
+import { useEnclosureBody } from "./useEnclosureBody";
 
 const ACTIONS: ConversationActions = { startBuild, sendBuildMessage, refreshBuild };
 
@@ -35,8 +38,13 @@ interface ConversationApi {
   /** Waiting for a reply and not yet overdue: typing dots, and no new send. */
   typing: boolean;
   signedIn: boolean | Promise<boolean>;
-  /** The device-ready card's 3D enclosure preview: the fixture in mock mode, null in live mode. */
+  /** The device-ready card's 3D enclosure preview: the build's body (GET /v1/builds/:id/body) once it has one, the labelled sample until then, null to show none. */
   enclosurePreview: EnclosurePreviewData | null;
+  /** The body read failed (not "no body yet"): the card says so instead of showing the sample, and offers a retry. */
+  enclosureError: string | null;
+  retryEnclosure: () => void;
+  /** The event stream's state, once a build exists; null before. The view says when replies may be delayed. */
+  streamState: StreamState | null;
   /** Send a message; the first one creates the build. False if nothing was sent. */
   send: (text: string) => boolean;
   setDraft: (text: string) => void;
@@ -61,23 +69,32 @@ export function useConversation(): ConversationApi {
  * Replies and spec progress arrive on GET /v1/builds/:id/events (same-origin,
  * so the anonymous owner cookie goes with it). Messages are merged by id, so
  * the transcript a fresh connection replays is harmless. A reply that takes
- * past 60 s turns into "Check for a reply".
+ * past REPLY_CHECK_AFTER_MS turns into "Check for a reply".
  */
 export function BuildConversation({
   initial,
+  initialDraft = "",
   signedIn = false,
-  enclosurePreview = null,
+  enclosurePreview: fallbackPreview = ENCLOSURE_SAMPLE,
+  loadBody = loadEnclosureBody,
   children,
 }: {
   initial?: BuildTranscript;
+  /** Text waiting in the input before the first send: a Marketplace clone (lib/clone-ask.ts). */
+  initialDraft?: string;
   signedIn?: boolean | Promise<boolean>;
+  /** What the card shows until the build has a body: the labelled sample by default, null for no preview. */
   enclosurePreview?: EnclosurePreviewData | null;
+  /** Reads the build's body once the card is due; tests substitute it. */
+  loadBody?: (buildId: string) => Promise<ActionResult<EnclosurePreviewData | null>>;
   children: ReactNode;
 }) {
   const workspace = useWorkspaceTransition();
-  const [state, dispatch] = useReducer(conversationReducer, initial, initConversation);
+  const [state, dispatch] = useReducer(conversationReducer, initial, (transcript) => initConversation(transcript, initialDraft));
   const typing = isTyping(state);
+  const [streamState, setStreamState] = useState<StreamState | null>(null);
   const { buildId } = state;
+  const { preview: enclosurePreview, error: enclosureError, retry: retryEnclosure } = useEnclosureBody(buildId, state.ready !== null, fallbackPreview, loadBody);
   const requestRefresh = useBuildRefresh(ACTIONS, dispatch);
 
   const send = (text: string): boolean => {
@@ -130,6 +147,7 @@ export function BuildConversation({
     onOpen: () => {
       if (buildId) requestRefresh(buildId, state.observedSpecVersion);
     },
+    onState: setStreamState,
   });
 
   // Armed by waiting, not by having a build id: the first message from the
@@ -141,7 +159,11 @@ export function BuildConversation({
     () => dispatch({ type: "overdue", message: buildId ? OVERDUE_MESSAGE : UNSENT_MESSAGE }),
   );
 
-  return <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview }}>{children}</ConversationContext>;
+  return (
+    <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, enclosureError, retryEnclosure, streamState }}>
+      {children}
+    </ConversationContext>
+  );
 }
 
 /** Renders its children only while the conversation hasn't started — the landing hero. */

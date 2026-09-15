@@ -159,7 +159,6 @@ flowchart TB
         direction LR
         IN["intake"]
         MA["matcher"]
-        CG["codegen<br/><i>min 1, BullMQ consumer</i>"]
         FU["fulfillment"]
         CL["cloudlink"]
         MK["marketplace"]
@@ -167,11 +166,11 @@ flowchart TB
 
     subgraph JOBS["Cloud Run Jobs"]
         BG["workers/bodygen<br/>Python + CadQuery"]
-        FW["workers/fwbuild<br/>PlatformIO"]
+        FW["apps/codegen / fwbuild<br/>ESP-IDF"]
     end
 
-    GW --> IN & MA & CG & FU & CL & MK
-    CG -->|"run.jobs.run()"| FW
+    GW --> IN & MA & FU & CL & MK
+    GW -->|"durable PG queue + run.jobs.run()"| FW
     GW -->|"job plugin"| BG
 
     PKG["<b>packages</b> — shared<br/>schema · db · llm · queue · storage · events"]
@@ -188,7 +187,7 @@ flowchart TB
     classDef nrg fill:#9bc99b,stroke:#4a5157,color:#16191c
     classDef gap fill:#ffffff,stroke:#b4482c,stroke-width:2px,color:#16191c,stroke-dasharray:4 3
     class GW loc
-    class IN,MA,CG,FU,CL,MK gen
+    class IN,MA,FU,CL,MK gen
     class BG,FW phys
     class PKG comm
     class REG mot
@@ -327,7 +326,7 @@ Six schemas in one Postgres 16 cluster: `users`, `registry`, `builds`, `orders`,
 builds(id, user_id, status, ask_text, created_at, updated_at)
   status: asking|specifying|planning|coding|bodying|ready|ordered
 specs(build_id, version, data, confidence, open_questions)
-plans(build_id, version, part_versions, wiring_graph, power_budget, bom, solver_log)
+plans(build_id, version, spec_version, part_versions, wiring_graph, power_budget, bom, solver_log, metadata, accepted_at, accepted_by)
 code_bundles(build_id, version, storage_ref, compile_status, compile_log)
 bodies(build_id, version, step_ref, stl_refs, lint_report, serial)
 
@@ -495,6 +494,8 @@ Projects, Usage and device telemetry now have segment-specific loading and recov
 
 **Build-event authorization snapshots:** each gateway SSE poll resolves the session and tenant membership, checks build ownership, and reads state/messages inside one short PostgreSQL `REPEATABLE READ READ ONLY` transaction. It commits before writing events or waiting for socket backpressure. An admitted batch may finish after access is revoked; messages committed after that snapshot cannot enter it, and the next poll closes after revocation, expiry, membership removal or ownership loss. The poll owns its lease explicitly from BEGIN through bounded cleanup, handles checked-out socket errors, and discards uncertain connections; no stream-lifetime transaction or extra pool is introduced. See [`BUILD-EVENT-SECURITY.md`](BUILD-EVENT-SECURITY.md).
 
+**Trusted build plans (B3):** the project plan page calls gateway plan list/generate/accept endpoints backed by the existing `builds.plans` table. Shared versioned schemas retain exact spec revision, pinned BOM/wiring/power, runtime, immutable registry/profile/compatibility snapshots and canonical input digest. Managed family/member authorization and intended-tenant admission precede the build lock; intake publication takes the same build lock before child writes. Acceptance is idempotent for one version per spec and becomes historical after a newer spec. The pure matcher runs with bounded local inputs; source-controlled production assembly profiles remain empty and all registry parts remain drafts, so no synthetic fixture enables production plans. Firmware/provisioning consume current accepted plans with independent eligibility checks. See [`BUILD-PLANS.md`](BUILD-PLANS.md).
+
 **Same-host workspace switching:** `PUT /v1/me/active-tenant` changes only the caller’s session after current family validity and locked target membership checks. A managed write lease covers startup, transport errors and cleanup. The account header shows workspace/role and offers switching only for multiple memberships on the main host. Switching first unmounts tenant content/streams, coordinates other tabs, then opens Projects with a full document navigation; uncertain outcomes stay hidden until reconciliation. Protected content and the independently streamed Header reconcile their rendered user/tenant against a fresh session before admitting tenant components or new-build actions, including switches missed before hydration. New-build requests bind an explicit expected tenant; gateway rejects mismatches before side effects and pins the admitted owner, preventing silent retargeting after a cross-tab switch. Deploy this gateway check before the web. Host-only cookies and family revocation are preserved; cross-subdomain session handoff remains separate. See [`WORKSPACE-SWITCHING.md`](WORKSPACE-SWITCHING.md).
 
 **Email-code recovery UI:** signup/signin support changing email without dropping the guarded destination, local 30-second resend pacing, and separately tracked request/verify cooldowns derived from sanitized backend `Retry-After`. Local pacing does not block verification or sending to an edited address; backend limits persist through email changes because they can be per IP. Wrong/expired/exhausted codes remain intentionally indistinguishable. Delivery/network failures preserve input and offer retry; signup success no longer asserts a specific saved build. See [`AUTH-RECOVERY-UI.md`](AUTH-RECOVERY-UI.md).
@@ -551,51 +552,13 @@ A **sixth constraint is implied by the compliance block** (§9): generation rest
 
 ### 7.3 Codegen and the compile gate
 
-B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations; trusted plan acceptance, firmware generation and production credential handoff are assigned work, not completed capabilities. That ledger separates software verification from the required registry and physical hardware evidence.
+B3/B6/B8 implementation is tracked in [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md). The existing plan/artifact tables and matcher are foundations. B3 now produces and accepts versioned plans through a trusted server path, while production hardware eligibility still awaits reviewed registry/profile evidence. B6 adds compiled artifacts and B8 adds the separate private configuration handoff; physical hardware approval and deployment remain separate gates. That ledger separates software verification from the required registry and physical hardware evidence.
 
-Invariants:
+B6 now implements a credential-free firmware pipeline in `apps/codegen`: accepted persisted plan → bounded SDK-only application → isolated pinned ESP-IDF 5.5.3 compile → immutable verified artifacts. PostgreSQL queues and fences jobs; a dedicated `fwbuild` Cloud Run Job executes compilation, outside the gateway and Cloudlink failure domains. This replaces the earlier proposed PlatformIO/BullMQ/LLM execution shape for the first candidate. API admission, current-plan publication checks, bounded retries and artifact downloads are implemented; infrastructure deployment is separate.
 
-- Generated app code may import **only `hsx-sdk` headers**. A lint step fails the bundle if raw driver headers appear.
-- **Compile gate:** enqueue `fwbuild`; on failure, regenerate with the error text in context, max three attempts, then fall back to the per-capability template in `sdk/templates`.
-- Output bundle is a PlatformIO project — template + generated `src/app.cpp` + pinned lib deps — in object storage, referenced by `code_bundles`.
+The first software candidate is ESP32-S3 N8R8 with USB power and BH1750 on GPIO8/GPIO9. All production registry/profile eligibility remains gated by reviewed evidence; real compilation does not establish physical compatibility. The runtime uses a separate B8 configuration partition and durable one-packet sequence/retry state. Compiled artifacts contain no credentials. Instruction edits currently support increasing the sampling interval within the accepted plan's bounds, with versioned source comparison; arbitrary source or LLM regeneration is future work.
 
-Execution shape on Cloud Run (Jobs are pull-free and must be triggered):
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant GW as gateway
-    participant CG as codegen<br/>(min 1)
-    participant LLM as packages/llm
-    participant FW as fwbuild Job
-    participant GCS as Cloud Storage
-
-    GW->>CG: enqueue build job (BullMQ)
-    CG->>LLM: generate app layer from BuildPlan
-    LLM-->>CG: src/app.cpp
-    CG->>CG: lint — only hsx-sdk headers allowed
-    CG->>GCS: put bundle
-    CG->>FW: run.jobs.run() with env overrides
-    FW->>GCS: pull bundle + warm PlatformIO cache
-
-    alt compile succeeds
-        FW->>GCS: put artifact
-        FW-->>CG: PATCH compile_status = ok
-        CG-->>GW: build.code.compiled
-    else compile fails (max 3 attempts)
-        FW-->>CG: PATCH errors
-        CG->>LLM: regenerate with error text in context
-        Note over CG,LLM: per-build token ceiling enforced here —<br/>3 retries x large context is the main cost risk
-    else still failing after 3
-        CG->>CG: fall back to sdk/templates per-capability
-    end
-```
-
-`codegen` is the only `min-instances=1` worker. `bodygen` is triggered the same way from a small consumer inside the gateway's job plugin — one always-warm worker, not one per queue.
-
-**Cost risk:** three compile-gate retries × a large context per build is the dominant LLM spend. Mitigated by a per-build token ceiling in `packages/llm`, with budget alerts live from M2 rather than after the first spike.
-
-**Missing:** self-test is a third generated block (§10) and nothing in codegen produces it today.
+The project firmware page shows accepted-plan eligibility, compile status, retry, previous/current source and verified downloads; viewers cannot mutate. It links passed current versions to the separate setup/configuration flow. See [Firmware pipeline](FIRMWARE-PIPELINE.md) for the exact API, toolchain, installer, security, deployment contract and verification limits, and [Build-to-device delivery](BUILD-TO-DEVICE-DELIVERY.md) for cross-track acceptance.
 
 ### 7.4 Bodygen — enclosure generation
 
@@ -646,7 +609,7 @@ The portal now uses those read endpoints for a minimal stored-telemetry monitor 
 
 Fleet management extends this monitor with literal name/UUID search, current-status filters and bounded cursor pages, plus versioned display-name edits for operators/admins. Opt-in `presentation=1` preserves legacy strict read payloads; migration 0005 adds presentation fields and the tenant/cursor index. Mutations use same-origin Server Actions and a managed PostgreSQL write lease with current session/membership locks and compare-and-swap conflict handling. Packet receipt, sample timestamps and missing health remain distinct; no historical availability is inferred. See [`FLEET-MANAGEMENT.md`](FLEET-MANAGEMENT.md).
 
-Existing-device setup at `/setup?device=UUID` uses the gateway’s read-only `GET /v1/devices/:id/setup` projection. A current tenant session gates an indexed accepted-packet receipt check and the registered channels’ latest samples in one consistent snapshot. Visible waiting screens check every five seconds with a bounded automatic budget; confirmation means authenticated cloud reception, not successful physical assembly or flashing. No identity, credential, channel snapshot or ownership is created or changed. New enrollment still depends on the persisted trusted BuildPlan, trusted provisioning producer and secure firmware credential handoff tracked in [UI-BACKLOG B3/B6/B8](UI-BACKLOG.md) and [CLOUD-PLATFORM §4.2](CLOUD-PLATFORM.md), under [ADR 0009](adr/0009-tenant-created-at-sign-up.md). Implementation boundaries and real HTTP/PostgreSQL/browser evidence are in [DEVICE-SETUP.md](DEVICE-SETUP.md).
+Existing-device setup at `/setup?device=UUID` uses the gateway’s read-only `GET /v1/devices/:id/setup` projection. A current tenant session gates an indexed accepted-packet receipt check and the registered channels’ latest samples in one consistent snapshot. Visible waiting screens check every five seconds with a bounded automatic budget; confirmation means authenticated cloud reception, not successful physical assembly or flashing. No identity, credential, channel snapshot or ownership is created or changed. The complementary self-flash enrollment path is described below. Implementation boundaries and real HTTP/PostgreSQL/browser evidence are in [DEVICE-SETUP.md](DEVICE-SETUP.md).
 
 ### 7.7 Marketplace
 
@@ -659,6 +622,10 @@ Existing-device setup at `/setup?device=UUID` uses the gateway’s read-only `GE
 The deck adds public build/remix counts and an **earn** promise: remixes route through our rails and the original builder is credited. That is a payout obligation against a `payouts.ts` marked `[LATER], ledger only` — a credit promised on a slide needs at least ledger entries from launch. The compounding argument ("every recipe shortens the next builder's first weekend") makes remix→built conversion the metric to instrument early.
 
 ---
+
+Self-flash enrollment now uses `POST /v1/devices/claim` and `/setup?build=UUID&plan=N&code=N`. The gateway admits an admin/operator in the build tenant, locks the build and requires its accepted current-spec plan, immutable evidence digest, exact passed firmware manifest and a reviewed channel profile. Migration0007 links device/tenant/build/plan/code with composite foreign keys and one identity per plan. The token is random256-bit, hashed on the device and encrypted only for a ten-minute, issuing-user/session-family-bound handoff. POST-only download consumes and clears that encrypted material; explicit retry-safe replacement rotates the credential and starts after the last accepted sequence. Revocation is permanent. Shared firmware artifacts remain credential-free; the separate config binds the exact manifest and B6's local installer collects Wi-Fi locally.
+
+Production provisioning profiles remain empty and real registry parts remain drafts: software fixtures and a received packet do not constitute hardware approval. B3 trusted-plan acceptance → B6 compiler/installer → B8 credential delivery dependencies remain tracked in [UI-BACKLOG B3/B6/B8](UI-BACKLOG.md), [CLOUD-PLATFORM §4.2](CLOUD-PLATFORM.md) and [BUILD-TO-DEVICE-DELIVERY.md](BUILD-TO-DEVICE-DELIVERY.md), under [ADR0009](adr/0009-tenant-created-at-sign-up.md). Paid fulfillment and physical qualification remain separate. [DEVICE-PROVISIONING.md](DEVICE-PROVISIONING.md) records the API/env/key lifecycle and actual PostgreSQL, C-encoder/Cloudlink and production-browser evidence.
 
 ## 8. Tenancy and provisioning — the largest gap
 
@@ -766,11 +733,11 @@ This is simultaneously the strongest differentiator — it answers the complianc
 | API services | TypeScript, Node 20, Fastify, zod — one style everywhere |
 | Monorepo | pnpm workspaces + turborepo |
 | Database | PostgreSQL 16 via Drizzle, single cluster, schema per domain |
-| Cache and queues | Redis 7, BullMQ — CAD and codegen run as queued jobs |
+| Cache and queues | Firmware uses a durable PostgreSQL queue (§7.3); Redis/BullMQ remain proposed for CAD |
 | Object storage | S3-compatible; MinIO in dev |
 | LLM | Anthropic API behind a thin `packages/llm` wrapper; model name from env, never hard-coded |
 | CAD | Python 3.12 + CadQuery, containerized, queue-invoked |
-| Firmware | PlatformIO, ESP32-S3 only for MVP; compile gate in `workers/fwbuild` |
+| Firmware | Pinned ESP-IDF 5.5.3, explicit ESP32-S3/BH1750 software candidate; dedicated `apps/codegen` compile job (§7.3) |
 | Device ingest | MQTT (EMQX) → ingest → partitioned Postgres |
 | Auth | ~~Lucia session cookies + magic link~~ — 6-digit email code, in-house sessions in Postgres ([ADR 0008](adr/0008-sign-in-by-email-code.md)); passkeys later |
 | Web portal | Next.js App Router in `apps/web`, a client of the gateway only ([`PORTAL.md`](PORTAL.md)) |
@@ -785,11 +752,10 @@ Runtime is **Cloud Run services and jobs, no GKE**. Managed GCP wherever it exis
 | --- | --- |
 | `apps/gateway` | Cloud Run, public, min instances 1 — SSE and cold-start UX |
 | `intake`, `matcher`, `marketplace` | Cloud Run, internal ingress, scale to zero |
-| `codegen` | Cloud Run worker, min 1, CPU always allocated — the always-on BullMQ consumer |
 | `fulfillment` | Cloud Run internal; mock adapters for MVP |
 | `cloudlink` | Standalone HTTPS ingest Cloud Run service (ADR 0003); small direct PostgreSQL pool, separate NEG/Armor, prod warm floor and connection-budgeted instance cap (§7.6). Terraform owned by infra; MQTT deferred |
 | `workers/bodygen` | Cloud Run Job, 2 vCPU / 4 GiB, Python + CadQuery |
-| `workers/fwbuild` | Cloud Run Job, 4 vCPU / 8 GiB, PlatformIO, cache warmed from GCS |
+| `apps/codegen` / `fwbuild` | Dedicated Cloud Run Job contract: 2 vCPU / 4 GiB, pinned ESP-IDF, PostgreSQL queue/pool 2, immutable GCS artifacts; deployment owned by infra |
 | Postgres 16 | Cloud SQL, private IP, direct VPC egress, no proxy sidecar |
 | Redis 7 | Memorystore Basic 1 GB — **`maxmemory-policy=noeviction` or BullMQ corrupts** |
 | S3 / MinIO | Cloud Storage with V4 signed URLs; MinIO stays for dev |
@@ -988,7 +954,7 @@ Adoption early-warning to instrument from day one: **if repeat-build within 90 d
 | **M1 — Spine** | `packages/schema`, `packages/db` + migrations, registry with 12 parts + validator and loader, gateway skeleton with `/v1/parts` | Cloud SQL; migration Job wired into the deploy workflow; `registry/scripts/load.ts` as a Cloud Run Job on deploy |
 | **M2 — Understand** | intake (extract, clarify, scope filter) with fixture tests; `POST /v1/builds` produces a spec | `packages/llm` with provider abstraction; key in Secret Manager; **cost logging and budget alerts live before the first real prompt runs** |
 | **M3 — Solve** | solver, power math, rank stub, plan endpoint, infeasibility explanations | none — pure deterministic code, fully unit-testable locally, highest-value tests in the project |
-| **M4 — Code** | `hsx-rt`, `hsx-sdk`, four drivers, codegen, compile gate, code endpoints | `fwbuild` container; Cloud Run Job + `run.jobs.run()` trigger path; Memorystore and BullMQ; GCS artifact bucket and signed URLs; PlatformIO cache |
+| **M4 — Code** | First ESP32-S3/BH1750 runtime, SDK, bounded code edits, compile gate and versioned code endpoints implemented in B6; other drivers and physical acceptance remain | Dedicated `fwbuild` Cloud Run Job and invocation/recovery scheduling; immutable GCS artifacts and authorized verified downloads (§7.3); infra deployment remains separate |
 | **M5 — Body** | bodygen for box enclosures, lint, QR, body endpoints, fridge golden build passing e2e | CadQuery image (large — budget a day), bodygen Cloud Run Job, STEP/STL to GCS |
 | **M6 — Deliver & Cloud** | fulfillment with mock adapters + checkout; cloudlink provisioning, HTTPS ingest, derived dashboard, SSE fan-out, alerts, metering | ingest route, rollup jobs on Cloud Scheduler, partitioned `readings`, email adapter. **Materially lighter than the original plan** — deferring MQTT removes the EMQX MIG, the rule-engine bridge and the Pub/Sub push path ([`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3.2) |
 | **M6.5 — Intelligence** *(new)* | baselines and detectors, small-model narration, the anomaly inbox, the Ask tool loop | tenant-scoped query executor, model tiering in `packages/llm`, prompt-cached registry context. The bounded single-sensor Ask slice is brought forward in the sensor cloud rollout; the broader intelligence layer remains later work. |
@@ -1039,8 +1005,8 @@ flowchart LR
 | Risk | Mitigation |
 | --- | --- |
 | CadQuery image size and build time | pin a prebuilt CadQuery base; layer only project code |
-| PlatformIO cold compiles, 3–8 min | three cold retries blow the gate past 20 min — GCS-warmed `.platformio` cache + pre-warmed toolchain layer |
-| Always-on BullMQ worker | the one thing preventing full scale-to-zero; accept for MVP, revisit Cloud Tasks if $20/mo matters |
+| Firmware cold compiles | Pinned toolchain image, 600-second compile deadline and three fenced attempts; one job handles one queued request |
+| Firmware dispatch recovery | Durable PostgreSQL queue requires scheduled recovery invocations after dispatch failure; no always-on firmware consumer |
 | Single EMQX instance | SPOF for all telemetry; MIG auto-restart now, cluster at real volume |
 | Migration races on Cloud Run | migrations run **only** in the pre-deploy Job |
 | Timeseries drift | all timeseries access confined to `packages/db`, no raw SQL in services |
@@ -1069,7 +1035,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 
 | Decision | The fork |
 | --- | --- |
-| **Firmware target** | PlatformIO C++ with a generated `app.cpp`, or ESPHome YAML. The deck picks ESPHome as the ecosystem wedge, which deletes the compile gate as specified, the `fwbuild` PlatformIO container, the four C++ drivers, and most of `hsx-sdk`'s reason to exist. **A large simplification, not a small substitution — and M4 is written for the other answer. Highest-leverage decision on this list.** |
+| **Firmware target** | B6 implements pinned ESP-IDF C/C++ with a bounded SDK app for the first candidate (§7.3). ESPHome remains a separate product decision; it is not an implemented alternate compiler. |
 | ~~**Tenant or build as the root**~~ | **Resolved:** tenant created at sign-up; orders and devices take it from the build. See [ADR 0009](adr/0009-tenant-created-at-sign-up.md) |
 | **First-party vs partner cloud** | the plan builds telemetry and OTA first-party; the discipline slide says partner. Golioth or Blues would replace most of M6 |
 | ~~**Device transport**~~ | **Resolved:** HTTPS POST for MVP, MQTT as a second front door at M8. See [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §3 |
@@ -1087,7 +1053,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | ~~**Retention**~~ | **Reconciled by tiering** — 90 days raw, hourly rollups indefinitely (~0.3% of the volume), 7-year cold archive opt-in, local-first as a tenant flag. All three claims are true about different tiers; stating one in isolation is what made them look contradictory. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §5.1 |
 | **Part availability** | no mechanism for stock-out or discontinuation (§17.3) |
 | **Live device state** | everything in Postgres, vs Firestore for live state with realtime listeners and BigQuery for history. The partitioned-`readings` design assumes the Postgres answer |
-| **Inference tiering** | one LLM wrapper and one model, vs a three-tier reflex / SLM-policy / frontier-escalation loop. Nothing in the spec has a place for the runtime tier |
+| ~~**Inference tiering**~~ | **Resolved in code:** one `packages/llm` wrapper, a model per route — `claude-opus-5` for intake, `claude-haiku-4-5` for the Ask classifier, `claude-sonnet-5` for the device chat's tool loop — each with its own switch, ceiling and daily allowance. The reflex tier is on-device firmware rules. See [`DEVICE-CHAT.md`](DEVICE-CHAT.md) |
 
 ### 18.3 Sequencing
 
@@ -1099,10 +1065,10 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | **Stage count** | five in the deck, six in the spec |
 | **Guarantee stamps** | four on the slides, six in the appendix |
 
-### 18.4 Mechanical prerequisites
+### 18.4 Mechanical prerequisites — all done
 
-- Install `pnpm` and the `gcloud` CLI (neither present on the machine).
-- Create the two GCP projects; decide the billing account.
-- Confirm region (`us-central1` assumed).
-- Decide Anthropic-direct or Vertex.
-- Then execute M0.
+Kept for the record; none of these is outstanding. `pnpm` and `gcloud` are
+installed, both GCP projects exist with billing attached, the region is
+`us-central1`, the provider is the Anthropic API directly (`LLM_PROVIDER` is a
+literal in every service's config, and Vertex fails at startup by design), and
+M0 through M6 have shipped. See [`checkin/`](checkin/) for what landed when.

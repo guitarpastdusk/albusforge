@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
+import approvedProfiles from "../../../registry/provisioning-profiles.json";
 import { configFromEnv } from "./config";
+import { ProvisioningProfiles } from "./provisioning-profile";
+
+/*
+ * The reviewed provisioning manifest ships in registry/provisioning-profiles.json and is
+ * compiled into the binary, so it is part of the default config whatever the environment
+ * says. It is inert on its own: issuing a device configuration still needs the paired
+ * DEVICE_HANDOFF_KEYS / DEVICE_INGEST_URL secrets below, which default to null.
+ */
+const APPROVED_PROFILES = ProvisioningProfiles.parse(approvedProfiles);
 
 const DB = { DB_HOST: "10.0.0.3", DB_NAME: "albus", DB_USER: "albus_app", DB_PASSWORD: "s3cret-value", RESEND_API_KEY: "re_test" };
 
@@ -17,6 +27,7 @@ const AUTH_DEFAULTS = {
 describe("configFromEnv", () => {
   it("defaults PORT to 8080, DB_SSL to require, and bounds every database wait", () => {
     expect(configFromEnv(DB)).toEqual({
+      deviceProvisioning: { keys: null, ingestUrl: null, profiles: APPROVED_PROFILES },
       port: 8080,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
@@ -27,6 +38,11 @@ describe("configFromEnv", () => {
       sseStreamLimits: { perOwner: 3, perInstance: 100 },
       auth: AUTH_DEFAULTS,
     });
+    // The manifest is real, reviewed data - not an empty placeholder - and provisioning is
+    // still off because no handoff key or ingest URL is configured.
+    expect(APPROVED_PROFILES.length).toBeGreaterThan(0);
+    expect(configFromEnv(DB).deviceProvisioning.keys).toBeNull();
+    expect(configFromEnv(DB).deviceProvisioning.ingestUrl).toBeNull();
   });
 
   it("reads the sign-in settings", () => {

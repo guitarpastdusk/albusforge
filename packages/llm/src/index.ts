@@ -22,6 +22,14 @@ export {
 } from "./provider";
 export { buildRequest, FALLBACK_BETA, outputFormat, prefixHash, systemBlocks } from "./request";
 export {
+  buildToolRequest,
+  runToolLoop,
+  type ToolDefinition,
+  type ToolExecutor,
+  type ToolLoopOptions,
+  type ToolLoopOutcome,
+} from "./tools";
+export {
   LlmError,
   type CallAttribution,
   type Effort,

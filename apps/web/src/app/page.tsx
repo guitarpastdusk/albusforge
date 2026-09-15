@@ -3,15 +3,15 @@ import { BuildConversation, WhenConversationEmpty } from "@/components/build/Bui
 import { ConversationView } from "@/components/build/ConversationView";
 import { DeviceCarousel } from "@/components/carousel/DeviceCarousel";
 import { ChatStart } from "@/components/landing/ChatStart";
-import { enclosurePreviewFor } from "@/components/enclosure/fixture";
-import { loadRuntimeConfig } from "@/lib/runtime-config";
+import { seededAsk } from "@/lib/clone-ask";
 import { loadShowcaseCards } from "@/lib/showcase";
 
-export default async function LandingPage() {
-  const { cards, examples } = await loadShowcaseCards();
+/** `?ask=` seeds the input: the Marketplace's "Clone build" (lib/clone-ask.ts). */
+export default async function LandingPage({ searchParams }: { searchParams: Promise<{ ask?: string | string[] }> }) {
+  const [{ cards, examples }, params] = await Promise.all([loadShowcaseCards(), searchParams]);
 
   return (
-    <BuildConversation signedIn={getBuildSignedIn()} enclosurePreview={enclosurePreviewFor(loadRuntimeConfig(process.env).apiMode)}>
+    <BuildConversation signedIn={getBuildSignedIn()} initialDraft={seededAsk(params.ask)}>
       <main className="flex flex-1 flex-col">
         <WhenConversationEmpty>
           <div className="flex flex-1 flex-col items-center px-8 py-[72px] text-center">

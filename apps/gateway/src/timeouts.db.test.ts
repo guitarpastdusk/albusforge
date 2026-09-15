@@ -1,3 +1,4 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * A stalled database must fail requests with a JSON 503 inside the configured
  * budgets and leave the pool usable. Postgres runs in testcontainers; a TCP
@@ -5,7 +6,7 @@
  * connection whose responses stop arriving.
  */
 import net from "node:net";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -19,6 +20,12 @@ import { createLogger } from "./log";
 import { createPartsStore } from "./parts";
 
 const MAX = 2;
+/*
+ * The healthy /v1/parts response: one row per non-retired id in the committed registry,
+ * derived rather than hard-coded so promoting a part doesn't fail this file with a count
+ * mismatch that looks like a timeout regression.
+ */
+const HEALTHY_PART_COUNT = new Set(readValidatedParts(REGISTRY_ROOT).filter((p) => p.status !== "retired").map((p) => p.id)).size;
 /*
  * Budgets are generous on purpose. Every test ends by proving the pool is
  * usable again, and that recovery request opens a fresh connection and runs a
@@ -98,7 +105,7 @@ let handle: ReturnType<typeof createDb>;
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -116,7 +123,7 @@ beforeAll(async () => {
   await runMigrations(direct, { appRole: { name: "albus_app", password: "app-secret" } });
   const loader = createDb({ ...direct, user: "albus_app", password: "app-secret" }, { max: 1 });
   await loadParts(loader.db, readValidatedParts(REGISTRY_ROOT));
-  await loader.pool.end();
+  await closeTestPool(loader.pool);
 
   proxy = startProxy({ host: container.getHost(), port: container.getPort() });
   viaProxy = { ...direct, host: "127.0.0.1", port: await proxy.listen(), user: "albus_app", password: "app-secret" };
@@ -144,7 +151,7 @@ beforeEach(() => {
 afterEach(async () => {
   proxy.state.mode = "forward";
   await app.close();
-  await handle.pool.end();
+  await closeTestPool(handle.pool);
 });
 
 afterAll(async () => {
@@ -169,7 +176,7 @@ function expectAllUnavailable(responses: { statusCode: number; json: () => unkno
 async function expectHealthy() {
   const response = await app.inject({ method: "GET", url: "/v1/parts" });
   expect(response.statusCode).toBe(200);
-  expect(PartList.parse(response.json()).parts).toHaveLength(12);
+  expect(PartList.parse(response.json()).parts).toHaveLength(HEALTHY_PART_COUNT);
   expect((await app.inject({ method: "GET", url: "/readyz" })).statusCode).toBe(200);
   expect(handle.pool.waitingCount).toBe(0);
   expect(handle.pool.totalCount).toBeLessThanOrEqual(MAX);

@@ -3,10 +3,12 @@
 import { useEffect, useEffectEvent, useRef } from "react";
 
 /**
- * A reply usually lands within ~45 s (ASK-TO-ENCLOSURE.md §3). Past this the
- * reply is late enough to be worth chasing.
+ * A reply usually lands well within 30 s (ASK-TO-ENCLOSURE.md §3 allows ~45 s
+ * at the outside). Past this it is late enough to chase, which is sooner than
+ * a dead stream would otherwise show itself; a slow reply that does land still
+ * merges by id.
  */
-export const REPLY_CHECK_AFTER_MS = 60_000;
+export const REPLY_CHECK_AFTER_MS = 30_000;
 
 /**
  * How long to keep chasing before telling the person. Each wait is longer than

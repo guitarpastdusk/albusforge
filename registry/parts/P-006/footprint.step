@@ -1,0 +1,33 @@
+ISO-10303-21;
+HEADER;
+/* PLACEHOLDER GEOMETRY - NOT A REAL PART MODEL.
+   P-006 Adafruit STEMMA Soil Sensor 4026
+   This file exists only so registry/scripts/lib/rules.ts ("footprint" rule)
+   accepts the part at status "active" for the hackathon demo. It carries a
+   single axis-aligned bounding box of 95.0 x 15.0 x 4.0 mm taken from the part's
+   mechanical.bounding_mm, with no connectors, headers, mounting bosses or
+   keep-out volumes. Do NOT use it for fit checks, enclosure generation or
+   manufacturing. Replace with a real STEP export from the vendor or from a
+   measured model; tracked in docs/DEMO-ASSUMPTIONS.md. */
+FILE_DESCRIPTION(('PLACEHOLDER bounding box for P-006'),'2;1');
+FILE_NAME('footprint.step','2026-09-14T00:00:00',('albusforge registry'),
+  ('albusforge'),'placeholder','albusforge demo','PLACEHOLDER - NOT AUTHORITATIVE');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 3 1 1 }'));
+ENDSEC;
+DATA;
+#1 = APPLICATION_CONTEXT('core data for automotive mechanical design processes');
+#2 = APPLICATION_PROTOCOL_DEFINITION('international standard',
+  'automotive_design',2000,#1);
+#3 = PRODUCT('P-006_PLACEHOLDER','P-006 placeholder bounding box',
+  'PLACEHOLDER GEOMETRY - replace with a real STEP export',(#4));
+#4 = PRODUCT_CONTEXT('',#1,'mechanical');
+#5 = PRODUCT_DEFINITION_FORMATION('1','PLACEHOLDER',#3);
+#6 = PRODUCT_DEFINITION('design','PLACEHOLDER',#5,#7);
+#7 = PRODUCT_DEFINITION_CONTEXT('part definition',#1,'design');
+#8 = CARTESIAN_POINT('min',(0.0,0.0,0.0));
+#9 = CARTESIAN_POINT('max',(95.0,15.0,4.0));
+#10 = DIRECTION('x',(1.0,0.0,0.0));
+#11 = DIRECTION('z',(0.0,0.0,1.0));
+#12 = AXIS2_PLACEMENT_3D('origin',#8,#11,#10);
+ENDSEC;
+END-ISO-10303-21;

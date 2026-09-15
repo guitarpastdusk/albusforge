@@ -35,7 +35,9 @@ describe("buildCatalogue", () => {
   });
 
   it("offers active parts only by default", () => {
-    expect(buildCatalogue(parts).parts).toEqual([]);
+    expect(buildCatalogue(parts).parts.map((p) => `${p.id}@${p.version}`)).toEqual([
+      "C-002@1.0.0", "E-005@1.1.0", "M-001@1.1.0", "P-001@1.1.0", "P-006@1.0.0", "V-005@1.1.0",
+    ]);
   });
 
   it("lists only energy parts as power options, not the host's regulated rail", () => {

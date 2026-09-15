@@ -27,11 +27,17 @@ describe("validateRegistry", () => {
   it("passes the committed registry", () => {
     const result = validateRegistry({ ...loadRegistry(), goldenBuilds: GOLDEN_BUILDS });
     expect(formatIssues(result.issues)).toBe("");
-    expect(result.parts.map((p) => p.part.id)).toEqual([
-      "C-001", "E-001", "E-004", "E-005", "L-003", "M-001", "P-001", "P-002", "P-004", "P-005", "V-004", "V-005",
+    expect(result.parts.map((p) => `${p.part.id}@${p.part.version}`)).toEqual([
+      "C-001@1.0.0", "C-002@1.0.0", "E-001@1.0.0", "E-004@1.0.0", "E-005@1.0.0", "E-005@1.1.0", "L-003@1.0.0",
+      "M-001@1.0.0", "M-001@1.1.0", "P-001@1.0.0", "P-001@1.1.0", "P-002@1.0.0", "P-004@1.0.0", "P-005@1.0.0",
+      "P-006@1.0.0", "V-004@1.0.0", "V-005@1.0.0", "V-005@1.1.0",
     ]);
-    // Twelve drafts until footprints land with the fit spike.
-    expect(new Set(result.parts.map((p) => p.part.status))).toEqual(new Set(["draft"]));
+    // The parts the demo build pins are active; the rest wait on the fit spike.
+    // The 1.0.0 drafts stay on disk unchanged because they are already loaded
+    // into registry.parts, where a version is immutable (scripts/load.ts).
+    const active = result.parts.filter((p) => p.part.status === "active").map((p) => `${p.part.id}@${p.part.version}`);
+    expect(active).toEqual(["C-002@1.0.0", "E-005@1.1.0", "M-001@1.1.0", "P-001@1.1.0", "P-006@1.0.0", "V-005@1.1.0"]);
+    expect(new Set(result.parts.map((p) => p.part.status))).toEqual(new Set(["draft", "active"]));
   });
 
   describe("json and schema", () => {

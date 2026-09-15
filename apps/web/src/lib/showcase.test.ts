@@ -36,10 +36,12 @@ describe("loadShowcaseCards", () => {
     ["an HTML placeholder", new GatewayError({ route: "GET /v1/showcase", status: 200, contentType: "text/html", reason: "not_json" })],
     ["JSON that isn't a showcase", new GatewayError({ route: "GET /v1/showcase", status: 200, contentType: "application/json", reason: "schema_mismatch", issues: "cards: expected array" })],
     ["a network failure", new TypeError("fetch failed")],
-  ])("%s: no cards and no examples (a real outage isn't papered over), one traced ERROR", async (_label, failure) => {
+  ])("%s: the example builds, marked as examples, and one traced ERROR (the outage is logged, not shown as an empty carousel)", async (_label, failure) => {
     vi.mocked(apiGet).mockRejectedValue(failure);
 
-    await expect(loadShowcaseCards()).resolves.toEqual({ cards: [], examples: false });
+    const { cards, examples } = await loadShowcaseCards();
+    expect(examples).toBe(true);
+    expect(cards.map((c) => c.id)).toEqual(exampleShowcase().map((c) => c.id));
     expect(log).toHaveBeenCalledTimes(1);
     const [severity, message, options] = vi.mocked(log).mock.calls[0]!;
     expect(severity).toBe("ERROR");

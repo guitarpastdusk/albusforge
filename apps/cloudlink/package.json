@@ -4,21 +4,25 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.js --external:pg-native \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/server.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/server.js --external:pg-native --external:sharp \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
     "provision": "tsx src/provision.ts",
-    "simulate": "tsx src/simulate.ts"
+    "simulate": "tsx src/simulate.ts",
+    "test:observations": "vitest run src/observations.db.test.ts src/observations-admission.test.ts src/ingest.db.test.ts --fileParallelism=false",
+    "test:observations:watch": "vitest src/observations.db.test.ts src/observations-admission.test.ts src/ingest.db.test.ts --fileParallelism=false"
   },
   "dependencies": {
     "@albusforge/db": "workspace:*",
     "@albusforge/schema": "workspace:*",
     "fastify": "^5.12.4",
     "pg": "^8.23.0",
-    "zod": "~4.5.4"
+    "zod": "~4.5.4",
+    "sharp": "0.35.4",
+    "@albusforge/storage": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

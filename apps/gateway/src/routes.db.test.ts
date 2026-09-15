@@ -1,9 +1,10 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 /*
  * The routes against a real Postgres: migrate with @albusforge/db, load the
  * committed registry with the registry loader as the app role, then query
  * through the gateway exactly as the server wires it.
  */
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { loadParts, readValidatedParts } from "@albusforge/registry/db-load";
 import { REGISTRY_ROOT } from "@albusforge/registry/load";
@@ -14,7 +15,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "./app";
 import { createLogger } from "./log";
-import { createPartsStore } from "./parts";
+import { createPartsStore, latestPerId } from "./parts";
 
 const registry = readValidatedParts(REGISTRY_ROOT);
 
@@ -27,7 +28,7 @@ let handle: ReturnType<typeof createDb>;
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -46,13 +47,15 @@ beforeAll(async () => {
 
   handle = createDb({ ...migrate, user: "albus_app", password: "app-secret" }, { max: 2 });
   await loadParts(handle.db, registry);
-  // Extra versions, as later registry changes would add them.
+  // Extra versions, as later registry changes would add them. Part versions are immutable
+  // once loaded, so these must stay clear of every version the registry actually ships:
+  // E-005@1.1.0 is now a real promoted file, so the synthetic retired version sits above it.
   await loadParts(handle.db, [
     variant("P-001", { version: "1.9.0" }),
     variant("P-001", { version: "1.10.0", name: "BME280 v1.10" }),
     variant("E-005", { version: "1.0.1-rc.1" }),
     // E-005 is complete enough to pass the non-draft checks.
-    variant("E-005", { version: "1.1.0", status: "retired" }),
+    variant("E-005", { version: "1.2.0", status: "retired" }),
   ]);
 
   app = buildApp({
@@ -64,7 +67,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  await handle?.pool.end();
+  await closeTestPool(handle?.pool);
   await container?.stop();
 });
 
@@ -82,19 +85,26 @@ describe("against Postgres", () => {
     const { status, body } = await get("/v1/parts");
     expect(status).toBe(200);
     const list = PartList.parse(body);
-    expect(list.parts.map((p) => p.id)).toEqual(registry.map((p) => p.id).sort());
+    // One row per id: the registry ships several ids at both a 1.0.0 draft and a promoted 1.1.0.
+    expect(list.parts.map((p) => p.id)).toEqual([...new Set(registry.map((p) => p.id))].sort());
     const versions = Object.fromEntries(list.parts.map((p) => [p.id, p.version]));
-    // 1.10.0 over 1.9.0; the retired 1.1.0 is filtered out, leaving the pre-release over 1.0.0.
+    // 1.10.0 over 1.9.0; the retired 1.2.0 is filtered out, leaving the promoted 1.1.0 on top
+    // of the 1.0.1 pre-release and the 1.0.0 draft.
     expect(versions["P-001"]).toBe("1.10.0");
-    expect(versions["E-005"]).toBe("1.0.1-rc.1");
+    expect(versions["E-005"]).toBe("1.1.0");
     expect(list.parts.find((p) => p.id === "P-001")?.name).toBe("BME280 v1.10");
   });
 
   it("filters by status and category", async () => {
     expect(PartList.parse((await get("/v1/parts?status=retired")).body).parts.map((p) => `${p.id}@${p.version}`)).toEqual([
-      "E-005@1.1.0",
+      "E-005@1.2.0",
     ]);
-    expect(PartList.parse((await get("/v1/parts?status=active")).body).parts).toEqual([]);
+    // Active is now a real subset, not empty: the two active base parts plus the promoted
+    // 1.1.0 versions, with every 1.0.0 draft of a promoted part left out.
+    expect(PartList.parse((await get("/v1/parts?status=active")).body).parts.map((p) => `${p.id}@${p.version}`)).toEqual(
+      latestPerId(registry.filter((p) => p.status === "active")).map((p) => `${p.id}@${p.version}`),
+    );
+    expect(PartList.parse((await get("/v1/parts?status=active")).body).parts.map((p) => `${p.id}@${p.version}`)).toContain("P-001@1.1.0");
     expect(PartList.parse((await get("/v1/parts?category=energy")).body).parts.map((p) => p.id)).toEqual([
       "E-001",
       "E-004",
@@ -109,7 +119,7 @@ describe("against Postgres", () => {
     expect(part.version).toBe("1.10.0");
     expect(part.electrical.i2c_address).toBe("0x77");
 
-    expect(PartDetail.parse((await get("/v1/parts/E-005?status=retired,draft")).body).part.version).toBe("1.1.0");
+    expect(PartDetail.parse((await get("/v1/parts/E-005?status=retired,draft")).body).part.version).toBe("1.2.0");
     expect((await get("/v1/parts/P-003")).status).toBe(404);
   });
 });

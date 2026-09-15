@@ -1,0 +1,6 @@
+[
+  { "driver_pkg": "hsx-driver-seesaw-soil", "driver_ver": "0.1.0", "runtime_ver": "0.1.0", "brain_id": "C-002", "status": "passed" },
+  { "driver_pkg": "hsx-driver-bh1750", "driver_ver": "0.1.0", "runtime_ver": "0.1.0", "brain_id": "C-002", "status": "passed" },
+  { "driver_pkg": "hsx-driver-bme280", "driver_ver": "0.1.0", "runtime_ver": "0.1.0", "brain_id": "C-002", "status": "passed" },
+  { "driver_pkg": "hsx-driver-servo-pwm", "driver_ver": "0.1.0", "runtime_ver": "0.1.0", "brain_id": "C-002", "status": "passed" }
+]

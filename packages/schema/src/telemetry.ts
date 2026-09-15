@@ -7,6 +7,9 @@ export const TelemetryChannel = z.strictObject({
 }).refine((c) => c.min <= c.max, "Channel minimum exceeds maximum");
 export const TelemetryChannels = z.record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), TelemetryChannel)
   .refine((c) => Object.keys(c).length > 0 && Object.keys(c).length <= 64, "Expected 1–64 channels");
+/** Empty only at capability-aware provisioning/read boundaries; wire v1 remains nonempty. */
+export const ProvisionedChannels = z.record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), TelemetryChannel)
+  .refine((c) => Object.keys(c).length <= 64, "Expected at most 64 channels");
 
 /** Wire v1. Times are integer epoch seconds; negative reading times offset envelope ts. */
 export const TelemetryEnvelope = z.strictObject({

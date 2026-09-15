@@ -210,7 +210,10 @@ jobs:
           curl -fsS http://localhost:8080/readyz
           count=$(curl -fsS http://localhost:8080/v1/parts | jq '.parts | length')
           echo "parts: ${count}"
-          [ "$count" = 12 ] || { docker logs gateway; exit 1; }
+          # One row per non-retired part id. The registry grows, so assert a floor and
+          # that the loader actually reached the newest parts, not an exact total.
+          [ "$count" -ge 14 ] || { docker logs gateway; exit 1; }
+          curl -fsS http://localhost:8080/v1/parts | jq -e '[.parts[].id] | index("C-002") != null and index("P-006") != null'
           curl -fsS http://localhost:8080/v1/parts/C-001 | jq -e '.part.id == "C-001"'
           docker run --rm -i --network host -e PGPASSWORD=app-secret postgres:16-alpine \
             psql -h 127.0.0.1 -U albus_app -d albus -v ON_ERROR_STOP=1 < apps/gateway/scripts/telemetry-read-fixture.sql
@@ -321,6 +324,23 @@ jobs:
           tags: db-jobs:ci
           provenance: false
           sbom: false
+      - name: Build observation maintenance image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/observation-maintain/Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: observation-maintain:ci
+          provenance: false
+          sbom: false
+      - name: Verify isolated storage worker packaging
+        run: |
+          for image in cloudlink:ci observation-maintain:ci; do
+            docker run --rm --network none "$image" node -e 'require("node:fs").accessSync(process.env.OBSERVATION_STORAGE_WORKER_PATH)'
+          done
+          docker run --rm --network none cloudlink:ci node --input-type=module -e 'import sharp from "sharp"; const jpeg=await sharp({create:{width:320,height:240,channels:3,background:"green"}}).jpeg().toBuffer(); await sharp(jpeg,{failOn:"warning",limitInputPixels:76800}).timeout({seconds:2}).raw().toBuffer();'
       - name: Migrate and provision isolated fixture
         run: |
           docker run --rm --network host -e DB_HOST=127.0.0.1 -e DB_NAME=albus -e DB_SSL=disable \
@@ -403,3 +423,31 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs ask || true
+
+  firmware-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter gateway...
+      - name: Real accepted-plan compiler and artifact download
+        env:
+          FIRMWARE_REAL_COMPILER: "1"
+        run: pnpm --filter gateway exec vitest run src/firmware.db.test.ts -t 'real isolated worker'
+      - name: Host serializer and installer integrity tests
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Ifirmware/esp32s3/main/include firmware/tests/wire.c firmware/esp32s3/main/hsx_wire.c -o /tmp/firmware-wire
+          /tmp/firmware-wire
+          python3 -m unittest discover -s firmware/tools -p 'test_*.py'
+      - name: Build dedicated worker image
+        run: docker build -f apps/codegen/Dockerfile -t fwbuild:ci .
+      - name: Prove packaged native camera compiles without network
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --memory 4g --cpus 2 --pids-limit 256 --tmpfs /tmp:rw,size=2g \
+            fwbuild:ci sh -c 'cp -a /app/firmware/esp32s3-camera /tmp/camera && cd /tmp/camera && idf.py -B /tmp/camera-build build'

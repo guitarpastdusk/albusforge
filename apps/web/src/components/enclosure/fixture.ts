@@ -1,5 +1,3 @@
-import type { ApiMode } from "@/lib/runtime-config";
-
 /** What a 3D enclosure preview needs. Serializable, so a Server Component can pass it to the client. */
 export interface EnclosurePreviewData {
   /** The viewer model: a GLB with nodes `base`, `lid` and optional `parts` (docs/ASK-TO-ENCLOSURE.md §6). */
@@ -9,13 +7,14 @@ export interface EnclosurePreviewData {
   dimensionsLabel: string;
   /** The accessible description of the model, and the static image's alt text. */
   description: string;
+  /** True when this is a stand-in for the build's own enclosure, which isn't generated yet (docs/DEMO-ASSUMPTIONS.md). */
+  sample?: boolean;
 }
 
 /**
- * Mock mode's preview: the checked-in fixture (scripts/make-enclosure-fixture.mjs).
- * Live mode has none yet: the body endpoint is the M5.5 contract
- * (GET /v1/builds/:id/body, ASK-TO-ENCLOSURE §6) and doesn't exist, so the
- * portal shows a placeholder and never requests it.
+ * The checked-in fixture (scripts/make-enclosure-fixture.mjs). While a build
+ * has no body of its own (GET /v1/builds/:id/body answers 501 or 404), the
+ * portal shows this model labelled as a sample (docs/DEMO-ASSUMPTIONS.md).
  */
 export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
   glbUrl: "/enclosure/fixture.glb",
@@ -25,6 +24,15 @@ export const ENCLOSURE_FIXTURE: EnclosurePreviewData = {
     "A rounded sensor enclosure, 90 × 60 × 35 mm with 1.6 mm walls: a base with a cable hole in the floor, and a lid with five vent slots.",
 };
 
-export function enclosurePreviewFor(apiMode: ApiMode): EnclosurePreviewData | null {
-  return apiMode === "mock" ? ENCLOSURE_FIXTURE : null;
-}
+/** The stand-in while no body exists: the fixture, said to be a sample. */
+export const ENCLOSURE_SAMPLE: EnclosurePreviewData = {
+  ...ENCLOSURE_FIXTURE,
+  sample: true,
+  description: `Sample enclosure. ${ENCLOSURE_FIXTURE.description} The enclosure generated for this build will replace it.`,
+};
+
+/*
+ * Which one a build shows is decided in BuildConversation (useEnclosureBody):
+ * the sample until GET /v1/builds/:id/body answers with the build's own
+ * enclosure (actions/enclosure.ts); 501 and 404 keep the sample.
+ */

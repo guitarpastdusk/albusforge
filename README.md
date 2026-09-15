@@ -13,10 +13,22 @@ the app layer is generated, and an optional cloud tier with dashboards and alert
 
 ## Status
 
-Pre-M0. Architecture defined. The workspace root and the portal ([`apps/web`](apps/web/)) are
-scaffolded against mock data; no backend service exists yet. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and §18 in particular — several forks (firmware
-target, tenant-vs-build root, first-party vs partner cloud) should be settled before M0 goes further.
+**Live in production.** Five Cloud Run services (`web`, `gateway`, `intake`, `ask`, `cloudlink`)
+and four jobs run in both environments from Terraform, with images built by CI and promoted to
+production by digest.
+
+Working end to end today: ask for a device and get a plan solved against the real parts catalogue,
+sign in, workspaces and tenants, telemetry ingest with partitioned storage and rollups, fleet and
+history APIs, and questions answered from your own stored readings.
+
+Merged and tested but not switched on: firmware compilation (the `fwbuild` job is not deployed),
+camera observations (behind a flag), and the multi-turn device chat. No physical board has yet run
+our own firmware — [`hardware/freenove/`](hardware/freenove/) has a real device on ESPHome and the
+gates before it may reach production.
+
+See [`docs/checkin/`](docs/checkin/) for what landed when, and
+[`docs/DEMO-ASSUMPTIONS.md`](docs/DEMO-ASSUMPTIONS.md) before quoting any registry number as fact —
+it records every guessed, estimated and mocked value with what would replace it.
 
 ## Running the portal
 
@@ -27,14 +39,19 @@ pnpm install
 pnpm dev          # http://localhost:3000 — mock API data, no gateway needed
 ```
 
+For the full stack, `docker compose up -d` brings up PostgreSQL, Redis, MinIO and EMQX; migrate and
+load the registry before starting the services.
+
 `pnpm typecheck`, `pnpm lint`, `pnpm test` and `pnpm build` run across the workspace through turbo.
 
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full system architecture
 - [`docs/CLOUD-PLATFORM.md`](docs/CLOUD-PLATFORM.md) — ingestion, storage, the dashboard, and the intelligence layer
+- [`docs/`](docs/) — one document per surface: telemetry, firmware, provisioning, observations, portal
 - [`docs/adr/`](docs/adr/) — architecture decision records
-- [`infra/`](infra/) — Terraform for GCP (M0 scope today)
+- [`docs/checkin/`](docs/checkin/) — hackathon submissions, each fixed to a git snapshot
+- [`infra/`](infra/) — Terraform for GCP
 
 ## Convention
 

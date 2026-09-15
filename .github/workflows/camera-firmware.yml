@@ -1,0 +1,41 @@
+name: native-camera-firmware
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-camera-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  camera-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --filter @albusforge/codegen...
+      - name: Resolve checksum-locked Espressif components
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --memory 4g --cpus 2 --pids-limit 256 --tmpfs /tmp:rw,size=2g \
+            -v "$PWD/firmware/esp32s3-camera:/project" -w /project \
+            espressif/idf@sha256:8ccd4d2ce413889c6c2bba57e986c670302094efb91c913c6091152e317a7805 \
+            idf.py -B /tmp/prepare reconfigure
+          git diff --exit-code -- firmware/esp32s3-camera/dependencies.lock
+      - name: Native policy, spool, portal and private installer tests
+        run: python3 -m unittest discover -s firmware/tools -p 'test_*.py'
+      - name: Compile camera offline and verify reviewed binary layout
+        env:
+          FIRMWARE_CAMERA_COMPILER: "1"
+        run: pnpm --filter @albusforge/codegen exec vitest run src/camera-build.test.ts

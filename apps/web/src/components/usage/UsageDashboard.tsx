@@ -9,7 +9,7 @@ export function exactDollars(value: string) {
 }
 const STAGE_NAMES: Record<UsageSummary["model"]["stages"][number]["stage"], string> = {
   intake: "Build conversation", codegen: "Firmware generation", bodygen: "Enclosure generation",
-  narration: "Narration", ask: "Device questions", explain: "Plan explanations", other: "Other model work",
+  narration: "Narration", ask: "Device questions", device_chat: "Device chat", explain: "Plan explanations", other: "Other model work",
 };
 function ModelCells({ row }: { row: ModelConsumption }) {
   return <>
@@ -27,11 +27,15 @@ export function UsageDashboard({ usage, workspace }: { usage: UsageSummary; work
     { label: "Recorded model cost", value: exactDollars(usage.model.total.cost_usd), note: "USD model-cost estimate, not an invoice." },
     { label: "Sensor readings accepted", value: exactCount(usage.telemetry.readings_in), note: "Retries of the same packet count once." },
     { label: "Uploaded payload", value: exactCount(usage.telemetry.payload_bytes), suffix: "bytes", note: "Accepted JSON payload, not database storage." },
+    ...(usage.images ? [
+      { label: "Images accepted", value: exactCount(usage.images.accepted_count), note: "Retries of the same image count once." },
+      { label: "Accepted image upload", value: exactCount(usage.images.accepted_bytes), suffix: "bytes", note: "Accepted JPEG bytes, not retained or billed storage." },
+    ] : []),
   ];
   return <PageContainer>
     <PageTitle kicker={`${date.format(new Date(usage.period.start))} – ${date.format(lastDay)} · UTC`}
       title="Usage" description={`Recorded consumption for ${workspace}. See what your builds and devices have used this month.`} />
-    <dl className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <dl className={`mt-8 grid gap-4 sm:grid-cols-2 ${usage.images ? "xl:grid-cols-3" : "xl:grid-cols-4"}`}>
       {cards.map((card) => <div key={card.label} className="min-w-0 rounded-[22px] border border-hairline bg-white p-6">
         <dt className="text-[14px] text-muted">{card.label}</dt>
         <dd className="mt-3 break-words font-mono text-[28px] leading-tight tracking-tight text-ink tabular-nums">{card.value}{card.suffix ? <span className="ml-2 whitespace-nowrap text-[14px] text-muted">{card.suffix}</span> : null}</dd>
@@ -59,7 +63,7 @@ export function UsageDashboard({ usage, workspace }: { usage: UsageSummary; work
     <aside aria-label="How usage is counted" className="mt-8 max-w-[820px] rounded-[22px] bg-porcelain p-6 text-[14px] leading-relaxed text-muted">
       <h2 className="font-semibold text-ink">About these numbers</h2>
       <p className="mt-2">This is recorded consumption, not your bill. Model costs use the prices recorded when each call completed. Plan allowances, subscription charges and physical storage measurements are not included.</p>
-      <p className="mt-2">Sensor totals cover uploads accepted this month for devices still in this workspace. Sample backfills count when uploaded; deleting a device also removes its sensor-usage records. Saved model records remain attributable after a build is deleted.</p>
+      <p className="mt-2">Sensor and image totals cover uploads accepted this month for devices still in this workspace. Backfills count when uploaded. Image retention and media deletion do not subtract accepted uploads; deleting a device removes its sensor and image usage records. Saved model records remain attributable after a build is deleted.</p>
       <p className="mt-2">Snapshot: <time dateTime={usage.as_of}>{new Date(usage.as_of).toLocaleString("en-US", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" })} UTC</time>. Reload this page for updated figures.</p>
     </aside>
   </PageContainer>;

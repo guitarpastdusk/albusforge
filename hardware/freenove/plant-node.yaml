@@ -1,0 +1,117 @@
+esphome:
+  name: plant-a
+  friendly_name: Plant A
+  includes:
+    - sd_check.h
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          auto *sensor = esp_camera_sensor_get();
+          if (sensor != nullptr) {
+            ESP_LOGI("bringup", "Camera sensor PID: 0x%04x", sensor->id.PID);
+          }
+          id(sd_status).publish_state(freenove_check_sd());
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    advanced:
+      include_builtin_idf_components: [fatfs, sdmmc, esp_driver_sdmmc]
+      disable_fatfs: false
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  hardware_uart: UART0
+  level: DEBUG
+
+wifi:
+  ap:
+    ssid: Plant-A Setup
+    password: !secret setup_password
+  reboot_timeout: 0s
+
+captive_portal:
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+web_server:
+  port: 80
+  version: 3
+  local: true
+
+i2c:
+  - id: camera_i2c
+    sda: GPIO4
+    scl: GPIO5
+    scan: true
+  # The camera SCCB bus is electrically separate from the STEMMA QT sensor
+  # chain. Its scan reports the physical modules before a driver is trusted.
+  - id: sensor_i2c
+    sda: GPIO47
+    scl: GPIO21
+    scan: true
+
+esp32_camera:
+  name: Camera
+  id: plant_camera
+  external_clock:
+    pin: GPIO15
+    frequency: 20MHz
+  i2c_id: camera_i2c
+  data_pins: [GPIO11, GPIO9, GPIO8, GPIO10, GPIO12, GPIO18, GPIO17, GPIO16]
+  vsync_pin: GPIO6
+  href_pin: GPIO7
+  pixel_clock_pin: GPIO13
+  frame_buffer_location: PSRAM
+  resolution: 320x240
+  pixel_format: RGB565
+  jpeg_quality: 12
+  # GC0308 maps zero gain to hardware GLOBAL_GAIN=0, producing black frames.
+  agc_value: 10
+  max_framerate: 5 fps
+  idle_framerate: 0.1 fps
+
+esp32_camera_web_server:
+  - port: 8080
+    mode: stream
+  - port: 8081
+    mode: snapshot
+
+sensor:
+  - platform: bh1750
+    name: Ambient Light
+    i2c_id: sensor_i2c
+    address: 0x23
+    update_interval: 30s
+  - platform: bme280_i2c
+    i2c_id: sensor_i2c
+    address: 0x77
+    temperature:
+      name: Air Temperature
+    pressure:
+      name: Air Pressure
+    humidity:
+      name: Air Humidity
+    update_interval: 30s
+  - platform: uptime
+    name: Uptime
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 30s
+
+text_sensor:
+  - platform: template
+    id: sd_status
+    name: SD Card Status
+    update_interval: never
+  - platform: wifi_info
+    ip_address:
+      name: IP Address

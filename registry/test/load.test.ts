@@ -20,8 +20,10 @@ const committed = readValidatedParts(REGISTRY_ROOT);
 const byId = (id: string) => structuredClone(committed.find((p) => p.id === id)!);
 
 describe("readValidatedParts", () => {
-  it("reads the twelve committed parts", () => {
-    expect(committed).toHaveLength(12);
+  it("reads every committed part version", () => {
+    // Twelve base parts plus C-002 and P-006, plus the four promoted 1.1.0
+    // versions that sit beside their loaded 1.0.0 drafts.
+    expect(committed).toHaveLength(18);
   });
 
   it("refuses a registry with any problem", () => {
@@ -86,7 +88,7 @@ describe("loadParts", () => {
   it("inserts every committed part version as the app role", async () => {
     const result = await loadParts(handle.db, committed);
 
-    expect(result.inserted).toHaveLength(12);
+    expect(result.inserted).toHaveLength(18);
     expect(result.unchanged).toEqual([]);
     const rows = await stored();
     expect(rows.map((r) => `${r.id}@${r.version}`).sort()).toEqual(result.inserted);
@@ -104,7 +106,7 @@ describe("loadParts", () => {
     const result = await loadParts(handle.db, committed);
 
     expect(result.inserted).toEqual([]);
-    expect(result.unchanged).toHaveLength(12);
+    expect(result.unchanged).toHaveLength(18);
     const after = await stored();
     expect(after.map((r) => r.loadedAt.toISOString()).sort()).toEqual(before.map((r) => r.loadedAt.toISOString()).sort());
   });
@@ -136,14 +138,17 @@ describe("loadParts", () => {
 
   it("adds a new version of an existing part alongside the old one", async () => {
     await loadParts(handle.db, committed);
+    // 1.1.0 is a committed version now, so this test revises past it.
     const next = byId("P-001");
-    next.version = "1.1.0";
+    next.version = "1.2.0";
     next.name = "BME280, revised";
 
     expect(await loadParts(handle.db, [byId("P-001"), next])).toEqual({
-      inserted: ["P-001@1.1.0"],
+      inserted: ["P-001@1.2.0"],
       unchanged: ["P-001@1.0.0"],
     });
-    expect((await stored()).filter((r) => r.id === "P-001").map((r) => r.version).sort()).toEqual(["1.0.0", "1.1.0"]);
+    expect((await stored()).filter((r) => r.id === "P-001").map((r) => r.version).sort()).toEqual([
+      "1.0.0", "1.1.0", "1.2.0",
+    ]);
   });
 });

@@ -1,0 +1,4 @@
+esp32s3/build/
+esp32s3/sdkconfig
+esp32s3/sdkconfig.old
+__pycache__/

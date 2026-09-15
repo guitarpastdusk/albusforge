@@ -1,5 +1,6 @@
+import { createTestDb as createDb, closeTestPool } from "./test-pool-shutdown";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { createDb, type DbConfig } from "@albusforge/db";
+import { type DbConfig } from "@albusforge/db";
 import { runMigrations } from "@albusforge/db/migrate";
 import { setTimeout as delay } from "node:timers/promises";
 import { processTelemetryRollups, maintainTelemetryStorage } from "@albusforge/db/telemetry-storage";
@@ -19,7 +20,7 @@ const logs: string[] = [];
 const hour = new Date(Math.floor(Date.now() / 3600000) * 3600000 - 3600000);
 const time = (offset = 0) => new Date(hour.getTime() + offset * 1000).toISOString();
 beforeAll(async () => {
-  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  container = await new PostgreSqlContainer("postgres:16-alpine").withTmpFs({ "/var/lib/postgresql/data": "rw,size=256m" }).start();
   const admin = new pg.Client({ connectionString: container.getConnectionUri() });
   await admin.connect();
   await admin.query("CREATE ROLE albus_migrate LOGIN CREATEROLE PASSWORD 'migrate-secret'");
@@ -32,7 +33,7 @@ beforeAll(async () => {
   app = buildApp({ parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool,
     log: (_level, message, context) => { logs.push(JSON.stringify({ message, context })); } });
 });
-afterAll(async () => { await app?.close(); await handle?.pool.end(); await owner?.end(); await container?.stop(); });
+afterAll(async () => { await app?.close(); await closeTestPool(handle?.pool); await closeTestPool(owner); await container?.stop(); });
 
 async function fixture() {
   const tenant = randomUUID(), user = randomUUID(), device = randomUUID(), session = randomUUID();
@@ -595,4 +596,15 @@ it("refuses a metadata edit whose ancestor session is revoked", async () => {
     [parent, f.session],
   );
   expect((await rename(f, "must not save")).statusCode).toBe(401);
+});
+
+it("binds shared authorized writes to the tenant captured by the rendering page", async () => {
+  const { withAuthorizedWrite } = await import("./authorized-write");
+  const f = await fixture();
+  await owner.query("UPDATE users.tenant_members SET role='admin' WHERE tenant_id=$1 AND user_id=$2", [f.tenant, f.user]);
+  let calls = 0;
+  await expect(withAuthorizedWrite(handle.pool, f.cookie, "localhost", randomUUID(), async () => { calls++; })).rejects.toMatchObject({ statusCode: 409 });
+  expect(calls).toBe(0);
+  const tenant = await withAuthorizedWrite(handle.pool, f.cookie, "localhost", f.tenant, async (_client, identity) => identity.tenantId);
+  expect(tenant).toBe(f.tenant);
 });

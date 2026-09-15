@@ -68,7 +68,8 @@ export const UNSENT_MESSAGE = "That didn't get through, so nothing was saved. Se
 
 export const OVERDUE_MESSAGE = "The reply hasn't come back. Nothing you sent is lost — check again, or come back to this build in a minute.";
 
-export function initConversation(initial?: Partial<BuildTranscript>): ConversationState {
+/** `draft` seeds the input before anything is sent: the home page's `?ask=` (lib/clone-ask.ts). */
+export function initConversation(initial?: Partial<BuildTranscript>, draft = ""): ConversationState {
   return {
     buildId: initial?.buildId ?? null,
     messages: initial?.messages ?? [],
@@ -77,7 +78,7 @@ export function initConversation(initial?: Partial<BuildTranscript>): Conversati
     specVersion: initial?.specVersion ?? null,
     spec: initial?.spec ?? null,
     candidateParts: initial?.candidateParts ?? [],
-    draft: "",
+    draft,
     error: null,
     refreshError: null,
     detailsStale: false,

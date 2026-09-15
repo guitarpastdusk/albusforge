@@ -35,7 +35,7 @@ export const ModelConsumption = z.strictObject({
   cache_creation_tokens: ExactCount,
   cost_usd: z.string().regex(/^\d+\.\d{6}$/),
 });
-export const UsageStage = z.enum(["intake", "codegen", "bodygen", "narration", "ask", "explain", "other"]);
+export const UsageStage = z.enum(["intake", "codegen", "bodygen", "narration", "ask", "device_chat", "explain", "other"]);
 export const UsageSummary = z.object({
   period: z.strictObject({ start: Timestamp, end: Timestamp }),
   as_of: Timestamp,
@@ -44,6 +44,8 @@ export const UsageSummary = z.object({
     stages: z.array(ModelConsumption.extend({ stage: UsageStage })).max(7),
   }),
   telemetry: z.strictObject({ readings_in: ExactCount, payload_bytes: ExactCount }),
+  // Additive rollout: absence means the serving gateway predates image usage.
+  images: z.strictObject({ accepted_count: ExactCount, accepted_bytes: ExactCount }).optional(),
 });
 export type UsageSummary = z.infer<typeof UsageSummary>;
 export type ModelConsumption = z.infer<typeof ModelConsumption>;

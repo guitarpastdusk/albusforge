@@ -10,6 +10,8 @@ import {
   pgSchema,
   primaryKey,
   text,
+  timestamp,
+  uniqueIndex,
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -47,6 +49,7 @@ export const builds = buildsSchema.table(
   },
   (t) => [
     // Every build has one owner or the other (ADR 0009, PORTAL.md §5).
+    unique("builds_id_tenant_unique").on(t.id, t.tenantId),
     check("builds_owner_check", sql`"tenant_id" IS NOT NULL OR "anon_owner_hash" IS NOT NULL`),
     check("builds_status_check", oneOf("status", BUILD_STATUSES)),
     index("builds_tenant_id_idx").on(t.tenantId),
@@ -109,10 +112,16 @@ export const plans = buildsSchema.table(
     powerBudget: jsonb("power_budget").notNull(),
     bom: jsonb("bom").notNull(),
     solverLog: jsonb("solver_log"),
+    // Versioned immutable solver/evidence envelope; null identifies legacy rows.
+    metadata: jsonb("metadata"),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedBy: uuid("accepted_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => [
     primaryKey({ columns: [t.buildId, t.version] }),
+    uniqueIndex("plans_one_accepted_spec_idx").on(t.buildId, t.specVersion).where(sql`${t.acceptedAt} IS NOT NULL`),
+    check("plans_acceptance_metadata_check", sql`${t.acceptedAt} IS NULL OR ${t.metadata} IS NOT NULL`),
     foreignKey({
       name: "plans_spec_fk",
       columns: [t.buildId, t.specVersion],
@@ -138,6 +147,7 @@ export const codeBundles = buildsSchema.table(
   },
   (t) => [
     primaryKey({ columns: [t.buildId, t.version] }),
+    unique("code_bundles_build_plan_version_unique").on(t.buildId, t.planVersion, t.version),
     foreignKey({
       name: "code_bundles_plan_fk",
       columns: [t.buildId, t.planVersion],

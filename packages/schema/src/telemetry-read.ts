@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { TelemetryChannels, TelemetryEnvelope } from "./telemetry";
+import { CapabilityStatus } from "./observations";
+import { ProvisionedChannels, TelemetryEnvelope } from "./telemetry";
 
 const Time = z.iso.datetime({ offset: true });
 const Count = z.string().regex(/^\d+$/);
@@ -67,7 +68,8 @@ export const TelemetryFleetPage = z.strictObject({
 });
 export const TelemetryDeviceDetail = z.strictObject({
   device: TelemetryDeviceState,
-  channels: TelemetryChannels,
+  channels: ProvisionedChannels,
+  capabilities: z.array(CapabilityStatus).max(64).optional(),
   permissions: z.strictObject({ edit_metadata: z.boolean() }).optional(),
 });
 export const TelemetryLatest = z.strictObject({

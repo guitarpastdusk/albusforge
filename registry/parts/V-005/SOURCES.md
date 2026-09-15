@@ -11,3 +11,15 @@ Currents are chip typicals; the regulator's share isn't published.
 `logic_v` is 3–5 V. From the pinouts page, SCL and SDA are each "level shifted so you can use 3-5V logic".
 
 Not verified: mounting hole size and positions, so the mount is `unspecified`.
+
+## Version 1.1.0 (hackathon demo, 2026-09-14)
+
+`versions/1.1.0.json` promotes this part to `active`. `part.json` (1.0.0,
+draft) is unchanged on purpose: it is already loaded into `registry.parts`,
+where a version is immutable.
+
+The only field 1.1.0 changes besides `status` is the mount:
+
+| Field | 1.1.0 value | Basis | What replaces it |
+| --- | --- | --- | --- |
+| `mount` | `standoffs`, `hole_d_mm` 2.5, four holes at (2.5, 2.5), (2.5, 15.2), (22.8, 2.5), (22.8, 15.2) mm | **Estimate.** Positions are inferred by insetting from the `bounding_mm` 25.3 × 17.7 footprint; the 2.5 mm hole diameter is Adafruit's usual for this breakout size. Nothing here is measured | Caliper measurement of the user's two BH1750 boards, or Adafruit's EagleCAD files for #4681 |

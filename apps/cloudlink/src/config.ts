@@ -2,6 +2,10 @@ import { dbConfigFromEnv } from "@albusforge/db";
 import { z } from "zod";
 
 const Env = z.object({
+  OBSERVATION_MAX_INFLIGHT: z.coerce.number().int().min(1).max(4).default(4),
+  OBSERVATION_MAX_DAILY_COUNT: z.coerce.number().int().min(1).max(10000).default(1200),
+  OBSERVATION_MAX_DAILY_BYTES: z.coerce.number().int().min(1).max(1073741824).default(134217728),
+  OBSERVATION_MAX_ATTEMPTS_PER_MINUTE: z.coerce.number().int().min(1).max(60).default(6),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   K_SERVICE: z.string().optional(),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(10).default(5),
@@ -19,6 +23,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env) {
   if (e.K_SERVICE && db.ssl !== "require") throw new Error("Cloud Run requires DB_SSL=require");
   return {
     port: e.PORT, db,
+    observations: { maxInflight: e.OBSERVATION_MAX_INFLIGHT, maxDailyCount: e.OBSERVATION_MAX_DAILY_COUNT,
+      maxDailyBytes: e.OBSERVATION_MAX_DAILY_BYTES, maxAttemptsPerMinute: e.OBSERVATION_MAX_ATTEMPTS_PER_MINUTE },
     maxInflight: e.INGEST_MAX_INFLIGHT,
     poolOptions: { max: e.DB_POOL_MAX, connectionTimeoutMillis: e.DB_CONNECT_TIMEOUT_MS,
       statement_timeout: e.DB_QUERY_TIMEOUT_MS, query_timeout: e.DB_QUERY_TIMEOUT_MS + 1000,

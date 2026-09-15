@@ -8,6 +8,8 @@ export * from "./device";
 export * from "./listings";
 export * from "./usage";
 export * from "./routes";
+export * from "./electrical";
+export * from "./units";
 export * from "./part";
 export * from "./parts";
 export * from "./connector";
@@ -16,5 +18,11 @@ export * from "./telemetry";
 export * from "./telemetry-read";
 
 export * from "./sensor-ask";
+export * from "./device-converse";
 
+export * from "./build-plan";
+export * from "./device-provisioning";
+export * from "./firmware";
 export * from "./device-setup";
+
+export * from "./observations";

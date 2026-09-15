@@ -8,7 +8,9 @@ import {
 } from "@albusforge/schema";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { DeviceChat } from "@/components/devices/DeviceChat";
+import { ObservationGallery } from "@/components/telemetry/ObservationGallery";
+import { AwaitingReadings } from "@/components/telemetry/AwaitingReadings";
+import { DeviceConsole } from "@/components/devices/DeviceConsole";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
@@ -110,20 +112,23 @@ export default async function DevicePage({
             : device.status === "online"
               ? "Online"
               : "Offline"}{" "}
-        · Last packet: {device.last_seen_at ?? "never"}
+        · Last upload: {device.last_seen_at ?? "never"}
       </p>
       <p className="text-muted mt-2">
         Snapshot on page load. Refresh to see new uploads; sample times below
         may differ from packet arrival.
       </p>
       <p className="mt-2 text-sm text-muted">
-        Expected upload interval: {device.next_s} seconds. Offline means no
-        recent packet within {Math.max(60, device.next_s * 3)} seconds.{" "}
+        {detail.capabilities?.length ? <>
+          Each sensor uses its configured interval: {detail.capabilities.map(cap => `${cap.id} every ${cap.interval_s} seconds`).join("; ")}.{" "}
+          Overall status summarizes required sources; check each sensor or camera for its reception status.{" "}
+        </> : <>Expected upload interval: {device.next_s} seconds. Offline means no
+          recent packet within {Math.max(60, device.next_s * 3)} seconds.{" "}</>}
         {device.revoked_at
           ? "The credential is revoked; new uploads are blocked, but stored readings remain available."
           : "Status is a current connectivity estimate, not a historical alert."}
       </p>
-      {!device.health && (
+      {!device.health && channels.length > 0 && (
         <p className="mt-2 text-sm text-muted">
           No device health packet has been recorded.
         </p>
@@ -137,8 +142,15 @@ export default async function DevicePage({
             ` · Signal ${device.health.rssi} dBm`}
         </p>
       )}
+      {/* Data on the left, the conversation beside it: the person can read a
+          plot and ask about what they are looking at without losing either. */}
+      <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start">
+        <div className="min-w-0">
+      {detail.capabilities && <ObservationGallery deviceId={deviceId} capabilities={detail.capabilities} search={search} />}
+      {channels.length === 0 && <AwaitingReadings deviceId={device.id} revoked={Boolean(device.revoked_at)} />}
+      {channels.length > 0 && <>
       <h2 className="text-xl font-semibold mt-8">Latest readings</h2>
-      <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+      <ul className="grid sm:grid-cols-2 gap-4 mt-4">
         {channels.map((channel) => {
           const sample = latest.readings.find((r) => r.channel === channel);
           return (
@@ -249,18 +261,15 @@ export default async function DevicePage({
           </>
         )}
       </section>
-      <section className="mt-10 max-w-2xl" aria-label="Sensor questions">
-        <DeviceChat
+      </>}
+        </div>
+        <DeviceConsole
           key={`${me.tenant.id}:${deviceId}`}
           deviceId={deviceId}
-          greeting="Choose a channel and time window, then ask about its stored readings."
-          channels={channels.map((key) => ({
-            key,
-            label: key,
-            unit: detail.channels[key]!.unit,
-          }))}
+          deviceName={device.display_name ?? "this device"}
+          channelCount={channels.length}
         />
-      </section>
+      </div>
     </PageContainer>
   );
 }

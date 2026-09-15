@@ -45,3 +45,15 @@ output "sensor_services" {
 output "telemetry_jobs" {
   value = [for job in module.telemetry_jobs : job.name]
 }
+
+output "observation_resources" {
+  value = {
+    bucket                 = google_storage_bucket.observations.name
+    maintenance_job        = module.observation_maintain.name
+    uploads_enabled        = var.observation_uploads_enabled
+    reads_enabled          = var.observation_reads_enabled
+    schedule_enabled       = var.observation_schedule_enabled
+    logical_retention_days = 30
+    soft_delete_days       = 7
+  }
+}

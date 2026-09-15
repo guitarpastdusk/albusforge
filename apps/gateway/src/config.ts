@@ -1,5 +1,7 @@
 import { type DbConfig, dbConfigFromEnv } from "@albusforge/db";
 import { z } from "zod";
+import { deviceProvisioningFromEnv } from "./device-provisioning-config";
+import type { DeviceProvisioningOptions } from "./device-provisioning-store";
 
 export interface DbTimeouts {
   /** Connecting a client, or waiting for a free one. */
@@ -41,6 +43,7 @@ export interface AuthConfig {
 }
 
 export interface GatewayConfig {
+  deviceProvisioning: DeviceProvisioningOptions;
   port: number;
   sensorAsk: IntakeConfig;
   db: DbConfig;
@@ -121,6 +124,7 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
   }
   if (cleaned.K_SERVICE && e.ASK_AUTH === "none") throw new Error("ASK_AUTH=none is local only");
   return {
+    deviceProvisioning: deviceProvisioningFromEnv(env),
     port: e.PORT,
     sensorAsk: { url: e.ASK_URL ?? null, auth: e.ASK_AUTH },
     db,

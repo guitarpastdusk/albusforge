@@ -14,7 +14,7 @@ export function registerUsageRoutes(app: FastifyInstance, pool: Pool) {
         date_trunc('month',CURRENT_TIMESTAMP,'UTC') AS start,
         (date_trunc('month',CURRENT_TIMESTAMP AT TIME ZONE 'UTC')+interval '1 month') AT TIME ZONE 'UTC' AS end`)).rows[0]!;
       const rows = (await client.query<ModelConsumption & { stage: string | null }>(`WITH attributed AS (
-        SELECT CASE WHEN stage IN ('intake','codegen','bodygen','narration','ask','explain') THEN stage ELSE 'other' END AS category,
+        SELECT CASE WHEN stage IN ('intake','codegen','bodygen','narration','ask','device_chat','explain') THEN stage ELSE 'other' END AS category,
           input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,cost_usd
         FROM builds.llm_calls WHERE tenant_id=$1 AND created_at >= $2 AND created_at < $3
       ) SELECT category AS stage,count(*)::text AS calls,
@@ -29,9 +29,15 @@ export function registerUsageRoutes(app: FastifyInstance, pool: Pool) {
         COALESCE(sum(u.readings_in),0)::text AS readings_in,COALESCE(sum(u.payload_bytes),0)::text AS payload_bytes
         FROM telemetry.usage u JOIN telemetry.devices d ON d.id=u.device_id
         WHERE d.tenant_id=$1 AND u.period=$2`, [tenant, clock.start.toISOString().slice(0, 7)])).rows[0]!;
+      const images = (await client.query<{ accepted_count: string; accepted_bytes: string }>(`SELECT
+        COALESCE(sum(u.accepted_count),0)::text AS accepted_count,
+        COALESCE(sum(u.accepted_bytes),0)::text AS accepted_bytes
+        FROM telemetry.observation_usage u JOIN telemetry.devices d ON d.id=u.device_id
+        WHERE d.tenant_id=$1 AND u.day >= $2 AND u.day < $3`,
+      [tenant, clock.start.toISOString().slice(0, 10), clock.end.toISOString().slice(0, 10)])).rows[0]!;
       return UsageSummary.parse({
         period: { start: clock.start.toISOString(), end: clock.end.toISOString() }, as_of: clock.now.toISOString(),
-        model: { total, stages: rows.filter((r) => r.stage !== null) }, telemetry,
+        model: { total, stages: rows.filter((r) => r.stage !== null) }, telemetry, images,
       });
     }));
   });

@@ -47,9 +47,32 @@ describe("provisionedWiring", () => {
     expect(provisionedWiring([])).toBeNull();
   });
 
-  it("matches a profile that covers the device's channels, even a subset of them", () => {
-    expect(profileForChannels(["illuminance"])?.id).toBe("freenove-light-climate");
-    // A channel the profile doesn't have means it isn't this build.
+  it("takes the profile whose channels match exactly, not merely one that covers them", () => {
+    // illuminance alone is covered by freenove-light AND freenove-light-climate.
+    // Taking the first would draw a BME280 that is not on the bench.
+    expect(profileForChannels(["illuminance"])?.id).toBe("freenove-light");
+    expect(profileForChannels(["soil_moisture"])?.id).toBe("freenove-soil");
+    expect(profileForChannels(CHANNELS.concat("pressure"))?.id).toBe("freenove-light-climate");
+    // A channel no profile has means it is not one of these builds.
     expect(profileForChannels([...CHANNELS, "soil_moisture"])).toBeNull();
+  });
+
+  it("draws nothing rather than guess when more than one profile could be the build", () => {
+    // A subset of the climate profile's channels, covered by it alone here, is
+    // fine; the dangerous case is a subset covered by two, which must refuse.
+    const ambiguous = profileForChannels(["illuminance"]);
+    expect(ambiguous?.part_versions.map((part) => part.id)).not.toContain("P-001");
+    // Partial reporting during bring-up: temperature+humidity is covered only by
+    // the climate profile, so it still resolves.
+    expect(profileForChannels(["temperature", "humidity"])?.id).toBe("freenove-light-climate");
+  });
+
+  it("refuses a brain whose rail pin names are not recorded", () => {
+    // Rail and ground labels are read off a board, not carried by the assembly
+    // schema, so an unknown brain must draw nothing rather than assume "3V3".
+    const wiring = provisionedWiring(CHANNELS)!;
+    expect(wiring.brain.id).toBe("C-002");
+    const railLeads = wiring.nodes.flatMap((node) => node.units[0]!.leads).filter((lead) => lead.pin.role === "power");
+    for (const lead of railLeads) expect(["3V3", "chain"]).toContain(lead.source.kind === "chain" ? "chain" : lead.source.label);
   });
 });

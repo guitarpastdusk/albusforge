@@ -50,21 +50,46 @@ interface ProvisioningProfile {
 
 const PROVISIONING = provisioningJson as unknown as ProvisioningProfile[];
 
-/** The profile whose channels cover the ones this device reports, if any. */
+/**
+ * The one profile this device was built against, or null when that cannot be
+ * told apart.
+ *
+ * Covering is not enough to identify a build. A device reporting only
+ * `illuminance` is covered by both `freenove-light` and
+ * `freenove-light-climate`; taking the first would draw a BME280 that is not on
+ * the bench. So an exact channel set wins, and a merely-covering match is used
+ * only when exactly one profile covers. Anything ambiguous draws nothing: a
+ * "demo diagram" label excuses an approximation, never an extra physical part.
+ */
 export function profileForChannels(channels: readonly string[]): ProvisioningProfile | null {
   if (channels.length === 0) return null;
   const wanted = new Set(channels);
-  return (
-    PROVISIONING.find((profile) => {
-      const keys = new Set(profile.channels.map((channel) => channel.key));
-      return [...wanted].every((key) => keys.has(key));
-    }) ?? null
-  );
+  const keysOf = (profile: ProvisioningProfile) => new Set(profile.channels.map((channel) => channel.key));
+  const exact = PROVISIONING.filter((profile) => {
+    const keys = keysOf(profile);
+    return keys.size === wanted.size && [...wanted].every((key) => keys.has(key));
+  });
+  if (exact.length === 1) return exact[0]!;
+  if (exact.length > 1) return null;
+  const covering = PROVISIONING.filter((profile) => {
+    const keys = keysOf(profile);
+    return [...wanted].every((key) => keys.has(key));
+  });
+  return covering.length === 1 ? covering[0]! : null;
 }
 
-/** "3V3" and "GND" are silkscreen on every ESP32 board here; the signal pins are not. */
-const RAIL_PIN = "3V3";
-const GROUND_PIN = "GND";
+/**
+ * Rail and ground pin names, per brain.
+ *
+ * The AssemblyProfile schema carries signal `resources` but no rail pin names,
+ * so these are not derived — they are read off the board and recorded here. Not
+ * a registry guarantee and not "every ESP32 board": a brain absent from this map
+ * draws nothing, rather than assuming labels the way the GPIO8/9 default did.
+ */
+const RAILS: Record<string, { rail: string; ground: string }> = {
+  // Freenove ESP32-S3-WROOM CAM (N16R8): 3V3 and GND on the header silkscreen.
+  "C-002": { rail: "3V3", ground: "GND" },
+};
 
 /**
  * The wiring for a provisioned device, drawn from its assembly profile's real
@@ -101,50 +126,57 @@ export function provisionedWiring(channels: readonly string[]): Wiring | null {
     assembly.ports.find((port) => port.interface === part.electrical.interface && port.connector === part.electrical.connector) ??
     assembly.ports.find((port) => port.interface === part.electrical.interface);
 
+  const rails = RAILS[brain.id];
+  if (!rails) return null;
+
+  // Everything the diagram needs, resolved before anything is drawn. A
+  // peripheral that cannot be represented must stop the whole diagram: drawing
+  // the others would quietly omit a part that is physically on the bench.
+  const resolved = peripherals.map((part) => ({
+    part,
+    connector: connectorOf(part),
+    port: portFor(part),
+    usable: usableWindow(rail, part.electrical.voltage_range),
+  }));
+  if (resolved.some((entry) => !entry.connector || !entry.port || !entry.usable)) return null;
+
   let lastOnBus: { label: string; accepts: boolean } | null = null;
-  const nodes: WiringNode[] = peripherals.flatMap((part): WiringNode[] => {
-    const connector = connectorOf(part);
-    const port = portFor(part);
-    if (!connector || !port) return [];
-    const usable = usableWindow(rail, part.electrical.voltage_range);
-    if (!usable) return [];
+  const nodes: WiringNode[] = resolved.map(({ part, connector, port, usable }): WiringNode => {
     const onBus = part.electrical.interface === "i2c";
     const upstream = onBus && lastOnBus?.accepts ? lastOnBus.label : null;
     if (onBus) lastOnBus = { label: part.id, accepts: acceptsChain(part) };
     const header = (label: string) => ({ kind: "header" as const, label });
-    const leads: WiringLead[] = connector.pins.map((pin): WiringLead => {
+    const leads: WiringLead[] = connector!.pins.map((pin): WiringLead => {
       if (upstream !== null) {
         return {
           pin,
           source: { kind: "chain", label: upstream },
-          window: pin.role === "power" ? usable : null,
+          window: pin.role === "power" ? usable! : null,
           signal: pin.role === "sda" || pin.role === "scl" ? `I²C ${part.electrical.i2c_address}` : null,
         };
       }
       switch (pin.role) {
         case "power":
-          return { pin, source: header(RAIL_PIN), window: usable, signal: null };
+          return { pin, source: header(rails.rail), window: usable!, signal: null };
         case "ground":
-          return { pin, source: header(GROUND_PIN), window: null, signal: null };
+          return { pin, source: header(rails.ground), window: null, signal: null };
         case "sda":
-          return { pin, source: header(port.resources[0] ?? "SDA"), window: null, signal: `I²C ${part.electrical.i2c_address}` };
+          return { pin, source: header(port!.resources[0] ?? "SDA"), window: null, signal: `I²C ${part.electrical.i2c_address}` };
         case "scl":
-          return { pin, source: header(port.resources[1] ?? port.resources[0] ?? "SCL"), window: null, signal: `I²C ${part.electrical.i2c_address}` };
+          return { pin, source: header(port!.resources[1] ?? port!.resources[0] ?? "SCL"), window: null, signal: `I²C ${part.electrical.i2c_address}` };
         case "signal":
-          return { pin, source: header(port.resources[0] ?? "IO"), window: null, signal: part.electrical.interface.toUpperCase() };
+          return { pin, source: header(port!.resources[0] ?? "IO"), window: null, signal: part.electrical.interface.toUpperCase() };
       }
     });
-    return [
-      {
-        part,
-        connector,
-        units: [{ label: part.id, leads }],
-        rail: { label: `${brain.name} ${RAIL_PIN} rail`, window: rail },
-        usable,
-        chainedTo: upstream,
-        notes: [],
-      },
-    ];
+    return {
+      part,
+      connector: connector!,
+      units: [{ label: part.id, leads }],
+      rail: { label: `${brain.name} ${rails.rail} rail`, window: rail },
+      usable: usable!,
+      chainedTo: upstream,
+      notes: [],
+    };
   });
 
   return {

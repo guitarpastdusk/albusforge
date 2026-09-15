@@ -1,20 +1,27 @@
 import type { ChatMessage } from "@albusforge/schema";
+import type { ReactNode } from "react";
 import { cx } from "@/lib/cx";
 
-export function ChatBubble({ role, text }: Pick<ChatMessage, "role" | "text">) {
+/**
+ * `children` sit inside the bubble, under its text: answers to the question the
+ * bubble asks belong to it, not beside it. Only the assistant's bubble takes
+ * them, and only the one holding the live question.
+ */
+export function ChatBubble({ role, text, children }: Pick<ChatMessage, "role" | "text"> & { children?: ReactNode }) {
   const mine = role === "user";
   return (
     <div className={cx("flex", mine ? "justify-end" : "justify-start")}>
       <div
         className={cx(
-          "whitespace-pre-line px-[22px] py-4 text-[17px] font-light leading-[1.5]",
+          "px-[22px] py-4 text-[17px] font-light leading-[1.5]",
           // The design's 78% max-width excludes padding (and the border), so add them back.
           mine
             ? "max-w-[calc(78%+44px)] rounded-[18px_18px_6px_18px] bg-ink text-white"
             : "max-w-[calc(78%+46px)] rounded-[18px_18px_18px_6px] border border-hairline bg-white text-ink",
         )}
       >
-        {text}
+        <div className="whitespace-pre-line">{text}</div>
+        {children}
       </div>
     </div>
   );

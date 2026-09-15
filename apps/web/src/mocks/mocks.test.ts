@@ -117,10 +117,14 @@ describe("mock conversation, device chat and sign-in", () => {
       ["user", "11111111-1111-4111-8111-111111111111"],
       ["assistant", null],
     ]);
-    expect(transcript.messages[1]!.text).toMatch(/^Good brief\. Two quick questions:/);
+    // One question a turn, with one-tap answers on the spec's open question.
+    expect(transcript.messages[1]!.text).toMatch(/^Good brief\. Will it be plugged in to USB power, or does it need to run on a battery\?$/);
     let detail = await get(routes.builds.get.path(build_id), BuildDetail);
     expect(detail).toMatchObject({ status: "asking", spec_version: 1, ready: null });
     expect(detail.candidate_parts?.map((p) => [p.id, p.matched_capabilities])).toEqual([["P-005", ["read.soil_moisture_pct"]]]);
+    expect((detail.spec as { open_questions: { question: string; options?: string[] }[] }).open_questions).toEqual([
+      { field: "power.source", question: "Will it be plugged in to USB power, or does it need to run on a battery?", options: ["USB power", "Battery"] },
+    ]);
 
     const first = await post(routes.builds.postMessage.path(build_id), PostMessageResponse, {
       text: "One bed, and we have Wi-Fi",
@@ -139,7 +143,7 @@ describe("mock conversation, device chat and sign-in", () => {
     expect(await get(routes.builds.get.path(build_id), BuildDetail)).toMatchObject({
       status: "planning",
       spec: { settled: true },
-      ready: { name: "Greenhouse soil monitor", parts: expect.arrayContaining([expect.objectContaining({ label: "ESP32-WROOM" })]) },
+      ready: { name: "Greenhouse soil monitor", parts: expect.arrayContaining([expect.objectContaining({ part_id: "C-001", label: "ESP32-S3 brain" })]) },
     });
   });
 

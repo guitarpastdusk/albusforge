@@ -71,7 +71,10 @@ export function SpecPanel({ spec: raw, status }: { spec: Record<string, unknown>
   if (!parsed.success) return null;
   const spec = parsed.data;
   const facts = rows(spec);
-  if (facts.length === 0 && spec.capabilities.length === 0 && spec.assumptions.length === 0 && spec.open_questions.length === 0) return null;
+  // Open questions aren't listed here: intake asks one at a time, in the chat,
+  // with its answers attached. Repeating it in the panel said the same sentence
+  // twice. The panel is for what's settled, so it hides until something is.
+  if (facts.length === 0 && spec.capabilities.length === 0 && spec.assumptions.length === 0) return null;
 
   return (
     <section aria-label="Spec so far" className="rounded-[20px] border border-hairline bg-white px-6 py-5">
@@ -94,16 +97,6 @@ export function SpecPanel({ spec: raw, status }: { spec: Record<string, unknown>
           <h3 className="text-[14px] font-semibold text-ink">Capabilities</h3>
           <ul className="mt-1.5 flex flex-wrap gap-2 text-[13px]">
             {spec.capabilities.map((capability) => <li key={capability} className="break-all rounded-lg bg-porcelain px-2 py-1 font-mono">{capability}</li>)}
-          </ul>
-        </div>
-      ) : null}
-      {spec.open_questions.length > 0 ? (
-        <div className="mt-4">
-          <h3 className="text-[14px] font-semibold text-ink">Still to decide</h3>
-          <ul className="mt-1.5 flex flex-col gap-1 text-[15px] font-light text-muted">
-            {spec.open_questions.map((q) => (
-              <li key={`${q.field}:${q.question}`}>{q.question}</li>
-            ))}
           </ul>
         </div>
       ) : null}

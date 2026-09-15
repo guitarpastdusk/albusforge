@@ -29,6 +29,16 @@ export const CapabilityId = z
 export const OpenQuestion = z.object({
   field: z.string().min(1).max(64),
   question: z.string().min(1).max(300),
+  /**
+   * The answers worth offering as one-tap choices, when the question has a
+   * small closed set of them ("USB power", "Battery"). Each is sent verbatim as
+   * the person's reply, so it reads naturally in the transcript. Omitted when
+   * the answer is open-ended — a number of days, a place, a description — and
+   * the person is better off typing. One option is allowed — "Go" on a plan
+   * that only needs confirming — because the chat always offers "Continue
+   * chatting" beside them, so a single option is still a choice of two paths.
+   */
+  options: z.array(z.string().min(1).max(60)).min(1).max(4).optional(),
 });
 export type OpenQuestion = z.infer<typeof OpenQuestion>;
 

@@ -2,13 +2,22 @@ import type { TelemetryHistory } from "@albusforge/schema";
 import type { z } from "zod";
 
 type History = z.infer<typeof TelemetryHistory>;
-/** Dots deliberately do not connect absent samples or imply interpolation. */
+/**
+ * Dots deliberately do not connect absent samples or imply interpolation.
+ *
+ * `color` is the channel's series colour (lib/series-color.ts). Each plot is a
+ * single series named by its own heading, so the colour is redundant encoding
+ * rather than the thing carrying identity — which is why a repeat past five
+ * channels is harmless here.
+ */
 export function HistoryPlot({
   history,
   unit,
+  color = "var(--color-series-1)",
 }: {
   history: History;
   unit: string;
+  color?: string;
 }) {
   const { points } = history;
   if (!points.length)
@@ -31,38 +40,43 @@ export function HistoryPlot({
         aria-label={`${history.channel}: ${history.resolution === "raw" ? "raw samples" : "bucket averages"}, ${unit}. Dots use actual UTC timestamps; gaps are not interpolated.`}
         className="w-full mt-6"
       >
-        <text x="4" y="16" fontSize="12">
+        <text x="4" y="16" fontSize="12" fill="var(--color-muted)">
           {maximum} {unit}
         </text>
-        <text x="4" y="230" fontSize="12">
+        <text x="4" y="230" fontSize="12" fill="var(--color-muted)">
           {minimum} {unit}
         </text>
-        <path
-          d="M80 20V220H790"
-          fill="none"
-          stroke="currentColor"
-          opacity=".3"
-        />
+        <path d="M80 20V220H790" fill="none" stroke="var(--color-hairline)" strokeWidth="1.5" />
         {points.map((p, i) => (
-          <circle
-            key={i}
-            cx={80 + ((Date.parse(p.t) - start) / duration) * 710}
-            cy={220 - ((p.v - minimum) / spread) * 190}
-            r="3"
-            fill="currentColor"
-            className="text-coral-deep"
-          >
-            <title>{`${p.t}: ${p.v} ${unit}${
-              "n" in p
-                ? `; ${p.n} samples, min ${p.min}, max ${p.max}`
-                : `; sequence ${p.seq}, ordinal ${p.ordinal}`
-            }`}</title>
-          </circle>
+          <g key={i}>
+            {/* The hit target is larger than the mark, so a dot is easy to hover. */}
+            <circle
+              cx={80 + ((Date.parse(p.t) - start) / duration) * 710}
+              cy={220 - ((p.v - minimum) / spread) * 190}
+              r="10"
+              fill="transparent"
+            >
+              <title>{`${p.t}: ${p.v} ${unit}${
+                "n" in p
+                  ? `; ${p.n} samples, min ${p.min}, max ${p.max}`
+                  : `; sequence ${p.seq}, ordinal ${p.ordinal}`
+              }`}</title>
+            </circle>
+            <circle
+              cx={80 + ((Date.parse(p.t) - start) / duration) * 710}
+              cy={220 - ((p.v - minimum) / spread) * 190}
+              r="4"
+              fill={color}
+              stroke="var(--color-porcelain)"
+              strokeWidth="1.5"
+              pointerEvents="none"
+            />
+          </g>
         ))}
-        <text x="80" y="250" fontSize="10">
+        <text x="80" y="250" fontSize="10" fill="var(--color-faint)">
           {history.from}
         </text>
-        <text x="790" y="250" textAnchor="end" fontSize="10">
+        <text x="790" y="250" textAnchor="end" fontSize="10" fill="var(--color-faint)">
           {history.to}
         </text>
       </svg>

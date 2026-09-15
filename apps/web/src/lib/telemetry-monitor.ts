@@ -8,9 +8,14 @@ export const windows = {
   month: { label: "Last 30 days", ms: 2592000000 },
 } as const;
 export type Search = Record<string, string | string[] | undefined>;
-export function selection(search: Search, channels: string[], now: number) {
+/**
+ * The window, resolution and end time are shared by every plot on the page; only
+ * the channel differs. `forChannel` asks for one specific channel's query, which
+ * is how the device page builds a series per channel from one chosen window.
+ */
+export function selection(search: Search, channels: string[], now: number, forChannel?: string) {
   const channel =
-    typeof search.channel === "string" ? search.channel : channels[0];
+    forChannel ?? (typeof search.channel === "string" ? search.channel : channels[0]);
   const window =
     typeof search.window === "string" && Object.hasOwn(windows, search.window)
       ? (search.window as keyof typeof windows)

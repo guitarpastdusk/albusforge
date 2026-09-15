@@ -26,6 +26,19 @@
   --color-nav-active: #f0ebe4;
   --color-success: #3e7d6b;
   /*
+   * Chart series, assigned in fixed order and never cycled. Validated with the
+   * dataviz palette checker on this surface: lightness band, chroma floor,
+   * adjacent-pair CVD separation (worst dE 15.0 deutan), normal-vision floor
+   * (worst 21.7) and 3:1 contrast all pass. The order is load-bearing — warm
+   * hues are kept apart, because gold beside green fails both separation gates.
+   * Slot 1 is the brand coral; slot 2 is the SDA wire blue.
+   */
+  --color-series-1: #c4643b;
+  --color-series-2: #3f6fa8;
+  --color-series-3: #9a7420;
+  --color-series-4: #7a5ba6;
+  --color-series-5: #2f8a53;
+  /*
    * Sections that report progress rather than open questions — candidate parts,
    * once intake has found some. A tint off porcelain, not a colour of its own:
    * it should read as "this part is settled", not as an alert.

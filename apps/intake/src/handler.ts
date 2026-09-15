@@ -1,4 +1,5 @@
 import { type ClientDb, buildMessages, builds, createClientDb, type Db, specs } from "@albusforge/db";
+import type { AppOptions } from "./app";
 import { type IntakeTurnResponse, Spec } from "@albusforge/schema";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type pg from "pg";
@@ -107,6 +108,20 @@ const outOfBudget = (cause?: unknown) =>
  * with the model, so both would land the same way again.
  */
 const RETRYABLE_REASONS = new Set(["provider_error", "error"]);
+
+/**
+ * The route's handler, bound to its dependencies.
+ *
+ * A factory rather than a lambda at the call site: `turns` is the one place
+ * every argument the route parses has to survive, and a hand-written
+ * `(buildId, trace) => handleTurn(deps, buildId, trace)` drops whatever is
+ * added after it without failing a type check or a test that calls
+ * `handleTurn` directly. That is exactly how `may_retry` was lost.
+ */
+export const turnsHandler =
+  (deps: HandlerDeps): AppOptions["turns"] =>
+  (buildId, trace, mayRetry) =>
+    handleTurn(deps, buildId, trace, mayRetry);
 
 export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext, mayRetry = false): Promise<IntakeTurnResponse | null> {
   const budget = startBudget(deps);

@@ -11,7 +11,7 @@ import { awaitEgress, buildTokensUsed, createMeter, createProvider, llmCallsInse
 import { buildApp } from "./app";
 import { createCatalogueCache, dbPartsSource } from "./catalogue";
 import { configFromEnv } from "./config";
-import { handleTurn, type HandlerDeps } from "./handler";
+import { type HandlerDeps, turnsHandler } from "./handler";
 import { createLogger } from "./log";
 import { loadPrompts } from "./prompts";
 
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   };
 
   const app = buildApp({
-    turns: (buildId, trace) => handleTurn(deps, buildId, trace),
+    turns: turnsHandler(deps),
     ping: async () => {
       await pool.query("SELECT 1");
     },

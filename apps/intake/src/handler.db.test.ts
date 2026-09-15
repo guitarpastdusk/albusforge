@@ -19,7 +19,8 @@ import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
 import { type CatalogueCache, createCatalogueCache, dbPartsSource } from "./catalogue";
 import { isDatabaseUnavailable } from "./db-errors";
 import { emptySpec } from "./decide";
-import { handleTurn, type HandlerDeps } from "./handler";
+import { buildApp } from "./app";
+import { handleTurn, type HandlerDeps, turnsHandler } from "./handler";
 import { createLogger } from "./log";
 import { loadPrompts } from "./prompts";
 import { FALLBACK_REPLY, offTopicReply, outOfScopeReply, TOKEN_CEILING_REPLY } from "./replies";
@@ -380,6 +381,38 @@ describe("handleTurn against Postgres", () => {
     expect(provider.requests).toHaveLength(0);
     expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: outOfScopeReply("mains_voltage") });
     expect(await callsOf(buildId)).toEqual([]);
+  });
+
+  it("the route's own handler carries may_retry through: a 503, and nothing written", async () => {
+    // Through buildApp and turnsHandler, exactly as server.ts wires them. A
+    // direct handleTurn(..., true) call passes even when the wiring drops the
+    // argument, which is how this was missed the first time.
+    const failing = async (): Promise<never> => {
+      throw Object.assign(new Error("overloaded"), { status: 529 });
+    };
+    const { deps } = setup([failing as unknown as Response, failing as unknown as Response]);
+    const instance = buildApp({ turns: turnsHandler(deps), ping: async () => {}, log: createLogger({ write: () => {} }) });
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+
+    const handed = await instance.inject({
+      method: "POST",
+      url: "/v1/turns",
+      payload: { build_id: buildId, may_retry: true },
+      headers: { "content-type": "application/json" },
+    });
+    expect(handed.statusCode).toBe(503);
+    expect(await messagesOf(buildId)).toEqual([{ role: "user", text: GOLDEN_ASKS["fridge-monitor"].ask }]);
+
+    // The caller's last attempt says so, and the message is answered.
+    const answered = await instance.inject({
+      method: "POST",
+      url: "/v1/turns",
+      payload: { build_id: buildId, may_retry: false },
+      headers: { "content-type": "application/json" },
+    });
+    expect(answered.statusCode).toBe(200);
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: FALLBACK_REPLY });
+    await instance.close();
   });
 
   it("a transport failure with a retry ahead of it writes nothing and asks to be retried", async () => {

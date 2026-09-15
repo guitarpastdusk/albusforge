@@ -28,9 +28,11 @@ import {
 export const metadata: Metadata = { title: "Device telemetry" };
 
 /**
- * Series requests in flight at once. Kept under the gateway's five-client pool,
- * so plotting a device with many channels never starves its own page — or the
- * unrelated traffic sharing that pool.
+ * Series requests in flight at once, per render. Kept under the gateway's
+ * five-client pool so one wide device cannot enqueue sixty-four authenticated
+ * sessions at once and starve its own plots. It bounds a single page render,
+ * not the pool: several renders at once can still contend, and a global budget
+ * would have to live in the gateway.
  */
 const SERIES_CONCURRENCY = 3;
 

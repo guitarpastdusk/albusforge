@@ -1,7 +1,7 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { TelemetryChannels, type DeviceConverseRequest } from "@albusforge/schema";
 import { AskError, AskQuotaError } from "./errors";
-import { authorize, transaction } from "./store";
+import { authorize, authorizePublic, transaction } from "./store";
 
 /** Bounds enforced here, not in the prompt: a model asking for more gets an error result, not more data. */
 export const LIMITS = {
@@ -79,8 +79,16 @@ export interface ConverseStore {
 }
 
 /** `q` carries the trusted tenant/device; tool arguments never widen it. */
-function scope(q: DeviceConverseRequest) {
-  return { tenant_id: q.tenant_id, device_id: q.device_id, actor_id: q.actor_id };
+/**
+ * Authorizes the turn the way its own identity requires: a signed-in turn
+ * checks the caller's membership, a public one checks only that the device
+ * belongs to the pinned tenant. Narrowed on `actor_id` rather than on `public`
+ * so the membership check cannot be reached without an actor to check.
+ */
+function authorizeTurn(client: PoolClient, q: DeviceConverseRequest) {
+  return q.actor_id === null
+    ? authorizePublic(client, { tenant_id: q.tenant_id, device_id: q.device_id })
+    : authorize(client, { tenant_id: q.tenant_id, device_id: q.device_id, actor_id: q.actor_id });
 }
 
 function checkSpan(from: string, to: string) {
@@ -104,16 +112,19 @@ export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseSto
           // One global lock across instances, held only for this counting read
           // and insert. No model or network call ever runs inside it.
           await client.query("SELECT pg_advisory_xact_lock($1,1)", [CHAT_LOCK]);
-          await authorize(client, scope(q));
+          await authorizeTurn(client, q);
           const duplicate = await client.query("SELECT 1 FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id]);
           if (duplicate.rowCount) throw new AskError(409, "DUPLICATE_REQUEST", "Request already accepted");
           const counts = (
             await client.query<{ global: number; tenant: number; actor: number }>(
+              // The public bucket is every anonymous turn together, counted
+              // against the same per-actor allowance: one visitor cannot spend
+              // more than a signed-in person, and all of them share that.
               `SELECT count(*)::int AS global,
                  count(*) FILTER (WHERE tenant_id=$1)::int AS tenant,
-                 count(*) FILTER (WHERE actor_id=$2)::int AS actor
+                 count(*) FILTER (WHERE CASE WHEN $3::boolean THEN public ELSE actor_id=$2 END)::int AS actor
                FROM telemetry.device_chat_requests WHERE created_at > statement_timestamp()-interval '24 hours'`,
-              [q.tenant_id, q.actor_id],
+              [q.tenant_id, q.actor_id, q.public],
             )
           ).rows[0]!;
           // Widest scope first, so an operator reading the diagnostic learns
@@ -122,8 +133,8 @@ export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseSto
           if (counts.tenant >= limits.tenant) throw new AskQuotaError("tenant");
           if (counts.actor >= limits.user) throw new AskQuotaError("actor");
           await client.query(
-            "INSERT INTO telemetry.device_chat_requests(request_id,tenant_id,actor_id,device_id) VALUES($1,$2,$3,$4)",
-            [q.request_id, q.tenant_id, q.actor_id, q.device_id],
+            "INSERT INTO telemetry.device_chat_requests(request_id,tenant_id,actor_id,public,device_id) VALUES($1,$2,$3,$4,$5)",
+            [q.request_id, q.tenant_id, q.actor_id, q.public, q.device_id],
           );
         },
         signal,
@@ -135,7 +146,7 @@ export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseSto
         false,
         async (client) => {
           await client.query(
-            "UPDATE telemetry.device_chat_requests SET model_attempted=true WHERE request_id=$1 AND tenant_id=$2 AND actor_id=$3 AND device_id=$4",
+            "UPDATE telemetry.device_chat_requests SET model_attempted=true WHERE request_id=$1 AND tenant_id=$2 AND actor_id IS NOT DISTINCT FROM $3 AND device_id=$4",
             [q.request_id, q.tenant_id, q.actor_id, q.device_id],
           );
         },
@@ -156,7 +167,7 @@ export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseSto
                    cache_read_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $9::integer END,
                    cache_creation_tokens=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $10::integer END,
                    cost_usd=CASE WHEN model_attempted AND NOT $6::boolean THEN NULL ELSE $11::numeric END
-             WHERE request_id=$1 AND tenant_id=$12 AND actor_id=$13 AND device_id=$14`,
+             WHERE request_id=$1 AND tenant_id=$12 AND actor_id IS NOT DISTINCT FROM $13 AND device_id=$14`,
             [q.request_id, outcome, usage.model, usage.modelCalls, usage.toolCalls, usage.usageKnown,
               usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheCreationTokens, usage.costUsd,
               q.tenant_id, q.actor_id, q.device_id],
@@ -170,7 +181,7 @@ export function createConverseStore(pool: Pool, limits: ChatLimits): ConverseSto
         pool,
         true,
         async (client) => {
-          const channels = await authorize(client, scope(q));
+          const channels = await authorizeTurn(client, q);
           const device = (
             await client.query<{
               display_name: string | null;

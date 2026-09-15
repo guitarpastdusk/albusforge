@@ -39,7 +39,7 @@ async function fixture() {
   const hour = Math.floor(Date.now() / 3600000) * 3600000;
   const from = new Date(hour - 3600000).toISOString();
   const to = new Date(hour).toISOString();
-  const q: DeviceConverseRequest = { tenant_id, actor_id, device_id, request_id: randomUUID(), question: "how warm?", history: [] };
+  const q: DeviceConverseRequest = { tenant_id, actor_id, public: false, device_id, request_id: randomUUID(), question: "how warm?", history: [] };
   const insert = (seq: number, offsetS: number, value: number, channel = "temperature") =>
     handle.pool.query(`INSERT INTO telemetry.readings(device_id,seq,ordinal,channel,ts,value) VALUES($1,$2,0,$3,$4,$5)`,
       [device_id, seq, channel, new Date(Date.parse(from) + offsetS * 1000), value]);
@@ -167,4 +167,53 @@ it("keeps usage known when no model was ever attempted", async () => {
   const row = (await handle.pool.query("SELECT usage_known,cost_usd FROM telemetry.device_chat_requests WHERE request_id=$1", [q.request_id])).rows[0];
   expect(row.usage_known).toBe(true);
   expect(Number(row.cost_usd)).toBe(0);
+});
+
+/*
+ * The public surface. A turn taken there has no actor at all — the database
+ * enforces that a public row carries no identity and a signed-in row always
+ * does — so what matters is that its spend is still counted and still written
+ * back, and that "no actor" never means "no membership check was needed".
+ */
+it("a public turn needs no actor, shares one allowance, and is still authorized against the tenant", async () => {
+  const { q } = await fixture();
+  const anonymous = { ...q, actor_id: null, public: true, request_id: randomUUID() };
+
+  // Reaches the device without any membership, because there is no caller.
+  const context = await store().context(anonymous);
+  expect(context.device_id).toBe(q.device_id);
+
+  // But the tenant still bounds it: another tenant's device is not readable here.
+  await expect(store().context({ ...anonymous, tenant_id: randomUUID() })).rejects.toBeInstanceOf(AskError);
+
+  // Every anonymous visitor shares the one actor allowance, whatever they send.
+  const shared = store({ user: 1, tenant: 100, global: 1000 });
+  await shared.reserve(anonymous);
+  await expect(shared.reserve({ ...anonymous, request_id: randomUUID() })).rejects.toMatchObject({
+    status: 429,
+    code: "DAILY_LIMIT",
+    scope: "actor",
+  });
+
+  // A signed-in turn is unaffected by the public bucket being spent.
+  await expect(shared.reserve({ ...q, request_id: randomUUID() })).resolves.toBeUndefined();
+});
+
+it("records what a public turn spent, despite it having no actor to match on", async () => {
+  // actor_id = NULL never satisfies `actor_id = $n`, so a write-back keyed that
+  // way would silently touch no row and the spend would go unrecorded.
+  const { q } = await fixture();
+  const anonymous = { ...q, actor_id: null, public: true, request_id: randomUUID() };
+  await store().reserve(anonymous);
+  await store().started(anonymous);
+  await store().finish(anonymous, "model", {
+    model: "claude-sonnet-5", modelCalls: 2, toolCalls: 1, usageKnown: true,
+    inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.01,
+  });
+  const row = (await handle.pool.query<{ outcome: string; model_attempted: boolean; model_calls: number; cost_usd: string | null }>(
+    "SELECT outcome,model_attempted,model_calls,cost_usd FROM telemetry.device_chat_requests WHERE request_id=$1",
+    [anonymous.request_id],
+  )).rows[0];
+  expect(row).toMatchObject({ outcome: "model", model_attempted: true, model_calls: 2 });
+  expect(Number(row!.cost_usd)).toBeCloseTo(0.01);
 });

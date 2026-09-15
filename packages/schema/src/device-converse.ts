@@ -34,12 +34,24 @@ export const DeviceConverseInput = z
   });
 export type DeviceConverseInput = z.infer<typeof DeviceConverseInput>;
 
-/** Trusted identity, assembled by the gateway from the session. Never copied from a browser body. */
+/**
+ * Trusted identity, assembled by the gateway. Never copied from a browser body.
+ *
+ * A turn is either signed in, carrying an actor, or public, carrying none —
+ * and the refinement below says so in the same terms as the database's
+ * `device_chat_identity` check, so a request that the ledger would reject is
+ * rejected here first rather than at insert time.
+ */
 export const DeviceConverseRequest = DeviceConverseInput.safeExtend({
   request_id: z.uuid(),
-  actor_id: z.uuid(),
+  actor_id: z.uuid().nullable().default(null),
+  /** Taken on the public showcase, where there is no signed-in caller at all. */
+  public: z.boolean().default(false),
   tenant_id: z.uuid(),
   device_id: z.uuid(),
+}).refine((body) => body.public === (body.actor_id === null), {
+  message: "A public turn carries no actor, and a signed-in turn must carry one",
+  path: ["actor_id"],
 });
 export type DeviceConverseRequest = z.infer<typeof DeviceConverseRequest>;
 

@@ -185,8 +185,9 @@ describe("chaining shapes the example builds don't cover", () => {
   });
 
   it("leaves an I2C part on its own pins when the part before it has no spare socket", () => {
-    // V-005 is not on the sourced pass-through list, so P-001 cannot plug into it.
-    const wiring = exampleWiring(build([{ id: "C-001", qty: 1 }, { id: "V-005", qty: 1 }, { id: "P-001", qty: 1 }, { id: "E-005", qty: 1 }]));
+    // P-004's page says only "connectors", plural, so it is not on the sourced
+    // pass-through list and P-001 cannot plug into it.
+    const wiring = exampleWiring(build([{ id: "C-001", qty: 1 }, { id: "P-004", qty: 1 }, { id: "P-001", qty: 1 }, { id: "E-005", qty: 1 }]));
     const units = wiring.nodes.filter((node) => node.part.electrical.interface === "i2c").flatMap((node) => node.units);
     expect(units).toHaveLength(2);
     // Both go to the board: neither can accept the other in this order.
@@ -195,7 +196,11 @@ describe("chaining shapes the example builds don't cover", () => {
 
   it("only treats a part as a pass-through when the sources say it has one", () => {
     expect(acceptsChain(EXAMPLE_PARTS.get("P-001")!)).toBe(true);
-    expect(acceptsChain(EXAMPLE_PARTS.get("V-005")!)).toBe(false);
+    // Sourced from the bench rather than a product page: the Freenove device
+    // carries three sensors on one QT chain, which needs a second port here.
+    expect(acceptsChain(EXAMPLE_PARTS.get("V-005")!)).toBe(true);
+    // P-004's page says only "connectors", plural, which is not a count.
+    expect(acceptsChain(EXAMPLE_PARTS.get("P-004")!)).toBe(false);
     // An ADC probe is never on the bus, whatever its connector.
     expect(acceptsChain(EXAMPLE_PARTS.get("P-005")!)).toBe(false);
   });

@@ -14,6 +14,7 @@ import { DeviceConsole } from "@/components/devices/DeviceConsole";
 import { DeviceNameEditor } from "@/components/telemetry/DeviceNameEditor";
 import { HistoryPlot } from "@/components/telemetry/HistoryPlot";
 import { PageContainer } from "@/components/ui";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { seriesColor } from "@/lib/series-color";
 import { apiGet, orNotFound } from "@/lib/api/server";
 import { requireSession } from "@/lib/session";
@@ -25,6 +26,13 @@ import {
 } from "@/lib/telemetry-monitor";
 
 export const metadata: Metadata = { title: "Device telemetry" };
+
+/**
+ * Series requests in flight at once. Kept under the gateway's five-client pool,
+ * so plotting a device with many channels never starves its own page — or the
+ * unrelated traffic sharing that pool.
+ */
+const SERIES_CONCURRENCY = 3;
 
 export default async function DevicePage({
   params,
@@ -48,13 +56,16 @@ export default async function DevicePage({
   const search = await searchParams,
     channels = Object.keys(detail.channels);
   const now = new Date();
-  const selected = selection(search, channels, now.getTime());
+  // The channel parameter is retired: every channel is plotted. Dropping it from
+  // the shared state stops a bookmarked ?channel=removed_channel reporting
+  // "choose a provisioned channel" over a page of working plots.
+  const sharedSearch: Search = Object.fromEntries(Object.entries(search).filter(([key]) => key !== "channel"));
+  const selected = selection(sharedSearch, channels, now.getTime());
   // One plot per channel, over the one window chosen above: a person watching a
   // device wants to see moisture against temperature, not pick them one at a
   // time. Fetched together so a slow channel doesn't serialise the rest.
-  const plots = await Promise.all(
-    channels.map(async (channel) => {
-      const forChannel = selection(search, channels, now.getTime(), channel);
+  const plots = await mapWithConcurrency(channels, SERIES_CONCURRENCY, async (channel) => {
+      const forChannel = selection(sharedSearch, channels, now.getTime(), channel);
       if (!forChannel.query) return { channel, error: forChannel.error };
       const query = new URLSearchParams(
         Object.entries(forChannel.query).map(([key, value]) => [key, String(value)]),
@@ -73,8 +84,7 @@ export default async function DevicePage({
         // One channel failing is its own plot's problem, not the page's.
         return { channel, error: message };
       }
-    }),
-  );
+  });
   const error: string | undefined = selected.error;
   const pendingRollup = plots.some((plot) => plot.history?.pending_rollup);
   const { device } = detail;

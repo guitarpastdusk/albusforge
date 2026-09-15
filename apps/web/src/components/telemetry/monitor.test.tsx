@@ -329,3 +329,20 @@ it("keeps one channel's failure inside its own card", async () => {
   expect(document.querySelectorAll("section[aria-label$='history'] svg")).toHaveLength(1);
   expect(document.querySelector("section[aria-label='soil history'] [role=alert]")?.textContent).toBeTruthy();
 });
+
+it("ignores a retired channel parameter instead of contradicting the plots", async () => {
+  mocked.get
+    .mockResolvedValueOnce({ device, channels: { temp: { unit: "C", min: -40, max: 85 } } })
+    .mockResolvedValueOnce({ device_id: id, readings: [] })
+    .mockResolvedValueOnce({ ...history, channel: "temp" });
+  document.body.innerHTML = renderToStaticMarkup(
+    await DevicePage({
+      params: Promise.resolve({ deviceId: id }),
+      // A bookmark from when the page had a channel picker, naming a channel that is gone.
+      searchParams: Promise.resolve({ channel: "removed_channel" }),
+    }),
+  );
+  // The plot renders, and nothing tells the person to choose a provisioned channel.
+  expect(document.querySelectorAll("section[aria-label$='history'] svg")).toHaveLength(1);
+  expect(document.body.textContent).not.toContain("Choose a provisioned channel");
+});

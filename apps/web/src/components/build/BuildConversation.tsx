@@ -12,6 +12,7 @@ import {
   initConversation,
   isTyping,
   OVERDUE_MESSAGE,
+  UNSENT_MESSAGE,
   runSend,
   type BuildTranscript,
   type ConversationActions,
@@ -91,10 +92,21 @@ export function BuildConversation({
     return true;
   };
 
+  /*
+   * Chase a reply that hasn't arrived, automatically and then by hand.
+   *
+   * A refetch, never a resend: gateway starts a fresh turn whenever it reads a
+   * transcript whose last message is an unanswered one, so this is what makes
+   * a lost turn recover — and nothing the person wrote can be duplicated by it.
+   *
+   * With no build id there is nothing to read: the send that would have
+   * created the build is still in flight or has been lost, and only the person
+   * can decide to send again, so `checks` just moves the state along to the
+   * message that says so.
+   */
   const checkAgain = () => {
-    if (!buildId) return;
     dispatch({ type: "checking" });
-    requestRefresh(buildId, state.observedSpecVersion);
+    if (buildId) requestRefresh(buildId, state.observedSpecVersion);
   };
 
   const setDraft = (text: string) => dispatch({ type: "draft", text });
@@ -120,7 +132,14 @@ export function BuildConversation({
     },
   });
 
-  useReplyWatchdog(Boolean(buildId) && typing, () => dispatch({ type: "overdue", message: OVERDUE_MESSAGE }));
+  // Armed by waiting, not by having a build id: the first message from the
+  // landing page is the one most likely to be left hanging, and it is waiting
+  // before a build exists to read.
+  useReplyWatchdog(
+    typing,
+    () => checkAgain(),
+    () => dispatch({ type: "overdue", message: buildId ? OVERDUE_MESSAGE : UNSENT_MESSAGE }),
+  );
 
   return <ConversationContext value={{ state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview }}>{children}</ConversationContext>;
 }

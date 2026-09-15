@@ -9,7 +9,7 @@ const vocabulary: Vocabulary = {
 };
 
 function turn(overrides: Partial<SpecTurn> = {}): SpecTurn {
-  return { spec_patch: {}, candidate_questions: [], assumptions: [], reply: "model reply", ...overrides };
+  return { reply_kind: "spec", spec_patch: {}, candidate_questions: [], assumptions: [], reply: "model reply", ...overrides };
 }
 
 describe("mergePatch", () => {

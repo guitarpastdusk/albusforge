@@ -34,6 +34,13 @@ import { localMessageId, transcriptFrom, type BuildTranscript } from "@/lib/buil
 /** Client-generated per message, so a retried send is idempotent: gateway returns the stored message instead of a new turn. */
 const ClientMessageId = z.uuid();
 const READ_TIMEOUT_MS = 10_000;
+/**
+ * Sends get a bound too. Gateway answers a send as soon as it has stored the
+ * message — the turn runs in the background — so this only ever expires when
+ * the request itself is lost, and without it the chat waits on it forever
+ * with nothing to show the person.
+ */
+const SEND_TIMEOUT_MS = 15_000;
 const REFRESH_FAILED_MESSAGE = "We couldn’t load the latest build details. Try again in a moment.";
 
 function retryAfterSeconds(error: ApiRequestError): number | null {
@@ -72,7 +79,9 @@ export async function startBuild(askText: unknown, clientMessageId: unknown, exp
     const client = await sessionClient();
     // For an anonymous visitor gateway sets __Host-albus_anon: relayed to the
     // browser, and carried by the read below.
-    const created = await client.mutate("POST", routes.builds.create.path(), CreatedBuild, parsed.data);
+    const created = await client.mutate("POST", routes.builds.create.path(), CreatedBuild, parsed.data, {
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
     const detail = { ...created, id: created.build_id };
 
     try {
@@ -107,7 +116,9 @@ export async function sendBuildMessage(buildId: unknown, text: unknown, clientMe
     if (!id.success || !clientId.success || !parsed.success) return { ok: false, message: "Write a reply to send." };
 
     const client = await sessionClient();
-    const { message } = await client.mutate("POST", routes.builds.postMessage.path(id.data), PostMessageResponse, parsed.data);
+    const { message } = await client.mutate("POST", routes.builds.postMessage.path(id.data), PostMessageResponse, parsed.data, {
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
     return { ok: true, data: { message } };
   } catch (error) {
     return refusedTurn(error) ?? actionFailure("sendBuildMessage", error);

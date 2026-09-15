@@ -23,7 +23,13 @@ export interface ConversationState {
   observedSpecVersion: number | null;
   /** A send is on its way to gateway and not yet accepted. */
   sending: boolean;
-  /** The reply is past REPLY_CHECK_AFTER_MS: stop the typing dots and offer "Check for a reply" (a refetch, never a resend). */
+  /**
+   * Checks made for a reply that hasn't arrived. Above zero the typing dots
+   * stay: something is still being done about it, and saying so beats an
+   * error the person can't act on.
+   */
+  checks: number;
+  /** Every check is spent and the reply still isn't here: say so and stop. */
   overdue: boolean;
   /** The last send that failed. Sending the same text again reuses its client_message_id, so a send that did land isn't duplicated. */
   unsent: { text: string; clientMessageId: string } | null;
@@ -45,10 +51,22 @@ export type ConversationEvent =
   | { type: "refreshRequested" }
   | { type: "refreshFailed"; message: string }
   | { type: "overdue"; message: string }
-  /** "Check for a reply": back to waiting, with a fresh clock. */
+  /** A check is on its way — automatic, or the person's own "Check for a reply". */
   | { type: "checking" };
 
-export const OVERDUE_MESSAGE = "The reply is taking longer than usual.";
+/**
+ * Only ever shown once the automatic checks are spent, so it can't promise
+ * something that isn't happening — and it never suggests resending, which
+ * would risk a second copy of a message that did land.
+ */
+/**
+ * The same wait, but no build was ever created — the very first send never
+ * came back, so there is no transcript to check and nothing has been stored.
+ * Sending again is safe and is the only thing that can help.
+ */
+export const UNSENT_MESSAGE = "That didn't get through, so nothing was saved. Send it again to start the build.";
+
+export const OVERDUE_MESSAGE = "The reply hasn't come back. Nothing you sent is lost — check again, or come back to this build in a minute.";
 
 export function initConversation(initial?: Partial<BuildTranscript>): ConversationState {
   return {
@@ -65,6 +83,7 @@ export function initConversation(initial?: Partial<BuildTranscript>): Conversati
     detailsStale: false,
     observedSpecVersion: initial?.specVersion ?? null,
     sending: false,
+    checks: 0,
     overdue: false,
     unsent: null,
   };
@@ -92,7 +111,7 @@ const withTranscript = (state: ConversationState, transcript: BuildTranscript): 
 
 /** A reply arrived (or nothing is pending): clear the overdue offer and its message. */
 const settleOverdue = (state: ConversationState): ConversationState =>
-  state.overdue && !awaitingReply(state.messages) ? { ...state, overdue: false, error: null } : state;
+  (state.overdue || state.checks > 0) && !awaitingReply(state.messages) ? { ...state, checks: 0, overdue: false, error: null } : state;
 
 export function conversationReducer(state: ConversationState, event: ConversationEvent): ConversationState {
   switch (event.type) {
@@ -104,6 +123,7 @@ export function conversationReducer(state: ConversationState, event: Conversatio
         sending: true,
         error: null,
         draft: "",
+        checks: 0,
         overdue: false,
         messages: [
           ...state.messages,
@@ -141,7 +161,7 @@ export function conversationReducer(state: ConversationState, event: Conversatio
     case "overdue":
       return awaitingReply(state.messages) ? { ...state, overdue: true, error: event.message } : state;
     case "checking":
-      return { ...state, overdue: false, error: null };
+      return { ...state, checks: state.checks + 1, overdue: false, error: null };
   }
 }
 

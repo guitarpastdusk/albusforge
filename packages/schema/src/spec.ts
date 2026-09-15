@@ -84,8 +84,19 @@ export const SpecPatch = z.object({
 });
 export type SpecPatch = z.infer<typeof SpecPatch>;
 
+/**
+ * What a turn was: a message about the device being built, or one that isn't
+ * about building a device at all. Intake writes the reply itself for
+ * `off_topic`, so the model's own prose can't wander into answering it. An
+ * empty `spec_patch` can't stand in for this — a turn that only chats about
+ * the build in progress produces one too.
+ */
+export const ReplyKind = z.enum(["spec", "off_topic"]);
+export type ReplyKind = z.infer<typeof ReplyKind>;
+
 /** One model turn. Intake decides which questions survive and whether the spec settles. */
 export const SpecTurn = z.object({
+  reply_kind: ReplyKind,
   spec_patch: SpecPatch,
   candidate_questions: z.array(OpenQuestion).max(6),
   assumptions: z.array(Sentence).max(10),
@@ -95,7 +106,14 @@ export type SpecTurn = z.infer<typeof SpecTurn>;
 
 // --- intake's internal API (called by gateway with an ID token; Cloud Run checks it) ---
 
-export const IntakeTurnRequest = z.object({ build_id: z.uuid() });
+/**
+ * `may_retry` says the caller will try this turn again if intake doesn't
+ * answer it, so a transient failure can come back as a 503 with nothing
+ * written instead of spending the person's message on a fallback reply.
+ * Absent means no: an older caller, or the caller's own last attempt, and
+ * intake writes the reply it has.
+ */
+export const IntakeTurnRequest = z.object({ build_id: z.uuid(), may_retry: z.boolean().default(false) });
 export type IntakeTurnRequest = z.infer<typeof IntakeTurnRequest>;
 
 /** Build statuses intake sets. */

@@ -44,11 +44,15 @@ function capture() {
 const BUILD = "7a0c1c4e-2f7e-4b1a-9d3e-8f0b1a2c3d4e";
 
 describe("httpIntakeClient", () => {
-  it("posts { build_id } to /v1/turns with the auth header", async () => {
+  it("posts { build_id, may_retry } to /v1/turns with the auth header", async () => {
     const stub = await stubIntake((_body, _req, res) => json(res, 200, { message_id: "m1", spec_version: 2, status: "asking" }));
     const client = httpIntakeClient({ url: `${stub.url}/`, authHeader: async () => "Bearer id-token" });
     await expect(client.turn(BUILD, AbortSignal.timeout(1000))).resolves.toEqual({ message_id: "m1", spec_version: 2, status: "asking" });
-    expect(stub.calls).toEqual([{ body: { build_id: BUILD }, authorization: "Bearer id-token", path: "/v1/turns" }]);
+    // Defaults to false: a caller that doesn't say it will retry must get an answer.
+    expect(stub.calls).toEqual([{ body: { build_id: BUILD, may_retry: false }, authorization: "Bearer id-token", path: "/v1/turns" }]);
+
+    await client.turn(BUILD, AbortSignal.timeout(1000), true);
+    expect(stub.calls.at(-1)).toMatchObject({ body: { build_id: BUILD, may_retry: true } });
   });
 
   it("sends no Authorization with INTAKE_AUTH=none, and accepts a noop", async () => {

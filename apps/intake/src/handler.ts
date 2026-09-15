@@ -2,7 +2,7 @@ import { type ClientDb, buildMessages, builds, createClientDb, type Db, specs } 
 import { type IntakeTurnResponse, Spec } from "@albusforge/schema";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type pg from "pg";
-import { DatabaseUnavailableError } from "./db-errors";
+import { DatabaseUnavailableError, TurnRetryableError } from "./db-errors";
 import type { Log, TraceContext } from "./log";
 import { FALLBACK_REPLY } from "./replies";
 import { runTurn, type TurnContext, type TurnOutcome } from "./turn";
@@ -100,7 +100,15 @@ function startBudget({ budgetMs, deadlineMs }: HandlerDeps): Budget {
 const outOfBudget = (cause?: unknown) =>
   new DatabaseUnavailableError("the turn ran out of budget before it could answer; gateway retries this", { cause });
 
-export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext): Promise<IntakeTurnResponse | null> {
+/**
+ * Which failures another attempt could plausibly fix. A transport failure is
+ * the whole list on purpose: the deadline has already spent the caller's
+ * budget, and truncation and a schema miss are properties of this exchange
+ * with the model, so both would land the same way again.
+ */
+const RETRYABLE_REASONS = new Set(["provider_error", "error"]);
+
+export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: TraceContext, mayRetry = false): Promise<IntakeTurnResponse | null> {
   const budget = startBudget(deps);
   const connecting = deps.pool.connect();
   let client: pg.PoolClient;
@@ -127,9 +135,11 @@ export async function handleTurn(deps: HandlerDeps, buildId: string, trace?: Tra
     // One race over the whole call, so a query with no budget left behind it —
     // a read, the lock, the unlock — ends the call instead of adding its own
     // timeout to a response the caller has stopped waiting for.
-    return await withinBudget(answerWhileUnanswered(deps, budget, open, fenced, db, buildId, trace), budget);
+    return await withinBudget(answerWhileUnanswered(deps, budget, open, fenced, db, buildId, trace, mayRetry), budget);
   } catch (error) {
-    broken ??= error as Error;
+    // A turn handed back for a retry says nothing about the connection: it was
+    // the model API that failed, so the connection goes back to the pool.
+    if (!(error instanceof TurnRetryableError)) broken ??= error as Error;
     throw error;
   } finally {
     // Fence every handle in one synchronous sweep before awaiting any of them:
@@ -158,6 +168,7 @@ async function answerWhileUnanswered(
   db: Db,
   buildId: string,
   trace?: TraceContext,
+  mayRetry = false,
 ): Promise<IntakeTurnResponse | null> {
   const [build] = await db.select({ id: builds.id }).from(builds).where(eq(builds.id, buildId));
   if (!build) return null;
@@ -172,7 +183,7 @@ async function answerWhileUnanswered(
     let usable = true;
     try {
       while (passes < MAX_PASSES) {
-        const answered = await answerLatest(deps, budget, open, db, buildId, trace);
+        const answered = await answerLatest(deps, budget, open, db, buildId, trace, mayRetry);
         if (!answered) break;
         last = answered;
         passes++;
@@ -181,7 +192,9 @@ async function answerWhileUnanswered(
     } catch (error) {
       // The turn only fails this way when the connection couldn't be cleaned
       // up or the budget ran out — either way it is about to be destroyed.
-      usable = false;
+      // A retryable model failure is the exception: nothing is wrong here, so
+      // the lock is released the ordinary way and the retry finds it free.
+      usable = error instanceof TurnRetryableError;
       throw error;
     } finally {
       // Unlocking is worth a query on a healthy connection and nothing on a
@@ -234,6 +247,7 @@ async function answerLatest(
   db: Db,
   buildId: string,
   trace?: TraceContext,
+  mayRetry = false,
 ): Promise<Answered | undefined> {
   const { log } = deps;
   const [build] = await db
@@ -306,6 +320,14 @@ async function answerLatest(
     );
   } finally {
     await turnHandle.close({ withinMs: budget.cleanupMs() });
+  }
+
+  // Nothing written, and the caller retries: a transport failure spends an
+  // attempt, not the person's message. On the last attempt this is skipped and
+  // the fallback below is written, so no message is ever left unanswered.
+  if (mayRetry && outcome.kind === "reply" && RETRYABLE_REASONS.has(outcome.reason)) {
+    log("WARNING", "turn not answered; handing it back for a retry", { trace, fields: { buildId, reason: outcome.reason } });
+    throw new TurnRetryableError(outcome.reason);
   }
 
   const idleStatus = previous?.settled ? "planning" : "asking";

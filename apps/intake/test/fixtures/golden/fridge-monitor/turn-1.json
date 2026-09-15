@@ -11,7 +11,7 @@
     },
     {
       "type": "text",
-      "text": "{\"spec_patch\":{\"sense\":{\"what\":[\"temperature\",\"humidity\"],\"interval_s\":300},\"environment\":{\"location\":\"inside a kitchen fridge\"},\"connect\":{\"transport\":\"wifi\",\"experience\":[\"phone notification\"]},\"experience\":{\"alerts\":[\"fridge too warm\",\"fridge too humid\"]},\"capabilities\":[\"read.temperature_c\",\"read.humidity_pct\",\"net.wifi\"]},\"candidate_questions\":[{\"field\":\"power.source\",\"question\":\"Will it run on a battery, or is there USB power near the fridge?\"}],\"assumptions\":[\"Connects over your home Wi-Fi\",\"Checks every 5 minutes\"],\"reply\":\"A fridge monitor that watches temperature and humidity and notifies you when either goes out of range. Will it run on a battery, or is there USB power near the fridge?\"}",
+      "text": "{\"reply_kind\": \"spec\", \"spec_patch\": {\"sense\": {\"what\": [\"temperature\", \"humidity\"], \"interval_s\": 300}, \"environment\": {\"location\": \"inside a kitchen fridge\"}, \"connect\": {\"transport\": \"wifi\", \"experience\": [\"phone notification\"]}, \"experience\": {\"alerts\": [\"fridge too warm\", \"fridge too humid\"]}, \"capabilities\": [\"read.temperature_c\", \"read.humidity_pct\", \"net.wifi\"]}, \"candidate_questions\": [{\"field\": \"power.source\", \"question\": \"Will it run on a battery, or is there USB power near the fridge?\"}], \"assumptions\": [\"Connects over your home Wi-Fi\", \"Checks every 5 minutes\"], \"reply\": \"A fridge monitor that watches temperature and humidity and notifies you when either goes out of range. Will it run on a battery, or is there USB power near the fridge?\"}",
       "citations": null
     }
   ],

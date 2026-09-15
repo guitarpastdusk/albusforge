@@ -167,7 +167,14 @@ describe("build conversation outcomes", () => {
       ok: true,
       data: { buildId: "bld_1", messages: [ASK], ready: null, status: "asking", specVersion: null, spec: null, candidateParts: [] },
     });
-    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds", expect.anything(), { ask_text: "A soil sensor", client_message_id: CLIENT_ID, expected_tenant_id: null });
+    // The send is bounded like the reads are: a lost request must fail, not hang the chat.
+    expect(client.mutate).toHaveBeenCalledWith(
+      "POST",
+      "/v1/builds",
+      expect.anything(),
+      { ask_text: "A soil sensor", client_message_id: CLIENT_ID, expected_tenant_id: null },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("startBuild whose transcript read fails still returns the build, showing the ask (logged once, not a failed send)", async () => {
@@ -185,7 +192,13 @@ describe("build conversation outcomes", () => {
     vi.mocked(sessionClient).mockResolvedValue(client as never);
 
     await expect(sendBuildMessage("bld_1", "One bed", CLIENT_ID)).resolves.toEqual({ ok: true, data: { message } });
-    expect(client.mutate).toHaveBeenCalledWith("POST", "/v1/builds/bld_1/messages", expect.anything(), { text: "One bed", client_message_id: CLIENT_ID });
+    expect(client.mutate).toHaveBeenCalledWith(
+      "POST",
+      "/v1/builds/bld_1/messages",
+      expect.anything(),
+      { text: "One bed", client_message_id: CLIENT_ID },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(client.get).not.toHaveBeenCalled();
   });
 

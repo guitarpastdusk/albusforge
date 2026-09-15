@@ -11,7 +11,7 @@ import { request, requestWithCookies, type Transport } from "./core";
 export interface SessionClient {
   /** `signal` aborts the read, headers and body alike. */
   get<S extends z.ZodType>(path: string, schema: S, options?: { signal?: AbortSignal }): Promise<z.infer<S>>;
-  mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown): Promise<z.infer<S>>;
+  mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown, options?: { signal?: AbortSignal }): Promise<z.infer<S>>;
   /** Whether a mutation set or deleted this credential cookie. Never exposes its value. */
   credentialChange(name: string): "set" | "deleted" | undefined;
 }
@@ -36,8 +36,8 @@ export function createSessionClient({
       return request(await transportFor(cookies), "GET", path, schema, undefined, options?.signal);
     },
 
-    async mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown) {
-      const { data, setCookies } = await requestWithCookies(await transportFor(cookies), method, path, schema, body);
+    async mutate<S extends z.ZodType>(method: Method, path: string, schema: S, body?: unknown, options?: { signal?: AbortSignal }) {
+      const { data, setCookies } = await requestWithCookies(await transportFor(cookies), method, path, schema, body, options?.signal);
       const relays = relayableCookies(setCookies, now());
       applyRelays(relays, writer);
       cookies = mergeCookieHeader(cookies, relays);

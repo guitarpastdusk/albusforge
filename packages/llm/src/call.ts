@@ -24,7 +24,8 @@ export type CallFailure = "refusal" | "max_tokens" | "invalid_output" | "token_c
  * inside the exchange with the model and never reach a log or a caller. What
  * comes back is a fixed class, plus values that can only come from our own
  * code or from the transport: schema paths and Zod issue codes (both from the
- * schema we sent), the error's class name, an HTTP status and a request id.
+ * schema we sent), the error's class name, the transport's own error code, an
+ * HTTP status and a request id.
  */
 export interface CallDiagnostic {
   /** A fixed class, never text derived from the model or the person. */
@@ -39,6 +40,10 @@ export interface CallDiagnostic {
   status?: number;
   /** The API's request id: safe to log and the only way to find a call in the provider's logs. */
   requestId?: string;
+  /** The transport's own code from the error's cause chain, e.g. `ENOTFOUND`, `UND_ERR_CONNECT_TIMEOUT`. */
+  causeCode?: string;
+  /** Transport attempts made, when more than one: `calls` counts only requests the API answered. */
+  attempts?: number;
 }
 
 export type CallResult<T> =
@@ -65,6 +70,19 @@ export interface CallOptions {
 
 /** At most one truncation retry plus one repair retry. */
 const MAX_CALLS = 3;
+
+/**
+ * Retries for a request that never reached the API. The SDK retries too, but
+ * its three attempts land inside about two seconds — too fast to outlast a
+ * route that isn't up yet (the case `awaitEgress` covers at startup, and a
+ * NAT hiccup mid-life that nothing else can). These are spaced to cross one,
+ * and are spent from the caller's deadline like everything else.
+ *
+ * Only transport failures are retried: an error carrying an HTTP status was
+ * answered by the API, and the SDK has already retried whatever was worth
+ * retrying there.
+ */
+const CONNECTION_BACKOFF_MS = [1_000, 3_000, 6_000];
 
 const MAX_REPAIR_DETAIL = 1500;
 /** Enough paths to guide a fix without turning the log line into a schema dump. */
@@ -117,8 +135,41 @@ function repairTurn(text: string, detail: string): LlmMessage[] {
   ];
 }
 
-const isAbort = (signal: AbortSignal | undefined, error: unknown) =>
-  signal?.aborted === true || (error instanceof Error && error.name === "APIUserAbortError");
+/**
+ * The SDK's error classes don't set `name`, so every one of them reports the
+ * base `"Error"`; the constructor name is the only thing that tells a
+ * connection failure from a 401. An explicitly set `name` still wins, so
+ * anything that does set one is reported as it named itself.
+ */
+function errorClass(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  return error.name === "Error" ? (error.constructor?.name ?? error.name) : error.name;
+}
+
+const isAbort = (signal: AbortSignal | undefined, error: unknown) => signal?.aborted === true || errorClass(error) === "APIUserAbortError";
+
+/** Waits, or returns early the moment the turn is abandoned. */
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** The first `code` in the error's cause chain: undici's ENOTFOUND, ECONNREFUSED, UND_ERR_*. */
+function causeCode(error: unknown): string | undefined {
+  for (let current: unknown = error, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
 
 /**
  * What is safe to keep from a thrown provider error: its class, the HTTP
@@ -127,11 +178,15 @@ const isAbort = (signal: AbortSignal | undefined, error: unknown) =>
  */
 function providerDiagnostic(error: unknown, aborted: boolean): CallDiagnostic {
   const diagnostic: CallDiagnostic = { reason: aborted ? "aborted" : "provider_error" };
-  if (error instanceof Error) diagnostic.errorName = error.name;
+  const name = errorClass(error);
+  if (name !== undefined) diagnostic.errorName = name;
   const status = (error as { status?: unknown }).status;
   if (typeof status === "number") diagnostic.status = status;
-  const requestId = (error as { request_id?: unknown }).request_id;
+  // `requestID` is the SDK's field; `request_id` is what the API calls it.
+  const requestId = (error as { requestID?: unknown }).requestID ?? (error as { request_id?: unknown }).request_id;
   if (typeof requestId === "string") diagnostic.requestId = requestId;
+  const code = causeCode(error);
+  if (code !== undefined) diagnostic.causeCode = code;
   return diagnostic;
 }
 
@@ -159,6 +214,8 @@ export async function callStructured<S extends z.ZodType>(
   let truncationRetried = false;
   let repaired = false;
   let calls = 0;
+  let attempts = 0;
+  let reconnects = 0;
 
   while (calls < MAX_CALLS) {
     if (signal?.aborted) return { ok: false, failure: "deadline", calls };
@@ -166,10 +223,20 @@ export async function callStructured<S extends z.ZodType>(
 
     let response: LlmResponse;
     try {
+      attempts++;
       response = await provider.create(buildRequest(route, { model, maxTokens, format, messages: transcript }), { signal });
     } catch (error) {
       const aborted = isAbort(signal, error);
-      return { ok: false, failure: aborted ? "deadline" : "provider_error", calls, diagnostic: providerDiagnostic(error, aborted) };
+      const diagnostic = { ...providerDiagnostic(error, aborted), ...(attempts > 1 ? { attempts } : {}) };
+      // Nothing reached the API: no call was made, so this costs neither a
+      // call from the budget nor a duplicate of anything the model has seen.
+      const backoff = CONNECTION_BACKOFF_MS[reconnects];
+      if (!aborted && diagnostic.status === undefined && backoff !== undefined) {
+        reconnects++;
+        await pause(backoff, signal);
+        continue;
+      }
+      return { ok: false, failure: aborted ? "deadline" : "provider_error", calls, diagnostic };
     }
     calls++;
 

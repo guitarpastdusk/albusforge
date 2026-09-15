@@ -232,7 +232,7 @@ describe("POST /v1/builds", () => {
     expect(row?.tenantId).toBeNull();
 
     await turns.idle();
-    expect(intakeCalls).toEqual([{ build_id: body.id }]);
+    expect(intakeCalls).toEqual([{ build_id: body.id, may_retry: true }]);
     expect(rawLines.join("")).not.toContain(token);
   });
 
@@ -420,7 +420,7 @@ describe("messages", () => {
     expect(PostMessageResponse.parse(again.json()).message.id).toBe(message.id);
 
     await turns.idle();
-    expect(intakeCalls).toEqual([{ build_id: body.id }]);
+    expect(intakeCalls).toEqual([{ build_id: body.id, may_retry: true }]);
     const stored = await handle.db.select().from(buildMessages).where(eq(buildMessages.buildId, body.id));
     expect(stored.filter((m) => m.clientMessageId === clientMessageId)).toHaveLength(1);
   });
@@ -437,7 +437,7 @@ describe("messages", () => {
     expect(sorted(responses.map((r) => r.statusCode))).toEqual([200, 200, 200, 200, 200, 202]);
     expect(new Set(responses.map((r) => PostMessageResponse.parse(r.json()).message.id)).size).toBe(1);
     await turns.idle();
-    expect(intakeCalls).toEqual([{ build_id: body.id }]);
+    expect(intakeCalls).toEqual([{ build_id: body.id, may_retry: true }]);
   });
 
   it("admits one of several concurrent messages with different client ids; the others get 409", async () => {
@@ -495,7 +495,12 @@ describe("messages", () => {
     intakeStatus = 500;
     const { body, cookie } = await createBuild(app);
     await turns.idle();
-    expect(intakeCalls).toEqual([{ build_id: body.id }, { build_id: body.id }]);
+    // The first attempt is allowed to hand a transient failure back; the retry
+    // is the last word, so intake writes whatever reply it has.
+    expect(intakeCalls).toEqual([
+      { build_id: body.id, may_retry: true },
+      { build_id: body.id, may_retry: false },
+    ]);
     expect(lines).toContainEqual(
       expect.objectContaining({ severity: "WARNING", message: "intake turn failed", buildId: body.id, attempt: 2, intakeStatus: 500 }),
     );
@@ -522,7 +527,7 @@ describe("messages", () => {
       );
     expect((await burst()).map((r) => r.statusCode)).toEqual(Array(8).fill(200));
     await turns.idle();
-    expect(intakeCalls).toEqual([{ build_id: body.id }]);
+    expect(intakeCalls).toEqual([{ build_id: body.id, may_retry: true }]);
     expect(lines.filter((l) => l.message === "recovering an unanswered turn")).toHaveLength(1);
 
     // Still unanswered (the stub only answers noop), but inside the minute: no second turn.

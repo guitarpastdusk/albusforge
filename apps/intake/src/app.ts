@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type ApiError, IntakeTurnRequest, IntakeTurnResponse } from "@albusforge/schema";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import { isDatabaseUnavailable } from "./db-errors";
+import { isDatabaseUnavailable, TurnRetryableError } from "./db-errors";
 import { createLogger, type Log, type TraceContext, traceFromHeaders } from "./log";
 
 /**
@@ -17,7 +17,7 @@ declare module "fastify" {
 
 export interface AppOptions {
   /** Resolves the turn; null when the build doesn't exist. */
-  turns: (buildId: string, trace?: TraceContext) => Promise<IntakeTurnResponse | null>;
+  turns: (buildId: string, trace?: TraceContext, mayRetry?: boolean) => Promise<IntakeTurnResponse | null>;
   ping: () => Promise<void>;
   log?: Log;
   readyTimeoutMs?: number;
@@ -74,6 +74,10 @@ export function buildApp({ turns, ping, log = createLogger(), readyTimeoutMs = 2
     const status = (error as { statusCode?: number }).statusCode;
     if (status !== undefined && status >= 400 && status < 500) return sendError(reply, status, "BAD_REQUEST", (error as Error).message);
     const fields = { requestId: request.id, method: request.method, route: request.routeOptions.url ?? null, path: pathOf(request.url) };
+    if (error instanceof TurnRetryableError) {
+      log("WARNING", "turn handed back for a retry", { error: rootCause(error), trace: request.trace, fields: { ...fields, reason: error.reason } });
+      return sendError(reply, 503, "UNAVAILABLE", "Turn failed; retry", { request_id: request.id });
+    }
     if (isDatabaseUnavailable(error)) {
       log("WARNING", "database unavailable", { error: rootCause(error), trace: request.trace, fields });
       return sendError(reply, 503, "UNAVAILABLE", "Database unavailable", { request_id: request.id });
@@ -102,7 +106,7 @@ export function buildApp({ turns, ping, log = createLogger(), readyTimeoutMs = 2
       const details = body.error.issues.map((issue) => ({ path: issue.path.map(String).join("."), message: issue.message }));
       return sendError(reply, 400, "BAD_REQUEST", "Invalid body", details);
     }
-    const result = await turns(body.data.build_id, request.trace);
+    const result = await turns(body.data.build_id, request.trace, body.data.may_retry);
     if (result === null) return sendError(reply, 404, "NOT_FOUND", "No such build");
     return IntakeTurnResponse.parse(result);
   });

@@ -4,7 +4,7 @@ Prompts are versioned files, never string literals in code (ARCHITECTURE.md §3)
 
 | File | Sent as | Cached |
 | --- | --- | --- |
-| `extract.v1.md` | the system prompt, followed by the part catalogue | yes: system prompt and catalogue sit before the cache breakpoint |
+| `extract.v2.md` | the system prompt, followed by the part catalogue | yes: system prompt and catalogue sit before the cache breakpoint |
 | `turn.v1.md` | a `role: "system"` message after the latest user message: rounds used and the current spec | no: it changes every turn, so it goes after the breakpoint |
 
 The person's text is never interpolated into either file. It reaches the model only as user turns.

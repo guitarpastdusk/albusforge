@@ -7,7 +7,7 @@
     { "type": "thinking", "thinking": "", "signature": "fixture-signature" },
     {
       "type": "text",
-      "text": "{\"spec_patch\":{\"sense\":{\"what\":[\"temperature\",\"humidity\"]},\"connect\":{\"transport\":\"wifi\"},\"capabilities\":[\"read.temperature_c\",\"read.humidity_pct\",\"net.wifi\"]},\"candidate_questions\":[{\"field\":\"power.source\",\"question\":\"Will it run on a battery, or can it plug into USB?\"}],\"assumptions\":[\"Connects over Wi-Fi\"],\"reply\":\"A fridge monitor that tracks temperature and humidity. Will it run on a battery, or can it plug into USB?\"}",
+      "text": "{\"reply_kind\":\"spec\",\"spec_patch\":{\"sense\":{\"what\":[\"temperature\",\"humidity\"]},\"connect\":{\"transport\":\"wifi\"},\"capabilities\":[\"read.temperature_c\",\"read.humidity_pct\",\"net.wifi\"]},\"candidate_questions\":[{\"field\":\"power.source\",\"question\":\"Will it run on a battery, or can it plug into USB?\"}],\"assumptions\":[\"Connects over Wi-Fi\"],\"reply\":\"A fridge monitor that tracks temperature and humidity. Will it run on a battery, or can it plug into USB?\"}",
       "citations": null
     }
   ],

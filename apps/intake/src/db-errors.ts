@@ -46,6 +46,25 @@ export class DatabaseUnavailableError extends Error {
   }
 }
 
+/**
+ * The turn failed in a way another attempt could fix — the model API was
+ * unreachable, or something threw — and the caller said it would retry
+ * (`may_retry`). Nothing is written, the route answers 503, and gateway's
+ * retry answers the message. Without a retry ahead of it the turn writes its
+ * fallback reply instead, so a message is never left unanswered.
+ */
+export class TurnRetryableError extends Error {
+  override readonly name = "TurnRetryableError";
+  readonly code = "TURN_RETRYABLE";
+
+  constructor(
+    readonly reason: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`the turn failed with ${reason}; the caller retries this`, options);
+  }
+}
+
 /** Checks the error and its `cause` chain: Drizzle wraps pg errors in DrizzleQueryError. */
 export function isDatabaseUnavailable(error: unknown): boolean {
   for (let current = error, depth = 0; current instanceof Error && depth < 5; current = current.cause, depth++) {

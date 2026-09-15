@@ -14,7 +14,7 @@ import { type Decision, decide, MAX_CLARIFICATION_ROUNDS } from "./decide";
 import type { Log } from "./log";
 import { screen, type ScopeCategory } from "./policy";
 import { EXTRACT_ROUTE_NAME, type Prompts, renderTemplate } from "./prompts";
-import { FALLBACK_REPLY, outOfScopeReply, REFUSAL_REPLY, TOKEN_CEILING_REPLY } from "./replies";
+import { FALLBACK_REPLY, offTopicReply, outOfScopeReply, REFUSAL_REPLY, TOKEN_CEILING_REPLY } from "./replies";
 
 /** One turn without the database: scope filter, catalogue, model call, decision. */
 
@@ -49,7 +49,7 @@ export interface TurnInput {
 
 export type TurnOutcome =
   | { kind: "spec"; decision: Decision }
-  | { kind: "reply"; reason: "out_of_scope" | CallFailure | "error"; reply: string; category?: ScopeCategory };
+  | { kind: "reply"; reason: "out_of_scope" | "off_topic" | CallFailure | "error"; reply: string; category?: ScopeCategory };
 
 /** Output limits for a chat turn: adaptive thinking counts against max_tokens. */
 export const EXTRACT_MAX_TOKENS = 8000;
@@ -89,6 +89,16 @@ export function modelMessages(transcript: readonly TranscriptMessage[], turnCont
   const messages: LlmMessage[] = transcript.slice(Math.max(firstUser, 0)).map((m) => ({ role: m.role, content: m.text }));
   messages.push({ role: "system", content: turnContext });
   return messages;
+}
+
+/**
+ * Whether the reply before this message was already an off-topic one. The
+ * transcript is the whole record of the build, so no extra state is needed to
+ * tell a first stray message from a second.
+ */
+function wasOffTopic(transcript: readonly TranscriptMessage[]): boolean {
+  const previousReply = transcript.filter((m) => m.role === "assistant").at(-1);
+  return previousReply !== undefined && (previousReply.text === offTopicReply(false) || previousReply.text === offTopicReply(true));
 }
 
 const FAILURE_REPLY: Record<CallFailure, string> = {
@@ -133,6 +143,13 @@ export async function runTurn(ctx: TurnContext, input: TurnInput): Promise<TurnO
       fields: { buildId: input.buildId, failure: result.failure, calls: result.calls, ...result.diagnostic },
     });
     return { kind: "reply", reason: result.failure, reply: FAILURE_REPLY[result.failure] };
+  }
+
+  // A message that isn't about building a device ends here: code writes the
+  // reply, no spec version is written, and the clarification rounds are
+  // untouched — an off-topic message can't spend one.
+  if (result.value.reply_kind === "off_topic") {
+    return { kind: "reply", reason: "off_topic", reply: offTopicReply(wasOffTopic(input.transcript)) };
   }
 
   const decision = decide({ previous: input.previous, turn: result.value, vocabulary: catalogue.vocabulary, roundsUsed: input.roundsUsed });

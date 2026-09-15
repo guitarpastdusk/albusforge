@@ -15,7 +15,13 @@ export const TurnResult = z.union([
 export type TurnResult = z.infer<typeof TurnResult>;
 
 export interface IntakeClient {
-  turn(buildId: string, signal: AbortSignal): Promise<TurnResult>;
+  /**
+   * `mayRetry` tells intake this isn't our last word: a transient failure can
+   * come back as a 503 with nothing written, and the retry below answers the
+   * message properly. False on the last attempt, so the person always ends up
+   * with exactly one reply.
+   */
+  turn(buildId: string, signal: AbortSignal, mayRetry?: boolean): Promise<TurnResult>;
 }
 
 export class IntakeError extends Error {
@@ -59,12 +65,12 @@ export interface HttpIntakeOptions {
 export function httpIntakeClient({ url, authHeader, fetch: fetchImpl = fetch }: HttpIntakeOptions): IntakeClient {
   const endpoint = `${url.replace(/\/+$/, "")}/v1/turns`;
   return {
-    async turn(buildId, signal) {
+    async turn(buildId, signal, mayRetry = false) {
       const authorization = await authHeader();
       const response = await fetchImpl(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) },
-        body: JSON.stringify({ build_id: buildId }),
+        body: JSON.stringify({ build_id: buildId, may_retry: mayRetry }),
         signal,
       });
       if (!response.ok) {
@@ -172,8 +178,11 @@ export function createTurnScheduler({
     }
     const started = Date.now();
     for (let attempt = 1; ; attempt++) {
+      // Only the first attempt may hand a transient failure back: on the last
+      // one intake writes whatever reply it has, so the message is answered.
+      const mayRetry = attempt === 1;
       try {
-        const result = await withDeadline((signal) => intake.turn(buildId, signal), timeoutMs);
+        const result = await withDeadline((signal) => intake.turn(buildId, signal, mayRetry), timeoutMs);
         log("INFO", "intake turn completed", {
           trace: context.trace,
           fields: {

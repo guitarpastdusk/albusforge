@@ -11,13 +11,13 @@ import {
   TelemetryMetadataRequest,
   routes,
 } from "@albusforge/schema";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import { HttpError, parse } from "./http";
 import { assertSameOrigin } from "./mutation-origin";
 import { updateDeviceMetadata } from "./telemetry-metadata";
-import { withSession } from "./session";
+import { withPublicTenant, withSession } from "./session";
 
 // Explicit public projection: source snapshots and token hashes never leave SQL.
 const RECEIVED = `GREATEST(last_seen_at,(SELECT max(p.last_received_at) FROM telemetry.capability_presence p WHERE p.device_id=devices.id))`;
@@ -70,13 +70,67 @@ async function device(
   return row;
 }
 
-export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
+/**
+ * Where a read's tenant comes from, and what it may show.
+ *
+ * The session source derives it from the caller's cookie; the public source
+ * ignores the request entirely and uses a configured id. Both drive the *same*
+ * handlers below, so the public surface cannot drift away from the private one
+ * — a field added to a device page appears on both or neither, rather than the
+ * public projection quietly falling behind what it is supposed to mirror.
+ */
+export interface ReadSource {
+  patterns: { devices: string; device: string; latest: string; series: string };
+  /** `user` is null for the public source, which suppresses the permissions block. */
+  run<T>(
+    request: FastifyRequest,
+    read: (client: PoolClient, tenantId: string, userId: string | null) => Promise<T>,
+    options?: { historyLayout?: boolean },
+  ): Promise<T>;
+  cacheControl: string;
+  /** Only the session source carries the metadata write. */
+  writes: boolean;
+}
+
+export const sessionReads = (pool: Pool): ReadSource => ({
+  patterns: {
+    devices: routes.telemetry.devices.pattern,
+    device: routes.telemetry.device.pattern,
+    latest: routes.telemetry.latest.pattern,
+    series: routes.telemetry.series.pattern,
+  },
+  run: (request, read, options) => withSession(pool, request.headers.cookie, request.hostname, read, options),
+  cacheControl: "private, no-store",
+  writes: true,
+});
+
+/**
+ * Anyone, signed in or not. `tenantId` is resolved once by the caller at
+ * registration and closed over here, so no handler has a request-derived tenant
+ * available to use by mistake.
+ */
+export const publicReads = (pool: Pool, tenantId: string): ReadSource => ({
+  patterns: {
+    devices: routes.publicLive.devices.pattern,
+    device: routes.publicLive.device.pattern,
+    latest: routes.publicLive.latest.pattern,
+    series: routes.publicLive.series.pattern,
+  },
+  run: (_request, read, options) => withPublicTenant(pool, tenantId, read, options),
+  // Public, but never cached: these are live readings, and a stale one reads as
+  // a device that has stopped reporting.
+  cacheControl: "no-store",
+  writes: false,
+});
+
+export function registerTelemetryReads(app: FastifyInstance, pool: Pool, source: ReadSource = sessionReads(pool)) {
   app.register(async (scope) => {
     // Applies to successes and authentication/validation/storage errors alike.
     scope.addHook("onRequest", async (_request, reply) => {
-      reply.header("cache-control", "private, no-store");
+      reply.header("cache-control", source.cacheControl);
     });
-    scope.patch(routes.telemetry.metadata.pattern, async (request) => {
+    if (source.writes)
+      scope.patch(routes.telemetry.metadata.pattern, async (request) => {
       assertSameOrigin(request);
       parse(z.strictObject({}), request.query, "query");
       const { id } = parse(TelemetryDeviceParams, request.params, "device id");
@@ -93,11 +147,9 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
         body,
       );
     });
-    scope.get(routes.telemetry.devices.pattern, async (request) =>
-      withSession(
-        pool,
-        request.headers.cookie,
-        request.hostname,
+    scope.get(source.patterns.devices, async (request) =>
+      source.run(
+        request,
         async (client, tenant) => {
           const query = parse(TelemetryFleetQuery, request.query, "query");
           const rows = (
@@ -124,11 +176,9 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
         },
       ),
     );
-    scope.get(routes.telemetry.device.pattern, async (request) =>
-      withSession(
-        pool,
-        request.headers.cookie,
-        request.hostname,
+    scope.get(source.patterns.device, async (request) =>
+      source.run(
+        request,
         async (client, tenant, user) => {
           const query = parse(TelemetryDeviceQuery, request.query, "query");
           const { id } = parse(
@@ -164,11 +214,9 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
         },
       ),
     );
-    scope.get(routes.telemetry.latest.pattern, async (request) =>
-      withSession(
-        pool,
-        request.headers.cookie,
-        request.hostname,
+    scope.get(source.patterns.latest, async (request) =>
+      source.run(
+        request,
         async (client, tenant) => {
           parse(z.strictObject({}), request.query, "query");
           const { id } = parse(
@@ -204,11 +252,9 @@ export function registerTelemetryReads(app: FastifyInstance, pool: Pool) {
         },
       ),
     );
-    scope.get(routes.telemetry.series.pattern, async (request) =>
-      withSession(
-        pool,
-        request.headers.cookie,
-        request.hostname,
+    scope.get(source.patterns.series, async (request) =>
+      source.run(
+        request,
         async (client, tenant) => {
           const { id } = parse(
             TelemetryDeviceParams,

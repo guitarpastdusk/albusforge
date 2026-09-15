@@ -46,6 +46,8 @@ export interface GatewayConfig {
   deviceProvisioning: DeviceProvisioningOptions;
   port: number;
   sensorAsk: IntakeConfig;
+  /** Null registers no public routes: the surface does not exist by default. */
+  publicLiveTenantId: string | null;
   db: DbConfig;
   dbTimeouts: DbTimeouts;
   intake: IntakeConfig;
@@ -66,6 +68,13 @@ const ServerEnv = z.object({
   DB_CONNECT_TIMEOUT_MS: Millis.default(5000),
   DB_QUERY_TIMEOUT_MS: Millis.default(10_000),
   DB_IDLE_TIMEOUT_MS: Millis.default(30_000),
+  /**
+   * The tenant whose devices are readable without a session. Unset — the
+   * default — registers no public routes at all. Never resolved from an email
+   * or anything else at request time: a pinned id is the only thing that makes
+   * "which tenant is public" a deployment decision rather than a code path.
+   */
+  SHOWCASE_TENANT_ID: z.uuid().optional(),
   ASK_URL: z.url({ protocol: /^https?$/ }).optional(),
   ASK_AUTH: z.enum(["google", "none"]).default("google"),
   INTAKE_URL: z.url({ protocol: /^https?$/ }).optional(),
@@ -127,6 +136,7 @@ export function configFromEnv(env: Env = process.env): GatewayConfig {
     deviceProvisioning: deviceProvisioningFromEnv(env),
     port: e.PORT,
     sensorAsk: { url: e.ASK_URL ?? null, auth: e.ASK_AUTH },
+    publicLiveTenantId: e.SHOWCASE_TENANT_ID ?? null,
     db,
     dbTimeouts: {
       connectMs: e.DB_CONNECT_TIMEOUT_MS,

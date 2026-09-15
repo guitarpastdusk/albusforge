@@ -58,6 +58,12 @@ locals {
     }
   }
 
+  # The tenant whose devices are readable without signing in. Empty registers no
+  # public routes at all, so the surface does not exist unless an environment
+  # names a tenant. A public page serving one tenant's telemetry is a decision,
+  # so it lives in a variable rather than defaulting on.
+  public_live_env = var.showcase_tenant_id == "" ? {} : { SHOWCASE_TENANT_ID = var.showcase_tenant_id }
+
   settings  = local.all_settings[local.env]
   bootstrap = data.terraform_remote_state.bootstrap.outputs
 

@@ -30,6 +30,37 @@ export function tenantSlug(host: string): string | null {
 }
 
 /** Authentication and reads share a consistent, read-only snapshot. */
+/**
+ * The same read transaction as `withSession`, for a surface that has no session
+ * at all: the tenant comes from configuration and the request is never
+ * consulted. Nothing about the caller is in scope here — no cookie, no host, no
+ * user — so a later edit cannot derive a tenant from anything the caller
+ * controls. That is the whole safety property of the public surface: a bug can
+ * show the configured tenant's data or nothing, and cannot reach another
+ * tenant's.
+ */
+export async function withPublicTenant<T>(pool: Pool, tenantId: string,
+  read: (client: PoolClient, tenantId: string, userId: null) => Promise<T>,
+  options: { historyLayout?: boolean } = {}): Promise<T> {
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    if (options.historyLayout) await client.query("LOCK TABLE ONLY telemetry.readings IN ACCESS SHARE MODE");
+    // Resolved rather than trusted: a configured id that names no tenant is a
+    // misconfiguration, and must not read as an empty but healthy showcase.
+    const tenant = (await client.query<{ id: string }>("SELECT id FROM users.tenants WHERE id=$1", [tenantId])).rows[0];
+    if (!tenant) throw new HttpError(404, "NOT_FOUND", "Unknown tenant");
+    const result = await read(client, tenant.id, null);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    discard = !(error instanceof HttpError);
+    await client.query("ROLLBACK").catch(() => { discard = true; });
+    throw error;
+  } finally { client.release(discard); }
+}
+
 export async function withSession<T>(pool: Pool, cookie: string | undefined, host: string,
   read: (client: PoolClient, tenantId: string, userId: string) => Promise<T>,
   options: { historyLayout?: boolean } = {}): Promise<T> {

@@ -77,6 +77,7 @@ async function main(): Promise<void> {
 
   const app = buildApp({
     telemetryPool: pool,
+    publicLiveTenantId: config.publicLiveTenantId,
     observationStorage: observationStorageFromEnv(process.env, "OBSERVATION_READS_ENABLED"),
     deviceProvisioning: config.deviceProvisioning,
     firmware: firmwareOptionsFromEnv(process.env),
@@ -138,6 +139,7 @@ async function main(): Promise<void> {
       dbName: config.db.database,
       dbUser: config.db.user,
       dbTimeoutsMs: config.dbTimeouts,
+      publicLive: config.publicLiveTenantId ? "on" : "off",
     },
   });
 }

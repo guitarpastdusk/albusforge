@@ -1,5 +1,7 @@
 import type { DeviceSetupStatus } from "@albusforge/schema";
 import Link from "next/link";
+import { BuildCircuitDiagram } from "@/components/marketplace/BuildCircuitDiagram";
+import { provisionedWiring } from "@/lib/provisioned-wiring";
 import { RefreshSetup } from "./RefreshSetup";
 
 const COPY: Record<DeviceSetupStatus["state"], { title: string; description: string }> = {
@@ -17,6 +19,7 @@ export function DeviceSetupView({ setup }: { setup: DeviceSetupStatus }) {
     .filter((time): time is string => time !== null).map(time => Date.parse(time)).filter(Number.isFinite);
   const lastAccepted = receiptTimes.length ? new Date(Math.max(...receiptTimes)).toISOString() : "None recorded";
   const waiting = setup.state === "waiting_for_upload" || setup.state === "waiting_for_channels" || setup.state === "waiting_for_capabilities";
+  const wiring = provisionedWiring(setup.channels.map((channel) => channel.key));
   return (
     <section className="mt-8 space-y-6" aria-labelledby="setup-status">
       <div className="rounded-[24px] border border-hairline bg-white p-6">
@@ -37,6 +40,20 @@ export function DeviceSetupView({ setup }: { setup: DeviceSetupStatus }) {
           <p className="mt-2 text-sm text-muted">Last capture: {cap.last_capture_at ?? "Waiting"}</p>
           <p className="text-sm text-muted">Last received: {cap.last_received_at ?? "Waiting"}</p>
         </li>)}</ul>
+      </div>}
+      {wiring && <div className="rounded-[24px] border border-hairline bg-white p-6">
+        <h2 className="font-display text-[26px]">How it wires up</h2>
+        <p className="mt-2 max-w-[760px] text-sm text-muted">
+          The header pins come from the assembly profile this device was built against, not from a default pin map — on this
+          board the camera occupies the pins a sensor would otherwise use.
+        </p>
+        <p className="mt-3 max-w-[760px] rounded-[12px] border border-dashed border-coral-deep/40 bg-porcelain px-4 py-3 text-sm text-coral-deep">
+          <span className="font-mono text-[12px] uppercase tracking-[0.16em]">Demo diagram</span>
+          <br />
+          Which build this device came from is inferred from the channels it reports, because the setup status doesn&apos;t record
+          it. Check it against the hardware in front of you before wiring anything.
+        </p>
+        <div className="mt-5"><BuildCircuitDiagram wiring={wiring} buildName="This device" /></div>
       </div>}
       {setup.channels.length > 0 && <div className="rounded-[24px] border border-hairline bg-white p-6">
         <h2 className="font-display text-[26px]">Registered channels</h2>

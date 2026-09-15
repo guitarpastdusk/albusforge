@@ -14,7 +14,7 @@ export function registerUsageRoutes(app: FastifyInstance, pool: Pool) {
         date_trunc('month',CURRENT_TIMESTAMP,'UTC') AS start,
         (date_trunc('month',CURRENT_TIMESTAMP AT TIME ZONE 'UTC')+interval '1 month') AT TIME ZONE 'UTC' AS end`)).rows[0]!;
       const rows = (await client.query<ModelConsumption & { stage: string | null }>(`WITH attributed AS (
-        SELECT CASE WHEN stage IN ('intake','codegen','bodygen','narration','ask','explain') THEN stage ELSE 'other' END AS category,
+        SELECT CASE WHEN stage IN ('intake','codegen','bodygen','narration','ask','device_chat','explain') THEN stage ELSE 'other' END AS category,
           input_tokens,output_tokens,cache_read_input_tokens,cache_creation_input_tokens,cost_usd
         FROM builds.llm_calls WHERE tenant_id=$1 AND created_at >= $2 AND created_at < $3
       ) SELECT category AS stage,count(*)::text AS calls,

@@ -41,7 +41,19 @@ locals {
     ASK_MODEL_ENABLED         = tostring(var.ask_model_enabled)
     LLM_PROVIDER              = "anthropic"
     GOOGLE_CLOUD_PROJECT      = local.project_id
-  }, var.ask_model_enabled ? { LLM_MODEL = var.ask_model } : {})
+    # A chat turn runs several model calls behind one request, so it gets its
+    # own switch, its own ceiling and a bounded number of iterations.
+    CHAT_ENABLED           = tostring(var.device_chat_enabled)
+    CHAT_MAX_OUTPUT_TOKENS = "1024"
+    CHAT_MAX_ITERATIONS    = "5"
+    CHAT_DEADLINE_MS       = "45000"
+    # Lower than the classifier's allowances: one chat turn is several frontier
+    # calls, so the same daily spend buys far fewer of them.
+    CHAT_USER_DAILY_REQUESTS   = "15"
+    CHAT_TENANT_DAILY_REQUESTS = "60"
+    CHAT_GLOBAL_DAILY_REQUESTS = "120"
+    }, var.ask_model_enabled ? { LLM_MODEL = var.ask_model } : {},
+  var.device_chat_enabled ? { CHAT_MODEL = var.device_chat_model } : {})
 }
 
 module "ask" {
@@ -56,10 +68,11 @@ module "ask" {
   min_instances       = 0
   max_instances       = local.settings.sensor_max_instances
   request_concurrency = local.settings.ask_pool_max
-  request_timeout     = "30s"
+  request_timeout     = var.device_chat_enabled ? "60s" : "30s"
   deletion_protection = local.settings.deletion_protection
   env                 = local.ask_env
-  secret_env = merge({ DB_PASSWORD = { secret = module.sql.app_password_secret } }, var.ask_model_enabled ? {
+  # Either paid feature needs the key; both read the same secret.
+  secret_env = merge({ DB_PASSWORD = { secret = module.sql.app_password_secret } }, (var.ask_model_enabled || var.device_chat_enabled) ? {
     ANTHROPIC_API_KEY = { secret = google_secret_manager_secret.external["anthropic-api-key"].id }
   } : {})
 }

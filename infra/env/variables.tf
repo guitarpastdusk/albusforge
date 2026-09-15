@@ -50,6 +50,22 @@ variable "ask_model_enabled" {
   default     = false
 }
 
+variable "device_chat_enabled" {
+  description = "Enable the multi-turn device chat. Separate from ask_model_enabled: this one lets the model write the reply, over tool calls it makes against stored readings."
+  type        = bool
+  default     = false
+}
+
+variable "device_chat_model" {
+  description = "Model for the device chat tool loop."
+  type        = string
+  default     = "claude-sonnet-5"
+  validation {
+    condition     = var.device_chat_model == "claude-sonnet-5"
+    error_message = "Only claude-sonnet-5 is approved for the device chat."
+  }
+}
+
 variable "ask_model" {
   description = "Provider model ID; required when Ask narration is enabled."
   type        = string

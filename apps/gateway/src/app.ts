@@ -30,6 +30,7 @@ import { registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
 
 import { registerSensorAsk, type SensorAskClient } from "./sensor-ask";
+import { registerDeviceChat, type DeviceChatClient } from "./device-converse";
 
 export { HttpError } from "./http";
 
@@ -48,6 +49,8 @@ export interface AppOptions {
   deviceProvisioning?: DeviceProvisioningOptions;
   firmware?: FirmwareOptions;
   sensorAsk?: SensorAskClient | null;
+  /** Multi-turn device chat. Shares the Ask service; null leaves the route answering 503. */
+  deviceChat?: DeviceChatClient | null;
   parts: PartsStore;
   /** Resolves when the database answers; rejects otherwise. */
   ping: () => Promise<void>;
@@ -80,7 +83,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, observationStorage, firmware = {enabled:false}, sensorAsk = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, observationStorage, firmware = {enabled:false}, sensorAsk = null, deviceChat = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -210,6 +213,7 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     registerFirmwareRoutes(app,telemetryPool,firmware);
     registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
+    registerDeviceChat(app, telemetryPool, deviceChat);
   }
 
   return app;

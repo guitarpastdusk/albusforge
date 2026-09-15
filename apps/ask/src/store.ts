@@ -10,14 +10,16 @@ export interface Store {
   started(request: SensorAskRequest, signal?: AbortSignal): Promise<void>;
   finish(request: SensorAskRequest, outcome: "model" | "evidence_only", usage?: LlmCallRecord, signal?: AbortSignal): Promise<void>;
 }
-async function authorize(client: PoolClient, q: SensorAskRequest) {
+/** The only three fields authorization reads. Narrowed so callers that are not a sensor-ask request can pass their own scope. */
+export interface Scope { tenant_id: string; device_id: string; actor_id: string }
+export async function authorize(client: PoolClient, q: Scope) {
   const result = await client.query<{ channels: unknown }>(`SELECT d.channels FROM telemetry.devices d
     JOIN users.tenant_members m ON m.tenant_id=d.tenant_id
     WHERE d.tenant_id=$1 AND d.id=$2 AND m.user_id=$3`, [q.tenant_id, q.device_id, q.actor_id]);
   if (!result.rows[0]) throw new AskError(404, "NOT_FOUND", "Sensor not found");
   return TelemetryChannels.parse(result.rows[0].channels);
 }
-async function transaction<T>(pool: Pool, read: boolean, work: (client: PoolClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function transaction<T>(pool: Pool, read: boolean, work: (client: PoolClient) => Promise<T>, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted();
   let client: PoolClient | undefined;
   let released = false;

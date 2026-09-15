@@ -5,7 +5,7 @@ const mocked = vi.hoisted(() => ({ get: vi.fn(), session: vi.fn() }));
 vi.mock("@/lib/api/server", () => ({ apiGet: mocked.get, orNotFound: (value: Promise<unknown>) => value }));
 vi.mock("@/lib/session", () => ({ requireSession: mocked.session }));
 vi.mock("./ObservationGallery", () => ({ ObservationGallery: () => <section>Camera gallery</section> }));
-vi.mock("@/components/devices/DeviceChat", () => ({ DeviceChat: () => <section>Numeric sensor chat</section> }));
+vi.mock("@/components/devices/DeviceConsole", () => ({ DeviceConsole: () => <section>Numeric sensor chat</section> }));
 import DevicePage from "@/app/(app)/live/[deviceId]/page";
 const id = "11111111-1111-4111-8111-111111111111";
 const camera = { id: "camera.front", kind: "image", schema: "jpeg.v1", enabled: true, required: true, interval_s: 900, last_capture_at: null, last_received_at: null, status: "waiting" };
@@ -23,8 +23,12 @@ it.each([false, true])("renders camera content with numeric sections only when c
   expect(html).toContain("camera.front every 900 seconds");
   expect(html).not.toContain("Offline means no recent packet");
   if (!mixed) expect(html).not.toContain("No device health packet");
-  for (const text of ["Latest readings", "Reading history", "Numeric sensor chat"]) {
+  // Numeric sections still require numeric channels.
+  for (const text of ["Latest readings", "Reading history"]) {
     if (mixed) expect(html).toContain(text); else expect(html).not.toContain(text);
   }
+  // The chat does not: it answers status and provisioning questions from the
+  // device itself, which is exactly what a camera-only or silent device needs.
+  expect(html).toContain("Numeric sensor chat");
   if (!mixed) expect(mocked.get.mock.calls.some(([path]) => String(path).includes("/series"))).toBe(false);
 });

@@ -1053,7 +1053,7 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | ~~**Retention**~~ | **Reconciled by tiering** — 90 days raw, hourly rollups indefinitely (~0.3% of the volume), 7-year cold archive opt-in, local-first as a tenant flag. All three claims are true about different tiers; stating one in isolation is what made them look contradictory. [`CLOUD-PLATFORM.md`](CLOUD-PLATFORM.md) §5.1 |
 | **Part availability** | no mechanism for stock-out or discontinuation (§17.3) |
 | **Live device state** | everything in Postgres, vs Firestore for live state with realtime listeners and BigQuery for history. The partitioned-`readings` design assumes the Postgres answer |
-| **Inference tiering** | one LLM wrapper and one model, vs a three-tier reflex / SLM-policy / frontier-escalation loop. Nothing in the spec has a place for the runtime tier |
+| ~~**Inference tiering**~~ | **Resolved in code:** one `packages/llm` wrapper, a model per route — `claude-opus-5` for intake, `claude-haiku-4-5` for the Ask classifier, `claude-sonnet-5` for the device chat's tool loop — each with its own switch, ceiling and daily allowance. The reflex tier is on-device firmware rules. See [`DEVICE-CHAT.md`](DEVICE-CHAT.md) |
 
 ### 18.3 Sequencing
 
@@ -1065,10 +1065,10 @@ Each of these is a **fork, not a bug**: the spec is internally consistent, and s
 | **Stage count** | five in the deck, six in the spec |
 | **Guarantee stamps** | four on the slides, six in the appendix |
 
-### 18.4 Mechanical prerequisites
+### 18.4 Mechanical prerequisites — all done
 
-- Install `pnpm` and the `gcloud` CLI (neither present on the machine).
-- Create the two GCP projects; decide the billing account.
-- Confirm region (`us-central1` assumed).
-- Decide Anthropic-direct or Vertex.
-- Then execute M0.
+Kept for the record; none of these is outstanding. `pnpm` and `gcloud` are
+installed, both GCP projects exist with billing attached, the region is
+`us-central1`, the provider is the Anthropic API directly (`LLM_PROVIDER` is a
+literal in every service's config, and Vertex fails at startup by design), and
+M0 through M6 have shipped. See [`checkin/`](checkin/) for what landed when.

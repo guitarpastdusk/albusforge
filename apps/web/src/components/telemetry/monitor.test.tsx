@@ -144,7 +144,9 @@ describe("real route contracts", () => {
     ]);
     expect(html).toContain("0 C");
     expect(html).toContain("temporarily busy");
-    expect(html).not.toContain("Ask me");
+    // A failed history read must not take the conversation panel down with it:
+    // asking why the plot is empty is the point of having it there.
+    expect(html).toContain("Ask about this device");
   });
 });
 

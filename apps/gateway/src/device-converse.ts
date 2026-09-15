@@ -1,11 +1,11 @@
 import { DeviceConverseInput, DeviceConverseResponse, routes, type DeviceConverseRequest } from "@albusforge/schema";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { HttpError, parse } from "./http";
 import type { AuthHeader } from "./intake";
 import { RateLimiter } from "./rate-limit";
-import { withSession } from "./session";
+import { withPublicTenant, withSession } from "./session";
 
 export interface DeviceChatClient {
   converse(input: DeviceConverseRequest, signal: AbortSignal): Promise<DeviceConverseResponse>;
@@ -81,6 +81,46 @@ export function httpDeviceChatClient(url: string, authHeader: AuthHeader, fetchI
   };
 }
 
+/**
+ * The same chat, for a visitor with no session, on the pinned public tenant.
+ *
+ * Registered only when a tenant is configured, so the endpoint does not exist
+ * by default. Three things bound it, and none of them is the others' job:
+ * this limiter bounds burst per IP; the Ask service's durable daily ledger
+ * bounds spend, with every anonymous turn sharing one allowance; and the turn
+ * itself carries no actor, so nothing here can be mistaken for a member.
+ *
+ * The limiter is in-memory and per-instance (see rate-limit.ts), so it is
+ * defence in depth behind Cloud Armor and emphatically not the spend cap.
+ */
+export function registerPublicDeviceChat(
+  app: FastifyInstance,
+  pool: Pool,
+  chat: DeviceChatClient | null,
+  { tenantId, ip, timeoutMs = 55000 }: { tenantId: string; ip: (request: FastifyRequest) => Promise<string> | string; timeoutMs?: number },
+) {
+  // Tighter than the signed-in limit: a stranger has not been through sign-in,
+  // and one visitor should not be able to spend the shared daily allowance.
+  const limiter = new RateLimiter(5, 60000);
+  app.post(routes.publicLive.converse.pattern, { bodyLimit: 65536 }, async (req, reply) => {
+    reply.header("cache-control", "no-store");
+    const input = await withPublicTenant(pool, tenantId, async (client, tenant) => {
+      const { id } = parse(z.strictObject({ id: z.uuid() }), req.params, "device");
+      parse(z.strictObject({}), req.query, "query");
+      const body = parse(DeviceConverseInput, req.body, "question");
+      // The device must belong to the pinned tenant. `tenant` comes from the
+      // configuration this closure was registered with, never from the request.
+      const device = await client.query("SELECT 1 FROM telemetry.devices WHERE id=$1 AND tenant_id=$2", [id, tenant]);
+      if (!device.rowCount) throw new HttpError(404, "NOT_FOUND", "Device not found");
+      // Resolved before the limiter so a forged forwarding header cannot buy a
+      // fresh bucket: clientIp only trusts hops it can verify.
+      if (limiter.take(await ip(req))) throw new HttpError(429, "BUSY", "Too many questions; try again shortly");
+      return { ...body, request_id: req.id, device_id: id, tenant_id: tenant, actor_id: null, public: true };
+    });
+    return runChatTurn(chat, input, req, timeoutMs);
+  });
+}
+
 /** Above the Ask service's own chat deadline, so its deterministic fallback wins the race rather than this timeout. */
 export function registerDeviceChat(app: FastifyInstance, pool: Pool, chat: DeviceChatClient | null, timeoutMs = 55000) {
   const limiter = new RateLimiter(20, 60000);
@@ -95,28 +135,42 @@ export function registerDeviceChat(app: FastifyInstance, pool: Pool, chat: Devic
       const device = await client.query("SELECT 1 FROM telemetry.devices WHERE id=$1 AND tenant_id=$2", [id, tenant]);
       if (!device.rowCount) throw new HttpError(404, "NOT_FOUND", "Device not found");
       if (limiter.take(actor)) throw new HttpError(429, "BUSY", "Too many questions; try again shortly");
-      return { ...body, request_id: req.id, device_id: id, tenant_id: tenant, actor_id: actor };
+      return { ...body, request_id: req.id, device_id: id, tenant_id: tenant, actor_id: actor, public: false };
     });
-    if (!chat) throw new HttpError(503, "UNAVAILABLE", "Device chat is not configured");
-    const controller = new AbortController();
-    let timer: NodeJS.Timeout | undefined;
-    const abort = () => controller.abort();
-    req.raw.on("aborted", abort);
-    try {
-      const deadline = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Device chat deadline"));
-        }, timeoutMs);
-      });
-      return await Promise.race([chat.converse(input, controller.signal), deadline]);
-    } catch (error) {
-      if (error instanceof HttpError) throw error;
-      throw new HttpError(503, "UNAVAILABLE", "Device chat is unavailable; try again shortly");
-    } finally {
-      clearTimeout(timer);
-      req.raw.off("aborted", abort);
-      controller.abort();
-    }
+    return runChatTurn(chat, input, req, timeoutMs);
   });
+}
+
+/**
+ * Runs one turn upstream under a deadline, shared by the signed-in and public
+ * routes so a failure on the public surface is answered exactly as it is on the
+ * private one — deliberately one implementation, as with the read routes.
+ */
+async function runChatTurn(
+  chat: DeviceChatClient | null,
+  input: DeviceConverseRequest,
+  req: FastifyRequest,
+  timeoutMs: number,
+) {
+  if (!chat) throw new HttpError(503, "UNAVAILABLE", "Device chat is not configured");
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const abort = () => controller.abort();
+  req.raw.on("aborted", abort);
+  try {
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(new Error("Device chat deadline"));
+      }, timeoutMs);
+    });
+    return await Promise.race([chat.converse(input, controller.signal), deadline]);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(503, "UNAVAILABLE", "Device chat is unavailable; try again shortly");
+  } finally {
+    clearTimeout(timer);
+    req.raw.off("aborted", abort);
+    controller.abort();
+  }
 }

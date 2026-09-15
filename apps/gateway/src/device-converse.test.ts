@@ -7,6 +7,7 @@ const input = {
   tenant_id: randomUUID(),
   device_id: randomUUID(),
   actor_id: randomUUID(),
+  public: false,
   question: "How warm has it been?",
   history: [{ role: "user" as const, text: "hi" }, { role: "assistant" as const, text: "hello" }],
 };

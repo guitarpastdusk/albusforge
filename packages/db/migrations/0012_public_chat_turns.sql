@@ -1,0 +1,4 @@
+ALTER TABLE "telemetry"."device_chat_requests" ALTER COLUMN "actor_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "telemetry"."device_chat_requests" ADD COLUMN "public" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE INDEX "device_chat_public_window" ON "telemetry"."device_chat_requests" USING btree ("created_at") WHERE "telemetry"."device_chat_requests"."public";--> statement-breakpoint
+ALTER TABLE "telemetry"."device_chat_requests" ADD CONSTRAINT "device_chat_identity" CHECK (("telemetry"."device_chat_requests"."public" AND "telemetry"."device_chat_requests"."actor_id" IS NULL) OR (NOT "telemetry"."device_chat_requests"."public" AND "telemetry"."device_chat_requests"."actor_id" IS NOT NULL));

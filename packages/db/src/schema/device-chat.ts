@@ -15,7 +15,15 @@ import { tenants, users } from "./users.js";
 export const deviceChatRequests = telemetrySchema.table("device_chat_requests", {
   requestId: uuid("request_id").primaryKey(),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id),
-  actorId: uuid("actor_id").notNull().references(() => users.id),
+  /**
+   * Null for a turn taken on the public showcase, where there is no signed-in
+   * caller at all. The check below makes that the only way it can be null, so
+   * a public turn cannot carry an identity and an authenticated one cannot lack
+   * it — the rule is the database's rather than the caller's to remember.
+   */
+  actorId: uuid("actor_id").references(() => users.id),
+  /** A turn from the public surface. These share one allowance; see `public_budget`. */
+  public: boolean("public").notNull().default(false),
   deviceId: uuid("device_id").notNull().references(() => telemetryDevices.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`statement_timestamp()`),
   outcome: text("outcome").notNull().default("reserved"),
@@ -34,7 +42,9 @@ export const deviceChatRequests = telemetrySchema.table("device_chat_requests", 
 }, (t) => [
   index("device_chat_tenant_window").on(t.tenantId, t.createdAt),
   index("device_chat_actor_window").on(t.actorId, t.createdAt),
+  index("device_chat_public_window").on(t.createdAt).where(sql`${t.public}`),
   index("device_chat_global_window").on(t.createdAt),
+  check("device_chat_identity", sql`(${t.public} AND ${t.actorId} IS NULL) OR (NOT ${t.public} AND ${t.actorId} IS NOT NULL)`),
   check("device_chat_outcome", sql`${t.outcome} IN ('reserved','model','no_tool','unavailable','failed')`),
   check("device_chat_input", sql`${t.inputTokens} >= 0`),
   check("device_chat_output", sql`${t.outputTokens} >= 0`),

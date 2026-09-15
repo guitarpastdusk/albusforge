@@ -1,4 +1,6 @@
 import { registerObservationReads } from "./observation-read";
+import type { FastifyRequest } from "fastify";
+import { clientIp, untrustingVerifier } from "./internal-auth";
 import type { ObservationStorage } from "@albusforge/storage";
 import {registerFirmwareRoutes,type FirmwareOptions} from "./firmware-routes";
 import { randomUUID } from "node:crypto";
@@ -30,7 +32,7 @@ import { publicReads, registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
 
 import { registerSensorAsk, type SensorAskClient } from "./sensor-ask";
-import { registerDeviceChat, type DeviceChatClient } from "./device-converse";
+import { registerDeviceChat, registerPublicDeviceChat, type DeviceChatClient } from "./device-converse";
 
 export { HttpError } from "./http";
 
@@ -225,6 +227,14 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
     registerUsageRoutes(app, telemetryPool);
     registerSensorAsk(app, telemetryPool, sensorAsk);
     registerDeviceChat(app, telemetryPool, deviceChat);
+    // The same chat for a visitor with no session, on the pinned tenant only.
+    // Absent unless a tenant is configured, so an anonymous paid endpoint is
+    // never registered by default.
+    if (publicLiveTenantId)
+      registerPublicDeviceChat(app, telemetryPool, deviceChat, {
+        tenantId: publicLiveTenantId,
+        ip: (request: FastifyRequest) => clientIp({ headers: request.headers, ip: request.ip }, { verifier: untrustingVerifier, trustedProxyHops: 1 }),
+      });
   }
 
   return app;

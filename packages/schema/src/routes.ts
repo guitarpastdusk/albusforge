@@ -42,6 +42,27 @@ export const routes = {
     latest: byId("GET", "/v1/telemetry/devices/:id/latest"),
     series: byId("GET", "/v1/telemetry/devices/:id/series"),
   },
+  /**
+   * The public live view: one tenant's devices, readable without a session.
+   *
+   * A separate surface rather than a relaxed guard on the routes above. Those
+   * render whichever tenant the session names; these can only ever render the
+   * tenant pinned in the gateway's own configuration, which no request can
+   * influence. With that configuration unset the routes are not registered at
+   * all, so nothing is public by default.
+   *
+   * Reads only, plus the device chat the same page offers when signed in.
+   * Nothing here renames, claims, revokes or configures anything.
+   */
+  publicLive: {
+    devices: fixed("GET", "/v1/public/live/devices"),
+    device: byId("GET", "/v1/public/live/devices/:id"),
+    latest: byId("GET", "/v1/public/live/devices/:id/latest"),
+    series: byId("GET", "/v1/public/live/devices/:id/series"),
+    setup: byId("GET", "/v1/public/live/devices/:id/setup"),
+    /** The device chat, metered and rate limited because anyone can reach it. */
+    converse: byId("POST", "/v1/public/live/devices/:id/converse"),
+  },
   auth: {
     requestCode: fixed("POST", "/v1/auth/code"),
     /** Body VerifyCodeRequest → VerifyCodeResponse (= Me) + Set-Cookie. */

@@ -1,5 +1,6 @@
 export { callStructured, responseText, type CallDiagnostic, type CallFailure, type CallOptions, type CallResult, type TokenCeiling } from "./call";
 export { buildTokensUsed } from "./ceiling";
+export { awaitEgress, EGRESS_PROBE_URL, type EgressOptions, type EgressWait } from "./egress";
 export {
   createMeter,
   formatLlmCallLine,

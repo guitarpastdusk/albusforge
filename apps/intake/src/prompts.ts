@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
  */
 const PROMPTS_DIR = new URL("../prompts/", import.meta.url);
 
-export const EXTRACT_ROUTE_NAME = "intake.extract.v1";
+export const EXTRACT_ROUTE_NAME = "intake.extract.v2";
 
 export interface Prompts {
   extract: string;
@@ -16,7 +16,7 @@ export interface Prompts {
 
 export function loadPrompts(dir: URL = PROMPTS_DIR): Prompts {
   return {
-    extract: readFileSync(new URL("extract.v1.md", dir), "utf8"),
+    extract: readFileSync(new URL("extract.v2.md", dir), "utf8"),
     turn: readFileSync(new URL("turn.v1.md", dir), "utf8"),
   };
 }

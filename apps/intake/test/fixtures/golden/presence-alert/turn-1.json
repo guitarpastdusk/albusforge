@@ -11,7 +11,7 @@
     },
     {
       "type": "text",
-      "text": "{\"spec_patch\":{\"sense\":{\"what\":[\"motion\"]},\"environment\":{\"location\":\"indoor hallway\"},\"connect\":{\"transport\":\"wifi\",\"experience\":[\"phone notification\"]},\"experience\":{\"alerts\":[\"someone enters the hallway\"]},\"capabilities\":[\"read.motion_bool\",\"net.wifi\"]},\"candidate_questions\":[{\"field\":\"power.source\",\"question\":\"Can it plug into USB power, or does it need to run on a battery?\"}],\"assumptions\":[\"Connects over your home Wi-Fi\"],\"reply\":\"A motion sensor for your hallway that sends a notification when someone walks in. Can it plug into USB power, or does it need to run on a battery?\"}",
+      "text": "{\"reply_kind\": \"spec\", \"spec_patch\": {\"sense\": {\"what\": [\"motion\"]}, \"environment\": {\"location\": \"indoor hallway\"}, \"connect\": {\"transport\": \"wifi\", \"experience\": [\"phone notification\"]}, \"experience\": {\"alerts\": [\"someone enters the hallway\"]}, \"capabilities\": [\"read.motion_bool\", \"net.wifi\"]}, \"candidate_questions\": [{\"field\": \"power.source\", \"question\": \"Can it plug into USB power, or does it need to run on a battery?\"}], \"assumptions\": [\"Connects over your home Wi-Fi\"], \"reply\": \"A motion sensor for your hallway that sends a notification when someone walks in. Can it plug into USB power, or does it need to run on a battery?\"}",
       "citations": null
     }
   ],

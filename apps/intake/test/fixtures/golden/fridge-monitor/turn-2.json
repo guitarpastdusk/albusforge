@@ -11,7 +11,7 @@
     },
     {
       "type": "text",
-      "text": "{\"spec_patch\":{\"power\":{\"source\":\"battery\",\"target_life_days\":90},\"capabilities\":[\"read.temperature_c\",\"read.humidity_pct\",\"net.wifi\",\"power.battery\"]},\"candidate_questions\":[],\"assumptions\":[\"A battery life of about 90 days\"],\"reply\":\"Battery it is, aiming for about three months between charges. That's everything I need to pick parts.\"}",
+      "text": "{\"reply_kind\": \"spec\", \"spec_patch\": {\"power\": {\"source\": \"battery\", \"target_life_days\": 90}, \"capabilities\": [\"read.temperature_c\", \"read.humidity_pct\", \"net.wifi\", \"power.battery\"]}, \"candidate_questions\": [], \"assumptions\": [\"A battery life of about 90 days\"], \"reply\": \"Battery it is, aiming for about three months between charges. That's everything I need to pick parts.\"}",
       "citations": null
     }
   ],

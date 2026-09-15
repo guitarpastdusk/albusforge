@@ -13,15 +13,37 @@ const OUT_OF_SCOPE_REASON: Record<ScopeCategory, string> = {
   covert_tracking: "devices that track or record people without their knowledge",
 };
 
+/** What Albus Forge does, said once. Every closing reply ends on it. */
+const WHAT_WE_BUILD = "Albus Forge designs small connected devices that sense something and tell you about it.";
+
 export function outOfScopeReply(category: ScopeCategory): string {
-  return `Sorry, that's outside what Albus Forge builds: we don't make ${OUT_OF_SCOPE_REASON[category]}. If there's another way to approach what you need, tell me and I'll take a look.`;
+  return `Sorry — Albus Forge doesn't make ${OUT_OF_SCOPE_REASON[category]}, so this isn't something I can design. ${WHAT_WE_BUILD} If that's what you're after, describe the device and I'll start there.`;
 }
 
-export const REFUSAL_REPLY =
-  "Sorry, that's outside what Albus Forge can help design. If there's a different device you have in mind, tell me about it.";
+export const REFUSAL_REPLY = `Sorry — that isn't something I can design. ${WHAT_WE_BUILD} If that's what you're after, describe the device and I'll start there.`;
 
-/** Every failure that isn't the person's doing: invalid output, truncation, deadline, API errors. */
-export const FALLBACK_REPLY = "Sorry, could you say that another way?";
+/**
+ * A message that isn't about building a device. The first one redirects; a
+ * second in a row stops, because repeating the redirect reads as an invitation
+ * to keep trying.
+ */
+export function offTopicReply(again: boolean): string {
+  return again
+    ? `I can't help with that one either — designing a device is all I do here. ${WHAT_WE_BUILD} I'll be here when you have one in mind.`
+    : `That's not something I can help with — I only design devices. ${WHAT_WE_BUILD} Tell me what you'd like one to do and we'll get started.`;
+}
+
+/**
+ * Every failure that isn't the person's doing: invalid output, truncation,
+ * deadline, and an API error the caller has no retry left for.
+ *
+ * So it must not ask them to rephrase. Their message was fine, rephrasing
+ * changes nothing, and inviting them to try a different wording sends them
+ * round the same loop believing it was their fault. Say whose fault it was,
+ * say what happens next, and leave it there.
+ */
+export const FALLBACK_REPLY =
+  "Something went wrong on my end, so I couldn't get to that — nothing to do with what you wrote. Send it again in a moment and it should go through.";
 
 export const TOKEN_CEILING_REPLY =
   "This design conversation has reached its length limit, so I can't take more changes here. Start a new build to keep going.";

@@ -19,10 +19,11 @@ import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
 import { type CatalogueCache, createCatalogueCache, dbPartsSource } from "./catalogue";
 import { isDatabaseUnavailable } from "./db-errors";
 import { emptySpec } from "./decide";
-import { handleTurn, type HandlerDeps } from "./handler";
+import { buildApp } from "./app";
+import { handleTurn, type HandlerDeps, turnsHandler } from "./handler";
 import { createLogger } from "./log";
 import { loadPrompts } from "./prompts";
-import { FALLBACK_REPLY, outOfScopeReply, TOKEN_CEILING_REPLY } from "./replies";
+import { FALLBACK_REPLY, offTopicReply, outOfScopeReply, TOKEN_CEILING_REPLY } from "./replies";
 
 let container: StartedPostgreSqlContainer;
 let handle: ReturnType<typeof createDb>;
@@ -380,6 +381,114 @@ describe("handleTurn against Postgres", () => {
     expect(provider.requests).toHaveLength(0);
     expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: outOfScopeReply("mains_voltage") });
     expect(await callsOf(buildId)).toEqual([]);
+  });
+
+  it("the route's own handler carries may_retry through: a 503, and nothing written", async () => {
+    // Through buildApp and turnsHandler, exactly as server.ts wires them. A
+    // direct handleTurn(..., true) call passes even when the wiring drops the
+    // argument, which is how this was missed the first time.
+    const failing = async (): Promise<never> => {
+      throw Object.assign(new Error("overloaded"), { status: 529 });
+    };
+    const { deps } = setup([failing as unknown as Response, failing as unknown as Response]);
+    const instance = buildApp({ turns: turnsHandler(deps), ping: async () => {}, log: createLogger({ write: () => {} }) });
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+
+    const handed = await instance.inject({
+      method: "POST",
+      url: "/v1/turns",
+      payload: { build_id: buildId, may_retry: true },
+      headers: { "content-type": "application/json" },
+    });
+    expect(handed.statusCode).toBe(503);
+    expect(await messagesOf(buildId)).toEqual([{ role: "user", text: GOLDEN_ASKS["fridge-monitor"].ask }]);
+
+    // The caller's last attempt says so, and the message is answered.
+    const answered = await instance.inject({
+      method: "POST",
+      url: "/v1/turns",
+      payload: { build_id: buildId, may_retry: false },
+      headers: { "content-type": "application/json" },
+    });
+    expect(answered.statusCode).toBe(200);
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: FALLBACK_REPLY });
+    await instance.close();
+  });
+
+  it("a transport failure with a retry ahead of it writes nothing and asks to be retried", async () => {
+    // An error the API answered, so it isn't slowed by the transport retries in
+    // callStructured (those are covered in @albusforge/llm). What decides the
+    // hand-back is the failure class, which is the same either way.
+    const failing = async (): Promise<never> => {
+      throw Object.assign(new Error("overloaded"), { status: 529 });
+    };
+    const { deps } = setup([failing as unknown as Response, failing as unknown as Response]);
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+
+    await expect(handleTurn(deps, buildId, undefined, true)).rejects.toMatchObject({ name: "TurnRetryableError" });
+    // The person's message is still unanswered, so the retry can answer it properly.
+    expect(await messagesOf(buildId)).toEqual([{ role: "user", text: GOLDEN_ASKS["fridge-monitor"].ask }]);
+    expect(await specsOf(buildId)).toEqual([]);
+  });
+
+  it("the same failure on the last attempt writes the fallback, so no message is left unanswered", async () => {
+    const failing = async (): Promise<never> => {
+      throw Object.assign(new Error("overloaded"), { status: 529 });
+    };
+    const { deps } = setup([failing as unknown as Response, failing as unknown as Response]);
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+
+    expect(await handleTurn(deps, buildId)).toMatchObject({ spec_version: null, status: "asking" });
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: FALLBACK_REPLY });
+    // It never tells the person to rephrase: nothing about their message failed.
+    expect(FALLBACK_REPLY).not.toMatch(/another way|rephrase/i);
+  });
+
+  it("a failure a retry can't fix is answered straight away, retry or not", async () => {
+    // Truncated twice: the same message would truncate again, so handing it
+    // back would only delay the reply.
+    const { deps } = setup([fakeResponse({ stop_reason: "max_tokens", text: "{" }), fakeResponse({ stop_reason: "max_tokens", text: "{" })]);
+    const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
+    expect(await handleTurn(deps, buildId, undefined, true)).toMatchObject({ spec_version: null });
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: FALLBACK_REPLY });
+  });
+
+  it("off topic: code writes the reply, and no spec version or clarification round is spent", async () => {
+    const offTopic = fakeResponse({
+      text: JSON.stringify({ reply_kind: "off_topic", spec_patch: {}, candidate_questions: [], assumptions: [], reply: "That's off topic." }),
+    });
+    const { deps, provider } = setup([offTopic, offTopic]);
+    const buildId = await newBuild("who won the world cup in 1998?");
+
+    expect(await handleTurn(deps, buildId)).toMatchObject({ spec_version: null, status: "asking" });
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: offTopicReply(false) });
+    // The model's own prose never reaches the person, so it can't answer anyway.
+    expect((await messagesOf(buildId)).at(-1)?.text).not.toContain("off topic.");
+    expect(await specsOf(buildId)).toEqual([]);
+
+    // A second stray message stops rather than repeating the invitation.
+    await addUserMessage(buildId, "ok but seriously, who won?");
+    await handleTurn(deps, buildId);
+    expect((await messagesOf(buildId)).at(-1)).toEqual({ role: "assistant", text: offTopicReply(true) });
+    expect(await specsOf(buildId)).toEqual([]);
+    // Both turns still cost a model call, and both are metered.
+    expect(provider.requests).toHaveLength(2);
+    expect(await callsOf(buildId)).toHaveLength(2);
+  });
+
+  it("off topic doesn't consume a clarification round: the build can still ask twice after one", async () => {
+    const offTopic = fakeResponse({
+      text: JSON.stringify({ reply_kind: "off_topic", spec_patch: {}, candidate_questions: [], assumptions: [], reply: "off topic" }),
+    });
+    const { deps } = setup([offTopic, goldenTurn("fridge-monitor", 1)]);
+    const buildId = await newBuild("what's the weather like?");
+    await handleTurn(deps, buildId);
+
+    await addUserMessage(buildId, GOLDEN_ASKS["fridge-monitor"].ask);
+    const result = await handleTurn(deps, buildId);
+    // The first asking version, not the second: the stray message spent nothing.
+    expect(result).toMatchObject({ spec_version: 1, status: "asking" });
+    expect(Spec.parse((await specsOf(buildId)).at(-1)!.data).open_questions).toHaveLength(1);
   });
 
   it("round cap: after two asking versions, the third turn settles instead of asking", async () => {

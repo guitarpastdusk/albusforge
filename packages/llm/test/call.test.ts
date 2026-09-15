@@ -1,5 +1,5 @@
 import { SpecTurn } from "@albusforge/schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { callStructured, type CallDiagnostic, type CallOptions } from "../src/call";
 import { prefixHash } from "../src/request";
 import { hangingResponse, memoryMeter, replayProvider } from "../src/testing";
@@ -183,10 +183,16 @@ describe("callStructured", () => {
     // The rejected value itself never leaves the exchange with the model.
     expect(JSON.stringify(diagnostic)).not.toContain("zigbee");
 
+    // The SDK's error classes never set `name` (they all report "Error") and
+    // carry the request id as `requestID`, so these are the real shapes.
+    class InternalServerError extends Error {
+      status = 529;
+      requestID = "req_9";
+    }
     const provider: LlmProvider = {
       name: "anthropic",
       create: async () => {
-        throw Object.assign(new Error("529 overloaded: keep my fridge cold"), { name: "InternalServerError", status: 529, request_id: "req_9" });
+        throw new InternalServerError("529 overloaded: keep my fridge cold");
       },
     };
     expect(await setup(provider).run()).toEqual({
@@ -195,6 +201,48 @@ describe("callStructured", () => {
       calls: 0,
       diagnostic: { reason: "provider_error", errorName: "InternalServerError", status: 529, requestId: "req_9" },
     });
+
+  });
+
+  it("a request that never reached the API is retried, and says so when it gives up", async () => {
+    // No status and no request id: the transport's own code is the only thing
+    // that says why. This is the cold-start shape — the route to the API isn't
+    // up yet — so it's worth waiting out rather than answering from.
+    class APIConnectionError extends Error {}
+    const unreachable = (): never => {
+      throw new APIConnectionError("Connection error.", {
+        cause: Object.assign(new Error("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" }) }),
+      });
+    };
+    const provider: LlmProvider = { name: "anthropic", create: async () => unreachable() };
+
+    vi.useFakeTimers();
+    try {
+      const running = setup(provider).run();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await running).toEqual({
+        ok: false,
+        failure: "provider_error",
+        // Four transport attempts, but no call: nothing was ever answered.
+        calls: 0,
+        diagnostic: { reason: "provider_error", errorName: "APIConnectionError", causeCode: "ENOTFOUND", attempts: 4 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an error the API answered is not retried: the SDK has already done that", async () => {
+    let calls = 0;
+    const provider: LlmProvider = {
+      name: "anthropic",
+      create: async () => {
+        calls++;
+        throw Object.assign(new Error("529 overloaded"), { status: 529 });
+      },
+    };
+    expect(await setup(provider).run()).toMatchObject({ ok: false, failure: "provider_error" });
+    expect(calls).toBe(1);
   });
 
   it("a failed meter insert doesn't lose the turn", async () => {

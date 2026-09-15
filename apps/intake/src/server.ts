@@ -7,11 +7,11 @@
  * gateway's retry of POST /v1/turns answers it.
  */
 import { createDb, type Db } from "@albusforge/db";
-import { buildTokensUsed, createMeter, createProvider, llmCallsInserter } from "@albusforge/llm";
+import { awaitEgress, buildTokensUsed, createMeter, createProvider, llmCallsInserter } from "@albusforge/llm";
 import { buildApp } from "./app";
 import { createCatalogueCache, dbPartsSource } from "./catalogue";
 import { configFromEnv } from "./config";
-import { handleTurn, type HandlerDeps } from "./handler";
+import { type HandlerDeps, turnsHandler } from "./handler";
 import { createLogger } from "./log";
 import { loadPrompts } from "./prompts";
 
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   };
 
   const app = buildApp({
-    turns: (buildId, trace) => handleTurn(deps, buildId, trace),
+    turns: turnsHandler(deps),
     ping: async () => {
       await pool.query("SELECT 1");
     },
@@ -110,6 +110,25 @@ async function main(): Promise<void> {
   };
   process.once("SIGTERM", (signal) => void shutdown(signal));
   process.once("SIGINT", (signal) => void shutdown(signal));
+
+  /*
+   * Not ready until the API is reachable.
+   *
+   * A cold instance passes its TCP startup probe as soon as this port opens,
+   * but the route out to the internet isn't usable for some seconds after
+   * that — the database, on a private address, already is. Serving in that
+   * window answers the person's first message with a fallback. Cloud Run
+   * holds the request while the container starts, so waiting here costs that
+   * first turn some latency and saves the answer.
+   *
+   * Bounded: if the route never opens we listen anyway and say so, rather than
+   * failing the instance and taking the service down for a check that is not
+   * itself the service.
+   */
+  const egress = await awaitEgress();
+  log(egress.ok ? "INFO" : "CRITICAL", egress.ok ? "route to the model API is open" : "route to the model API never opened; serving anyway", {
+    fields: { attempts: egress.attempts, waitedMs: egress.waitedMs, ...(egress.lastCode === undefined ? {} : { lastCode: egress.lastCode }) },
+  });
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
   // Never the API key or the database password.

@@ -67,7 +67,7 @@ describe("buildRequest", () => {
   it("sends SpecTurn as a strict JSON schema without the helper's local parse function", () => {
     const format = outputFormat(SpecTurn);
     expect(Object.keys(format).sort()).toEqual(["schema", "type"]);
-    expect(format.schema).toMatchObject({ type: "object", additionalProperties: false, required: ["spec_patch", "candidate_questions", "assumptions", "reply"] });
+    expect(format.schema).toMatchObject({ type: "object", additionalProperties: false, required: ["reply_kind", "spec_patch", "candidate_questions", "assumptions", "reply"] });
     // Deterministic, so it never perturbs anything cached after it.
     expect(JSON.stringify(outputFormat(SpecTurn))).toBe(JSON.stringify(format));
   });

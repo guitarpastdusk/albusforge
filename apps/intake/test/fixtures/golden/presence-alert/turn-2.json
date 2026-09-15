@@ -11,7 +11,7 @@
     },
     {
       "type": "text",
-      "text": "{\"spec_patch\":{\"power\":{\"source\":\"usb\"},\"capabilities\":[\"read.motion_bool\",\"net.wifi\",\"power.5v\"]},\"candidate_questions\":[],\"assumptions\":[],\"reply\":\"USB power keeps it simple. That's everything I need to pick parts.\"}",
+      "text": "{\"reply_kind\": \"spec\", \"spec_patch\": {\"power\": {\"source\": \"usb\"}, \"capabilities\": [\"read.motion_bool\", \"net.wifi\", \"power.5v\"]}, \"candidate_questions\": [], \"assumptions\": [], \"reply\": \"USB power keeps it simple. That's everything I need to pick parts.\"}",
       "citations": null
     }
   ],

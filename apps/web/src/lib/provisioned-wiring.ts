@@ -99,9 +99,20 @@ const RAILS: Record<string, { rail: string; ground: string }> = {
 export function provisionedWiring(channels: readonly string[]): Wiring | null {
   const profile = profileForChannels(channels);
   if (!profile) return null;
-  const assembly = ASSEMBLIES.find((candidate) => candidate.id === profile.assembly_profile.id);
+  return wiringForParts(profile.part_versions.map(({ id }) => id), profile.assembly_profile.id);
+}
+
+/**
+ * The wiring for an explicit part list on a named assembly profile. Separated
+ * from profile matching so the demo's bench layout, which is written down
+ * rather than inferred, still draws through exactly the same derivation — the
+ * pins come from the assembly profile either way.
+ */
+export function wiringForParts(partIds: readonly string[], assemblyId: string): Wiring | null {
+  const assembly = ASSEMBLIES.find((candidate) => candidate.id === assemblyId);
   if (!assembly) return null;
-  if (!profile.part_versions.every(({ id }) => PARTS.has(id))) return null;
+  if (!partIds.every((id) => PARTS.has(id))) return null;
+  const profile = { part_versions: partIds.map((id) => ({ id, version: "" })) };
 
   const brain = PARTS.get(assembly.brain.id);
   const supplyPart = PARTS.get(assembly.source.id);

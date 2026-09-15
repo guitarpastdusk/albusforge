@@ -2,6 +2,7 @@ import type { DeviceSetupStatus } from "@albusforge/schema";
 import Link from "next/link";
 import { BuildCircuitDiagram } from "@/components/marketplace/BuildCircuitDiagram";
 import { provisionedWiring } from "@/lib/provisioned-wiring";
+import { BenchLayout } from "./BenchLayout";
 import { RefreshSetup } from "./RefreshSetup";
 
 const COPY: Record<DeviceSetupStatus["state"], { title: string; description: string }> = {
@@ -41,6 +42,7 @@ export function DeviceSetupView({ setup }: { setup: DeviceSetupStatus }) {
           <p className="text-sm text-muted">Last received: {cap.last_received_at ?? "Waiting"}</p>
         </li>)}</ul>
       </div>}
+      <BenchLayout />
       {wiring && <div className="rounded-[24px] border border-hairline bg-white p-6">
         <h2 className="font-display text-[26px]">How it wires up</h2>
         <p className="mt-2 max-w-[760px] text-sm text-muted">

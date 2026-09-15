@@ -145,6 +145,14 @@ const PASS_THROUGH: Record<string, { ports: number; source: string }> = {
     // https://www.adafruit.com/product/2652
     source: 'Adafruit 2652: "The STEMMA QT connectors on either side are compatible with the SparkFun Qwiic I2C connectors."',
   },
+  "V-005": {
+    ports: 2,
+    // Not the product page, which says only "connectors" in the plural. This is
+    // the bench: the Freenove device carries the light, climate and soil sensors
+    // on one QT chain (hardware/freenove), which the light sensor cannot do with
+    // a single port.
+    source: "Freenove bring-up: 0x23, 0x77 and 0x36 share one STEMMA QT chain, so the BH1750 passes the bus through.",
+  },
 };
 
 /**

@@ -3,6 +3,7 @@ import { BuildConversation, WhenConversationEmpty } from "@/components/build/Bui
 import { ConversationView } from "@/components/build/ConversationView";
 import { DeviceCarousel } from "@/components/carousel/DeviceCarousel";
 import { ChatStart } from "@/components/landing/ChatStart";
+import { LiveDemoPill } from "@/components/landing/LiveDemoPill";
 import { seededAsk } from "@/lib/clone-ask";
 import { loadShowcaseCards } from "@/lib/showcase";
 
@@ -18,6 +19,7 @@ export default async function LandingPage({ searchParams }: { searchParams: Prom
             <p className="mb-5 font-mono text-[14px] uppercase tracking-[0.24em] text-coral-deep">
               Physical AI, built from a sentence
             </p>
+            <LiveDemoPill />
             <h1 className="max-w-[720px] font-display text-[clamp(30px,3.4vw,44px)] font-medium leading-[1.15] tracking-[-0.01em]">
               Your own <em className="italic text-coral">Physical AI</em>.
             </h1>

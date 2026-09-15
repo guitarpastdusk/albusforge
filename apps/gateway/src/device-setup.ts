@@ -1,15 +1,39 @@
 import { DeviceSetupParams, DeviceSetupStatus, ProvisionedChannels, routes } from "@albusforge/schema";
-import type { FastifyInstance } from "fastify";
-import type { Pool } from "pg";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import { HttpError, parse } from "./http";
-import { withSession } from "./session";
+import { withPublicTenant, withSession } from "./session";
+
+/**
+ * Where this route's tenant comes from. The session variant reads the caller's
+ * cookie; the public variant ignores the request and uses a configured id, so
+ * the same handler serves both and the public page cannot show a different
+ * projection from the signed-in one.
+ */
+export interface SetupSource {
+  pattern: string;
+  run<T>(request: FastifyRequest, read: (client: PoolClient, tenantId: string) => Promise<T>): Promise<T>;
+  cacheControl: string;
+}
+
+export const sessionSetup = (pool: Pool): SetupSource => ({
+  pattern: routes.deviceSetup.status.pattern,
+  run: (request, read) => withSession(pool, request.headers.cookie, request.hostname, read),
+  cacheControl: "private, no-store",
+});
+
+export const publicSetup = (pool: Pool, tenantId: string): SetupSource => ({
+  pattern: routes.publicLive.setup.pattern,
+  run: (_request, read) => withPublicTenant(pool, tenantId, read),
+  cacheControl: "no-store",
+});
 
 /** No enrollment or credential writes: only the active tenant's registered device. */
-export function registerDeviceSetup(app: FastifyInstance, pool: Pool) {
+export function registerDeviceSetup(app: FastifyInstance, pool: Pool, source: SetupSource = sessionSetup(pool)) {
   app.register(async scope => {
-    scope.addHook("onRequest", async (_request, reply) => { reply.header("cache-control", "private, no-store"); });
-    scope.get(routes.deviceSetup.status.pattern, async request => withSession(pool, request.headers.cookie, request.hostname, async (client, tenantId) => {
+    scope.addHook("onRequest", async (_request, reply) => { reply.header("cache-control", source.cacheControl); });
+    scope.get(source.pattern, async request => source.run(request, async (client, tenantId) => {
       const { id } = parse(DeviceSetupParams, request.params, "device id");
       parse(z.strictObject({}), request.query, "query");
       // Exact public projection. Neither credential hashes nor private source snapshots leave SQL.

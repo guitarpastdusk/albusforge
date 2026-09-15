@@ -50,6 +50,16 @@ variable "ask_model_enabled" {
   default     = false
 }
 
+variable "showcase_tenant_id" {
+  description = "Tenant whose devices are readable without a session. Empty disables the public surface."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.showcase_tenant_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.showcase_tenant_id))
+    error_message = "showcase_tenant_id must be a uuid, or empty to disable the public surface."
+  }
+}
+
 variable "device_chat_enabled" {
   description = "Enable the multi-turn device chat. Separate from ask_model_enabled: this one lets the model write the reply, over tool calls it makes against stored readings."
   type        = bool

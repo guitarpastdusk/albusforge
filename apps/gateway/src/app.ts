@@ -25,8 +25,8 @@ import { registerBuildPlans } from "./build-plan-routes";
 import type { ReviewedPlanCatalogue } from "./build-plan-catalogue";
 import { registerDeviceProvisioning } from "./device-provisioning-routes";
 import type { DeviceProvisioningOptions } from "./device-provisioning-store";
-import { registerDeviceSetup } from "./device-setup";
-import { registerTelemetryReads } from "./telemetry-read";
+import { publicSetup, registerDeviceSetup } from "./device-setup";
+import { publicReads, registerTelemetryReads } from "./telemetry-read";
 import { registerUsageRoutes } from "./usage-routes";
 
 import { registerSensorAsk, type SensorAskClient } from "./sensor-ask";
@@ -45,6 +45,12 @@ export interface AppOptions {
   planCatalogue?: ReviewedPlanCatalogue;
   /** Production supplies the same bounded PostgreSQL pool used by other gateway reads. */
   telemetryPool?: Pool;
+  /**
+   * The tenant whose devices are readable without a session. Absent — the
+   * default — registers no public routes at all, so the surface does not exist
+   * rather than existing and refusing.
+   */
+  publicLiveTenantId?: string | null;
   observationStorage?: ObservationStorage;
   deviceProvisioning?: DeviceProvisioningOptions;
   firmware?: FirmwareOptions;
@@ -83,7 +89,7 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, observationStorage, firmware = {enabled:false}, sensorAsk = null, deviceChat = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
+export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2000, chat, auth, telemetryPool, publicLiveTenantId = null, observationStorage, firmware = {enabled:false}, sensorAsk = null, deviceChat = null, planCatalogue, deviceProvisioning = { keys: null, ingestUrl: null, profiles: [] } }: AppOptions): FastifyInstance {
   const app = Fastify({
     // Logging is ours (log.ts): Fastify's pino lines don't carry Cloud Logging's fields.
     logger: false,
@@ -207,8 +213,13 @@ export function buildApp({ parts, ping, log = createLogger(), readyTimeoutMs = 2
   if (telemetryPool) {
     registerBuildPlans(app, telemetryPool, planCatalogue);
     registerTelemetryReads(app, telemetryPool);
+    // Anyone, no session. Registered only when a tenant is configured, and the
+    // handlers are the same ones above with a tenant source that never looks at
+    // the request (telemetry-read.ts, ReadSource).
+    if (publicLiveTenantId) registerTelemetryReads(app, telemetryPool, publicReads(telemetryPool, publicLiveTenantId));
     if (observationStorage) registerObservationReads(app, telemetryPool, observationStorage);
     registerDeviceSetup(app, telemetryPool);
+    if (publicLiveTenantId) registerDeviceSetup(app, telemetryPool, publicSetup(telemetryPool, publicLiveTenantId));
     registerDeviceProvisioning(app, telemetryPool, deviceProvisioning);
     registerFirmwareRoutes(app,telemetryPool,firmware);
     registerUsageRoutes(app, telemetryPool);

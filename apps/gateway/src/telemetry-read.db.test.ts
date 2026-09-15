@@ -608,3 +608,75 @@ it("binds shared authorized writes to the tenant captured by the rendering page"
   const tenant = await withAuthorizedWrite(handle.pool, f.cookie, "localhost", f.tenant, async (_client, identity) => identity.tenantId);
   expect(tenant).toBe(f.tenant);
 });
+
+/*
+ * The public live surface. These are the same handlers as above with a tenant
+ * source that never reads the request, so what is worth asserting is not that
+ * they return data — it is that nothing a caller sends can move them off the
+ * configured tenant, and that they do not exist when none is configured.
+ */
+it("public live reads serve the configured tenant with no session, and cannot be steered off it", async () => {
+  const showcase = await fixture();
+  const other = await fixture();
+  // telemetry.latest is written by ingest, not by a raw reading insert.
+  const seen = async (f: { device: string }, value: number) => {
+    await handle.pool.query(
+      "INSERT INTO telemetry.latest(device_id,channel,ts,seq,ordinal,value) VALUES($1,'temperature_c',$2,1,0,$3)",
+      [f.device, time(), value],
+    );
+  };
+  await seen(showcase, 21.5);
+  await seen(other, 99.9);
+
+  const publicApp = buildApp({
+    parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool,
+    publicLiveTenantId: showcase.tenant, log: () => {},
+  });
+  try {
+    const root = `/v1/public/live/devices/${showcase.device}`;
+    // No cookie at all: the point of the surface.
+    const latest = await publicApp.inject({ url: `${root}/latest` });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.json().readings[0]).toMatchObject({ channel: "temperature_c", v: 21.5 });
+
+    // Another tenant's device is not found here, however the caller asks.
+    const foreign = await publicApp.inject({ url: `/v1/public/live/devices/${other.device}/latest` });
+    expect(foreign.statusCode).toBe(404);
+
+    // Nothing a caller can send selects a tenant: a session for the other
+    // tenant, and a host naming its slug, both still read the configured one.
+    const steered = await publicApp.inject({
+      url: `${root}/latest`,
+      headers: { cookie: other.cookie, host: `t-${other.tenant}.albusforge.ai` },
+    });
+    expect(steered.statusCode).toBe(200);
+    expect(steered.json().readings[0]!.v).toBe(21.5);
+
+    // The fleet listing shows the configured tenant's devices only.
+    const fleet = await publicApp.inject({ url: "/v1/public/live/devices" });
+    expect(fleet.statusCode).toBe(200);
+    expect(fleet.json().devices.map((d: { id: string }) => d.id)).toEqual([showcase.device]);
+
+    // Public, but never cached: a stale reading reads as a dead device.
+    expect(latest.headers["cache-control"]).toBe("no-store");
+
+    // Read-only: the metadata write is not carried by the public source, so the
+    // path is simply not there — 501 is this app's answer for an unbuilt /v1 route.
+    const write = await publicApp.inject({ method: "PATCH", url: root, payload: { display_name: "x" } });
+    expect(write.statusCode).toBe(501);
+  } finally {
+    await publicApp.close();
+  }
+});
+
+it("without a configured tenant the public surface does not exist", async () => {
+  const f = await fixture();
+  // `app` is built with no publicLiveTenantId. Unbuilt /v1 routes answer 501
+  // here, which is the same answer as for any route that does not exist — the
+  // surface is absent, not present and refusing.
+  for (const url of ["/v1/public/live/devices", `/v1/public/live/devices/${f.device}/latest`]) {
+    const response = await app.inject({ url });
+    expect(response.statusCode).toBe(501);
+    expect(response.json().error.code).toBe("NOT_IMPLEMENTED");
+  }
+});

@@ -25,10 +25,20 @@ const AUTH_DEFAULTS = {
 };
 
 describe("configFromEnv", () => {
+
+  it("pins the public tenant only from a valid uuid, and refuses a bad one rather than serving nothing", () => {
+    const tenant = "05e58ed5-2c83-44c2-99c3-47bd9deea753";
+    expect(configFromEnv({ ...DB, SHOWCASE_TENANT_ID: tenant }).publicLiveTenantId).toBe(tenant);
+    // A typo must stop the process, not quietly leave the showcase off — an
+    // operator who set it expects it on, and silence looks identical to working.
+    expect(() => configFromEnv({ ...DB, SHOWCASE_TENANT_ID: "sukrit@ieee.org" })).toThrow();
+  });
   it("defaults PORT to 8080, DB_SSL to require, and bounds every database wait", () => {
     expect(configFromEnv(DB)).toEqual({
       deviceProvisioning: { keys: null, ingestUrl: null, profiles: APPROVED_PROFILES },
       port: 8080,
+      // Off unless a tenant is pinned: the public surface must not appear by default.
+      publicLiveTenantId: null,
       db: { host: "10.0.0.3", port: 5432, database: "albus", user: "albus_app", password: "s3cret-value", ssl: "require" },
       dbTimeouts: { connectMs: 5000, queryMs: 10_000, readMs: 11_000, idleMs: 30_000 },
       sensorAsk: { url: null, auth: "google" },

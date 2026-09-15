@@ -123,14 +123,12 @@ export function buildDetail(id: string): BuildDetail | null {
 
 const GREENHOUSE_CONVERSATION: Array<[ChatMessage["role"], string]> = [
   ["user", "I want a sensor that tells me when my greenhouse soil is dry"],
+  // One question a turn, as intake now asks them (decide.ts MAX_QUESTIONS_PER_ROUND).
+  ["assistant", "Good brief. Will it be plugged in to USB power, or does it need to run on a battery?"],
+  ["user", "Battery"],
   [
     "assistant",
-    "Good brief. Two quick questions:\n· How large is the area — one bed or the whole greenhouse?\n· Do you have Wi-Fi coverage out there, or should I plan for LoRa?",
-  ],
-  ["user", "The whole greenhouse — four beds. Wi-Fi reaches the north wall."],
-  [
-    "assistant",
-    "Got it. Here's my plan:\n· ESP32-WROOM brain (pre-certified radio)\n· 4× capacitive soil probes, one per bed\n· Solar + LiPo so there's no wiring\n· Readings every 10 min → your cloud dashboard\n\nSound right? Say \"go\" and I'll finalize the design.",
+    "Got it. Here's my plan:\n· ESP32-S3 brain (Wi-Fi on board)\n· 4× capacitive soil probes, one per bed\n· 18650 cell with a TP4056 charger, so there's no mains wiring\n· Readings every 10 min → your cloud dashboard\n\nSound right?",
   ],
   ["user", "go"],
   [
@@ -164,11 +162,13 @@ const DESIGN_READY: DeviceReadyCard = {
   name: "Greenhouse soil monitor",
   est_price_usd: 34,
   fulfillment_note: "ships in kit form",
+  // Real registry ids, so the circuit diagram can be drawn from the parts rather
+  // than mocked: the chips name what C-001/P-005/E-001/E-004 actually are.
   parts: [
-    { part_id: "esp32-wroom", label: "ESP32-WROOM", accent: "peach" },
-    { part_id: "soil-capacitive", label: "Capacitive soil probe ×4", accent: "blue" },
-    { part_id: "solar-lipo", label: "Solar + LiPo", accent: "green" },
-    { part_id: "enclosure-ip65", label: "IP65 printed enclosure", accent: "violet" },
+    { part_id: "C-001", label: "ESP32-S3 brain", accent: "peach" },
+    { part_id: "P-005", label: "Capacitive soil probe ×4", accent: "blue" },
+    { part_id: "E-001", label: "18650 cell", accent: "green" },
+    { part_id: "E-004", label: "TP4056 charger", accent: "violet" },
   ],
 };
 
@@ -287,14 +287,13 @@ function specAfter(replies: number): Record<string, unknown> | null {
     experience: { alerts: ["soil too dry"], dashboard: true },
     capabilities,
     assumptions: replies === 1 ? [] : ["Wi-Fi reaches the north wall", "One probe per bed"],
+    // One question at a time, as intake now asks them, with one-tap answers where
+    // the answer is a small closed set (decide.ts MAX_QUESTIONS_PER_ROUND).
     open_questions:
       replies === 1
-        ? [
-            { field: "sense.what", question: "How large is the area: one bed or the whole greenhouse?" },
-            { field: "connect.transport", question: "Do you have Wi-Fi coverage out there?" },
-          ]
+        ? [{ field: "power.source", question: "Will it be plugged in to USB power, or does it need to run on a battery?", options: ["USB power", "Battery"] }]
         : replies === 2
-          ? [{ field: "settled", question: "Does the plan sound right?" }]
+          ? [{ field: "settled", question: "Sound right?", options: ["Go"] }]
           : [],
     settled: replies >= 3,
   };

@@ -47,7 +47,7 @@ describe("mergePatch", () => {
 });
 
 describe("filterQuestions", () => {
-  it("keeps questions on solver-relevant fields only, one per field, at most three", () => {
+  it("keeps questions on solver-relevant fields only, one per field, and only one per turn", () => {
     const result = filterQuestions(
       [
         { field: "power.source", question: "Battery or USB?" },
@@ -59,12 +59,31 @@ describe("filterQuestions", () => {
       ],
       0,
     );
-    expect(result.kept.map((q) => q.field)).toEqual(["power.source", "connect.transport", "sense.what"]);
+    // One question a turn: the first relevant one is asked, the rest wait their turn.
+    expect(result.kept.map((q) => q.field)).toEqual(["power.source"]);
     expect(result.irrelevant.map((q) => q.field)).toEqual(["experience.alerts"]);
-    expect(result.cappedOut.map((q) => q.field)).toEqual(["environment.flags"]);
+    expect(result.cappedOut.map((q) => q.field)).toEqual(["connect.transport", "sense.what", "environment.flags"]);
   });
 
-  it("keeps nothing once two rounds are used", () => {
+  it("carries one-tap options through, trimmed and de-duplicated, keeping a single one", () => {
+    const result = filterQuestions(
+      [
+        { field: "power.source", question: "Battery or USB?", options: [" USB power ", "Battery", "Battery"] },
+        // One option is a choice of two paths: it, or "Continue chatting".
+        { field: "environment.flags", question: "Sound right?", options: ["Go"] },
+      ],
+      0,
+    );
+    expect(result.kept[0]!.options).toEqual(["USB power", "Battery"]);
+    expect(result.cappedOut[0]!.options).toEqual(["Go"]);
+  });
+
+  it("drops an options list that is empty once trimmed, rather than drawing an empty row", () => {
+    const result = filterQuestions([{ field: "power.source", question: "Battery or USB?", options: ["  ", ""] }], 0);
+    expect(result.kept[0]!.options).toBeUndefined();
+  });
+
+  it("keeps nothing once every round is used", () => {
     const result = filterQuestions([{ field: "power.source", question: "Battery or USB?" }], MAX_CLARIFICATION_ROUNDS);
     expect(result.kept).toEqual([]);
     expect(result.cappedOut).toHaveLength(1);
@@ -94,7 +113,7 @@ describe("decide", () => {
     expect(decision.spec.settled).toBe(true);
   });
 
-  it("round cap: after two rounds, questions are dropped, defaults are stated and the spec settles", () => {
+  it("round cap: once the rounds are used, questions are dropped, defaults are stated and the spec settles", () => {
     const decision = decide({
       previous: null,
       turn: turn({
@@ -103,7 +122,7 @@ describe("decide", () => {
         assumptions: ["Connects over Wi-Fi"],
       }),
       vocabulary,
-      roundsUsed: 2,
+      roundsUsed: MAX_CLARIFICATION_ROUNDS,
     });
     expect(decision.status).toBe("planning");
     expect(decision.spec.open_questions).toEqual([]);
@@ -155,7 +174,7 @@ describe("decide", () => {
   });
 
   it("doesn't settle without any capability", () => {
-    const decision = decide({ previous: null, turn: turn({ candidate_questions: [{ field: "sense.what", question: "What?" }] }), vocabulary, roundsUsed: 2 });
+    const decision = decide({ previous: null, turn: turn({ candidate_questions: [{ field: "sense.what", question: "What?" }] }), vocabulary, roundsUsed: MAX_CLARIFICATION_ROUNDS });
     expect(decision).toMatchObject({ status: "asking", reply: NEEDS_MORE_REPLY });
     expect(decision.spec.settled).toBe(false);
   });

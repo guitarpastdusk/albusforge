@@ -18,7 +18,7 @@ import { createTurnScheduler, IntakeError, type TurnResult } from "../../gateway
 import { GOLDEN_ASKS, goldenTurn } from "../test/fixtures";
 import { type CatalogueCache, createCatalogueCache, dbPartsSource } from "./catalogue";
 import { isDatabaseUnavailable } from "./db-errors";
-import { emptySpec } from "./decide";
+import { MAX_CLARIFICATION_ROUNDS, emptySpec } from "./decide";
 import { buildApp } from "./app";
 import { handleTurn, type HandlerDeps, turnsHandler } from "./handler";
 import { createLogger } from "./log";
@@ -491,15 +491,16 @@ describe("handleTurn against Postgres", () => {
     expect(Spec.parse((await specsOf(buildId)).at(-1)!.data).open_questions).toHaveLength(1);
   });
 
-  it("round cap: after two asking versions, the third turn settles instead of asking", async () => {
+  it("round cap: once every asking version is used, the next turn settles instead of asking", async () => {
     const { deps } = setup([goldenTurn("fridge-monitor", 1)]);
     const buildId = await newBuild(GOLDEN_ASKS["fridge-monitor"].ask);
     const asking = { ...emptySpec(), open_questions: [{ field: "sense.what", question: "What?" }] };
-    for (const version of [1, 2]) {
+    // Tracks the constant rather than a literal: one question per turn buys more rounds.
+    for (let version = 1; version <= MAX_CLARIFICATION_ROUNDS; version += 1) {
       await handle.db.insert(specs).values({ buildId, version, data: asking, confidence: 0.5, openQuestions: asking.open_questions });
     }
     const result = await handleTurn(deps, buildId);
-    expect(result).toMatchObject({ spec_version: 3, status: "planning" });
+    expect(result).toMatchObject({ spec_version: MAX_CLARIFICATION_ROUNDS + 1, status: "planning" });
     const latest = Spec.parse((await specsOf(buildId)).at(-1)!.data);
     expect(latest.open_questions).toEqual([]);
     expect(latest.settled).toBe(true);

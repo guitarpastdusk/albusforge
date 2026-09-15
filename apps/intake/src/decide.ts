@@ -15,8 +15,15 @@ import { NEEDS_MORE_REPLY, questionsReply, settledReply } from "./replies";
 export const SOLVER_RELEVANT_FIELDS = ["sense.what", "act.what", "power.source", "connect.transport", "power.target_life_days", "environment.flags"] as const;
 export type SolverRelevantField = (typeof SOLVER_RELEVANT_FIELDS)[number];
 
-export const MAX_CLARIFICATION_ROUNDS = 2;
-export const MAX_QUESTIONS_PER_ROUND = 3;
+/**
+ * One question per turn, so the person answers one thing at a time rather than
+ * unpicking a bundle. That costs rounds: four of them buy the four questions
+ * intake actually needs (power, environment, sensing, transport) where two
+ * bundled rounds used to. Each answer is usually a tap, so the extra turns are
+ * cheaper for the person than the bundle was.
+ */
+export const MAX_CLARIFICATION_ROUNDS = 4;
+export const MAX_QUESTIONS_PER_ROUND = 1;
 const MAX_ASSUMPTIONS = 20;
 
 const FIELD_LABEL: Record<SolverRelevantField, string> = {
@@ -116,7 +123,16 @@ export function filterQuestions(candidates: readonly OpenQuestion[], roundsUsed:
     }
     if (seen.has(field)) continue;
     seen.add(field);
-    const question = { field, question: candidate.question.trim() };
+    // Options come through as the model wrote them: trimmed and de-duplicated.
+    // One surviving option is kept — the chat offers "Continue chatting" beside
+    // them — but an empty list is dropped rather than drawn as an empty row.
+    const options = candidate.options?.map((option) => option.trim()).filter((option) => option.length > 0);
+    const distinct = options === undefined ? undefined : [...new Set(options)];
+    const question: OpenQuestion = {
+      field,
+      question: candidate.question.trim(),
+      ...(distinct !== undefined && distinct.length > 0 ? { options: distinct.slice(0, 4) } : {}),
+    };
     if (capReached || kept.length >= MAX_QUESTIONS_PER_ROUND) cappedOut.push(question);
     else kept.push(question);
   }

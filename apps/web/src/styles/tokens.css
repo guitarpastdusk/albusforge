@@ -25,6 +25,13 @@
   --color-hairline: #eae5de;
   --color-nav-active: #f0ebe4;
   --color-success: #3e7d6b;
+  /*
+   * Sections that report progress rather than open questions — candidate parts,
+   * once intake has found some. A tint off porcelain, not a colour of its own:
+   * it should read as "this part is settled", not as an alert.
+   */
+  --color-positive: #f2f8f4;
+  --color-positive-edge: #cfe3d7;
   /* Text on the dark device-chat surface. */
   --color-on-ink: #f4f1ec;
 

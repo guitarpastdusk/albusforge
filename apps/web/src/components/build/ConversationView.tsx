@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui";
+import { AnswerChoices, liveOptions } from "./AnswerChoices";
 import { useConversation } from "./BuildConversation";
 import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
@@ -14,14 +16,26 @@ import { SpecPanel } from "./SpecPanel";
  */
 export function ConversationView({ active = false }: { active?: boolean }) {
   const { state, signedIn, typing, send, setDraft, checkAgain, enclosurePreview, enclosureError, retryEnclosure, streamState } = useConversation();
+  // While a question offers answers, the reply box stays out of the way; "Continue
+  // chatting" brings it back. Remembering which question it was opened for means a
+  // new question closes it again, with no effect and no stale state to reset.
+  const offered = liveOptions(state.spec);
+  const [typingFor, setTypingFor] = useState<string | null>(null);
+  const showComposer = offered === null || typingFor === offered.question;
 
   if (!active && state.messages.length === 0) return null;
 
   return (
     <div className="mx-auto box-border flex w-full max-w-[860px] flex-1 flex-col px-6 pt-9 pb-7">
       <div className="flex flex-1 flex-col gap-[18px]" aria-live="polite">
-        {state.messages.map((message) => (
-          <ChatBubble key={message.id} role={message.role} text={message.text} />
+        {state.messages.map((message, index) => (
+          <ChatBubble key={message.id} role={message.role} text={message.text}>
+            {/* The answers live inside the bubble that asks the question, and only
+                the last one: an earlier question has already been answered. */}
+            {message.role === "assistant" && index === state.messages.length - 1 ? (
+              <AnswerChoices spec={state.spec} disabled={state.sending || typing} onChoose={send} onContinue={() => setTypingFor(offered?.question ?? null)} />
+            ) : null}
+          </ChatBubble>
         ))}
         {typing ? <TypingDots /> : null}
         {streamState === "reconnecting" || streamState === "unavailable" ? (
@@ -64,6 +78,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
             buildId={state.buildId}
             signedIn={signedIn}
             card={state.ready}
+            spec={state.spec}
             enclosure={enclosurePreview}
             enclosureError={enclosureError}
             onRetryEnclosure={retryEnclosure}
@@ -71,6 +86,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
         ) : null}
       </div>
 
+      {showComposer ? (
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -91,6 +107,7 @@ export function ConversationView({ active = false }: { active?: boolean }) {
           Send
         </Button>
       </form>
+      ) : null}
     </div>
   );
 }

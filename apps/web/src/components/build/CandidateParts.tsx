@@ -10,8 +10,8 @@ const usd = (amount: number) => `$${amount.toFixed(2)}`;
 export function CandidateParts({ parts }: { parts: readonly CandidatePart[] }) {
   if (parts.length === 0) return null;
   return (
-    <section aria-label="Candidate parts" className="rounded-[20px] border border-hairline bg-white px-6 py-5">
-      <h2 className="font-mono text-[13px] uppercase tracking-[0.18em] text-muted">Candidate parts</h2>
+    <section aria-label="Candidate parts" className="rounded-[20px] border border-positive-edge bg-positive px-6 py-5">
+      <h2 className="font-mono text-[13px] uppercase tracking-[0.18em] text-success">Candidate parts</h2>
       <p className="mt-2 text-[14px] font-light leading-[1.45] text-muted">
         Parts from our registry that match what the spec needs so far. Not a final plan yet: wiring, power and quantities come next.
       </p>

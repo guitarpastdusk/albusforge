@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { mergeMessages, type BuildTranscript } from "@/lib/build-transcript";
 import { CONNECTION_MESSAGE } from "@/lib/safe-action";
+import { AnswerChoices } from "./AnswerChoices";
 import { CandidateParts } from "./CandidateParts";
 import { ChatBubble, TypingDots } from "./ChatBubble";
 import {
@@ -17,6 +18,7 @@ import {
   type ConversationState,
 } from "./conversation";
 import { DesignReadyCard } from "./DesignReadyCard";
+import { cadence, cloudWorkspace, readyWiring } from "./ready-artifacts";
 import { SpecPanel } from "./SpecPanel";
 
 const AT = "2026-09-13T12:00:00Z";
@@ -221,7 +223,7 @@ describe("SpecPanel", () => {
   };
   const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-  it("shows what intake has understood, what's still open, and the assumptions", () => {
+  it("shows what intake has understood and the assumptions, but not the open question", () => {
     const html = text(renderToStaticMarkup(<SpecPanel spec={SPEC} status="asking" />));
     expect(html).toContain("Spec so far");
     expect(html).toContain("Asking a few questions");
@@ -229,7 +231,10 @@ describe("SpecPanel", () => {
     expect(html).toContain("Where indoor greenhouse (humid)");
     expect(html).toContain("Connects Wi-Fi, phone alerts");
     expect(html).toContain("Power Not decided yet");
-    expect(html).toContain("Still to decide Is there a USB power outlet near the plants, or should it run on battery?");
+    // The open question is asked in the chat, with its answers attached; the panel
+    // is for what's settled, so it must not say the same sentence again.
+    expect(html).not.toContain("Still to decide");
+    expect(html).not.toContain("Is there a USB power outlet near the plants");
     expect(html).toContain("Assuming Wi-Fi reaches the greenhouse");
   });
 
@@ -319,5 +324,118 @@ describe("DesignReadyCard enclosure preview", () => {
     expect(ENCLOSURE_SAMPLE.description).toMatch(/^Sample enclosure\./);
     const html = renderToStaticMarkup(<DesignReadyCard buildId="bld_1" card={READY} enclosure={ENCLOSURE_SAMPLE} />);
     expect(html).toContain("View a sample enclosure in 3D →");
+  });
+});
+
+describe("AnswerChoices", () => {
+  const spec = (open_questions: unknown) => ({ capabilities: [], assumptions: [], open_questions });
+
+  it("offers the options for the question intake is waiting on", () => {
+    const html = renderToStaticMarkup(
+      <AnswerChoices spec={spec([{ field: "power.source", question: "Will it run on USB power, or a battery?", options: ["USB power", "Battery"] }])} disabled={false} onChoose={() => {}} onContinue={() => {}} />,
+    );
+    expect(html).toContain("USB power");
+    expect(html).toContain("Battery");
+    // The question names the group, so a screen reader hears what is being answered.
+    expect(html).toContain('aria-label="Will it run on USB power, or a battery?"');
+  });
+
+  it("sends the option verbatim, so the transcript reads as though it were typed", () => {
+    const chosen: string[] = [];
+    const markup = <AnswerChoices spec={spec([{ field: "power.source", question: "USB or battery?", options: ["USB power", "Battery"] }])} disabled={false} onChoose={(answer) => chosen.push(answer)} onContinue={() => {}} />;
+    // Render to check the option text is exactly what would be sent.
+    expect(renderToStaticMarkup(markup)).toContain(">Battery</button>");
+    markup.props.onChoose("Battery");
+    expect(chosen).toEqual(["Battery"]);
+  });
+
+  it("shows nothing when the question is open-ended", () => {
+    expect(renderToStaticMarkup(<AnswerChoices spec={spec([{ field: "power.target_life_days", question: "How many days must it last?" }])} disabled={false} onChoose={() => {}} onContinue={() => {}} />)).toBe("");
+  });
+
+  it("shows nothing when there is no spec yet, and survives a spec it can't parse", () => {
+    expect(renderToStaticMarkup(<AnswerChoices spec={null} disabled={false} onChoose={() => {}} onContinue={() => {}} />)).toBe("");
+    expect(renderToStaticMarkup(<AnswerChoices spec={{ open_questions: "not a list" }} disabled={false} onChoose={() => {}} onContinue={() => {}} />)).toBe("");
+  });
+
+  it("disables the choices while a reply is in flight, so one tap can't send twice", () => {
+    const html = renderToStaticMarkup(
+      <AnswerChoices spec={spec([{ field: "power.source", question: "USB or battery?", options: ["USB power", "Battery"] }])} disabled onChoose={() => {}} onContinue={() => {}} />,
+    );
+    // The attribute itself, not the `disabled:` Tailwind variants in the class list.
+    // Two answers plus "Continue chatting": nothing is clickable mid-send.
+    expect(html.match(/disabled=""/g)).toHaveLength(3);
+  });
+});
+
+describe("AnswerChoices · continue chatting", () => {
+  const withOptions = { capabilities: [], assumptions: [], open_questions: [{ field: "settled", question: "Sound right?", options: ["Go"] }] };
+
+  it("offers a single option alongside a way back to typing", () => {
+    const html = renderToStaticMarkup(<AnswerChoices spec={withOptions} disabled={false} onChoose={() => {}} onContinue={() => {}} />);
+    expect(html).toContain(">Go</button>");
+    expect(html).toContain(">Continue chatting</button>");
+  });
+
+  it("continuing sends nothing: it only reopens the reply box", () => {
+    const sent: string[] = [];
+    let continued = 0;
+    const markup = <AnswerChoices spec={withOptions} disabled={false} onChoose={(answer) => sent.push(answer)} onContinue={() => (continued += 1)} />;
+    markup.props.onContinue();
+    expect(continued).toBe(1);
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("ready artifacts", () => {
+  const READY_REGISTRY: DeviceReadyCard = {
+    name: "Greenhouse soil monitor",
+    est_price_usd: 34,
+    fulfillment_note: "ships in kit form",
+    parts: [
+      { part_id: "C-001", label: "ESP32-S3 brain", accent: "peach" },
+      { part_id: "P-005", label: "Capacitive soil probe ×4", accent: "blue" },
+      { part_id: "E-001", label: "18650 cell", accent: "green" },
+      { part_id: "E-004", label: "TP4056 charger", accent: "violet" },
+    ],
+  };
+
+  it("draws the real circuit diagram from the card's own registry parts", () => {
+    const wiring = readyWiring(READY_REGISTRY);
+    expect(wiring).not.toBeNull();
+    expect(wiring!.brain.id).toBe("C-001");
+    // The card has no quantity field, so four probes come from the fixture.
+    expect(wiring!.nodes.find((n) => n.part.id === "P-005")!.units).toHaveLength(4);
+  });
+
+  it("says nothing rather than guessing when the parts aren't registry parts", () => {
+    expect(readyWiring({ ...READY_REGISTRY, parts: [{ part_id: "esp32-wroom", label: "ESP32-WROOM", accent: "peach" }] })).toBeNull();
+  });
+
+  it("reads what the device will send from the spec, and leaves it empty when there is no spec", () => {
+    expect(cloudWorkspace({ capabilities: ["read.soil_moisture_pct", "net.wifi"], sense: { interval_s: 600 } })).toEqual({
+      channels: ["soil moisture %"],
+      everySeconds: 600,
+    });
+    expect(cloudWorkspace(null)).toEqual({ channels: [], everySeconds: null });
+  });
+
+  it("spells a cadence the way a person would say it", () => {
+    expect(cadence(600)).toBe("every 10 minutes");
+    expect(cadence(60)).toBe("every 1 minute");
+    expect(cadence(3600)).toBe("every 1 hour");
+    expect(cadence(45)).toBe("every 45 seconds");
+  });
+
+  it("shows all three artifacts on the ready card", () => {
+    const html = renderToStaticMarkup(
+      <DesignReadyCard card={READY_REGISTRY} buildId="b1" signedIn={false} spec={{ capabilities: ["read.soil_moisture_pct"], sense: { interval_s: 600 } }} enclosure={null} />,
+    );
+    expect(html).toContain("3D enclosure");
+    expect(html).toContain("Circuit diagram");
+    expect(html).toContain("Cloud workspace");
+    expect(html).toContain("Created when you sign up");
+    expect(html).toContain("soil moisture %");
+    expect(html).toContain("every 10 minutes");
   });
 });

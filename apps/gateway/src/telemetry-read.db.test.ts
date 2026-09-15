@@ -680,3 +680,48 @@ it("without a configured tenant the public surface does not exist", async () => 
     expect(response.json().error.code).toBe("NOT_IMPLEMENTED");
   }
 });
+
+it("the public chat is pinned to the configured tenant, carries no actor, and is absent without one", async () => {
+  const showcase = await fixture();
+  const other = await fixture();
+  const sent: { tenant_id: string; actor_id: string | null; public: boolean; device_id: string }[] = [];
+  const chat = {
+    converse: async (input: { tenant_id: string; actor_id: string | null; public: boolean; device_id: string; request_id: string }) => {
+      sent.push(input);
+      return {
+        request_id: input.request_id, device_id: input.device_id, reply: "ok",
+        mode: "model" as const, queries: [], limitations: [],
+      };
+    },
+  };
+  const publicApp = buildApp({
+    parts: { latest: async () => [] }, ping: async () => {}, telemetryPool: handle.pool,
+    publicLiveTenantId: showcase.tenant, deviceChat: chat, log: () => {},
+  });
+  try {
+    const ask = (device: string, headers: Record<string, string> = {}) =>
+      publicApp.inject({
+        method: "POST", url: `/v1/public/live/devices/${device}/converse`,
+        payload: { question: "how warm is it?" }, headers: { "content-type": "application/json", ...headers },
+      });
+
+    // No session, and the turn upstream carries no identity at all.
+    expect((await ask(showcase.device)).statusCode).toBe(200);
+    expect(sent.at(-1)).toMatchObject({ tenant_id: showcase.tenant, actor_id: null, public: true });
+
+    // Another tenant's device is not reachable, with or without that tenant's session.
+    expect((await ask(other.device)).statusCode).toBe(404);
+    expect((await ask(other.device, { cookie: other.cookie })).statusCode).toBe(404);
+    // And a session for the other tenant does not move the pinned one.
+    await ask(showcase.device, { cookie: other.cookie, host: `t-${other.tenant}.albusforge.ai` });
+    expect(sent.at(-1)).toMatchObject({ tenant_id: showcase.tenant, actor_id: null, public: true });
+  } finally {
+    await publicApp.close();
+  }
+
+  // Unconfigured: the anonymous paid endpoint does not exist.
+  expect((await app.inject({
+    method: "POST", url: `/v1/public/live/devices/${showcase.device}/converse`,
+    payload: { question: "hi" }, headers: { "content-type": "application/json" },
+  })).statusCode).toBe(501);
+});

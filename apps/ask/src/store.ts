@@ -12,6 +12,24 @@ export interface Store {
 }
 /** The only three fields authorization reads. Narrowed so callers that are not a sensor-ask request can pass their own scope. */
 export interface Scope { tenant_id: string; device_id: string; actor_id: string }
+/**
+ * The public surface's authorization: the device must belong to the pinned
+ * tenant, and there is no caller to check because there is no caller.
+ *
+ * Deliberately a separate function rather than `authorize` with a skipped join,
+ * and it takes no actor at all — there is nothing in scope here that could be
+ * used to satisfy a membership test by mistake, and nothing a session-bearing
+ * request could pass that would change what it returns.
+ */
+export async function authorizePublic(client: PoolClient, q: { tenant_id: string; device_id: string }) {
+  const result = await client.query<{ channels: unknown }>(
+    "SELECT d.channels FROM telemetry.devices d WHERE d.tenant_id=$1 AND d.id=$2",
+    [q.tenant_id, q.device_id],
+  );
+  if (!result.rows[0]) throw new AskError(404, "NOT_FOUND", "Sensor not found");
+  return TelemetryChannels.parse(result.rows[0].channels);
+}
+
 export async function authorize(client: PoolClient, q: Scope) {
   const result = await client.query<{ channels: unknown }>(`SELECT d.channels FROM telemetry.devices d
     JOIN users.tenant_members m ON m.tenant_id=d.tenant_id

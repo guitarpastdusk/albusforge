@@ -96,3 +96,14 @@ describe("the public showcase", () => {
     expect(mocked.get).not.toHaveBeenCalled();
   });
 });
+
+describe("when the public surface is off", () => {
+  it("explains itself instead of failing, so a stale pill is not a broken page", async () => {
+    // The gateway registers these routes only with a tenant configured. Setting
+    // LIVE_DEMO_URL before that lands must not give a visitor a 500.
+    mocked.get.mockRejectedValueOnce(new Error("501 Not Implemented"));
+    const html = renderToStaticMarkup(await ShowcaseFleet({ searchParams: Promise.resolve({}) }));
+    expect(text(html)).toContain("Not available right now");
+    expect(text(html)).toContain("Nothing is wrong with your link");
+  });
+});

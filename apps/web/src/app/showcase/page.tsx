@@ -42,7 +42,21 @@ export default async function ShowcasePage({ searchParams }: { searchParams: Pro
     ...(query.data.status ? { status: query.data.status } : {}),
   });
 
-  const fleet = await publicLive.fleet(params);
+  // The gateway registers this surface only when it has a showcase tenant. If
+  // the pill is switched on before that config lands — or after it is removed —
+  // a visitor gets a page that explains itself rather than a 500.
+  const fleet = await publicLive.fleet(params).catch(() => null);
+  if (!fleet)
+    return (
+      <PageContainer>
+        <p className="font-mono text-[13px] uppercase tracking-[0.2em] text-coral-deep">Live demo</p>
+        <h1 className="mt-3 font-display text-[clamp(28px,3vw,38px)] font-medium">Not available right now</h1>
+        <p className="mt-4 max-w-[560px] text-[17px] font-light leading-[1.5] text-muted">
+          No live systems are being shown publicly at the moment. Nothing is wrong with your link.
+        </p>
+        <Link href="/" className="mt-6 inline-block text-coral-deep">Back to Albus Forge →</Link>
+      </PageContainer>
+    );
 
   return (
     <PageContainer>
